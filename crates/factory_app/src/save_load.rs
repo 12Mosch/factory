@@ -11,7 +11,7 @@ pub use container::{
     BACKUP_ARTIFACT_MARKER, CONTAINER_MAGIC, CONTAINER_VERSION, MAX_METADATA_BYTES,
     METADATA_SCHEMA_VERSION, TEMP_ARTIFACT_MARKER, decode_container, encode_container,
 };
-pub use jobs::PendingSaveJobs;
+pub use jobs::{MAX_RETAINED_SAVE_GENERATIONS, PendingSaveJobs};
 pub(crate) use timestamp::local_datetime_from_unix_ms;
 pub use types::*;
 
@@ -58,8 +58,13 @@ impl Default for SaveLoadConfig {
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct SaveLoadMetrics {
     pub last_request_submission_ms: f64,
+    pub last_snapshot_world_generation: u64,
     pub last_snapshot_capture_ms: f64,
     pub last_snapshot_tick: u64,
+    pub last_snapshot_lock_wait_ms: f64,
+    pub last_snapshot_lock_hold_ms: f64,
+    pub last_snapshot_blocked_fixed_ticks: u64,
+    pub last_snapshot_wire_bytes: usize,
     pub last_serialize_ms: f64,
     pub last_write_ms: f64,
     pub last_total_ms: f64,
@@ -307,8 +312,13 @@ pub(crate) fn poll_save_jobs(
     for job in jobs::take_completed(&mut pending) {
         match job.result {
             Ok(outcome) => {
+                metrics.last_snapshot_world_generation = outcome.snapshot_world_generation;
                 metrics.last_snapshot_capture_ms = outcome.snapshot_capture_ms;
                 metrics.last_snapshot_tick = outcome.snapshot_tick;
+                metrics.last_snapshot_lock_wait_ms = outcome.snapshot_lock_wait_ms;
+                metrics.last_snapshot_lock_hold_ms = outcome.snapshot_lock_hold_ms;
+                metrics.last_snapshot_blocked_fixed_ticks = outcome.snapshot_blocked_fixed_ticks;
+                metrics.last_snapshot_wire_bytes = outcome.snapshot_wire_bytes;
                 metrics.last_serialize_ms = outcome.serialize_ms;
                 metrics.last_write_ms = outcome.write_ms;
                 metrics.last_total_ms = outcome.total_ms;

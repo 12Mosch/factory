@@ -165,6 +165,18 @@ pub const SAVE_HEADER_SIZE: usize = 8 + 4 + 4 + 8;
 /// Bounds accepted input and prevents writing worlds the loader cannot reopen.
 pub const MAX_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Identifies one immutable view of a world within an application session.
+///
+/// `world_generation` changes whenever the application installs a different
+/// [`Simulation`]. `tick` is the completed simulation tick captured from that
+/// generation. The identity is orchestration metadata and is deliberately not
+/// written into the portable save payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SaveSnapshotIdentity {
+    pub world_generation: u64,
+    pub tick: u64,
+}
+
 #[derive(Debug)]
 pub enum SaveLoadError {
     TooLarge,
@@ -300,6 +312,7 @@ define_snapshot! {
 /// simulation immediately. Encoding can then happen on another thread without
 /// borrowing or locking the simulation.
 pub struct SimulationSaveSnapshot {
+    identity: SaveSnapshotIdentity,
     prototype_hash: u64,
     state: SimulationSnapshotOwned,
 }
@@ -307,7 +320,12 @@ pub struct SimulationSaveSnapshot {
 impl SimulationSaveSnapshot {
     /// Returns the completed simulation tick represented by this snapshot.
     pub fn tick_count(&self) -> u64 {
-        self.state.tick
+        self.identity.tick
+    }
+
+    /// Returns the world generation and completed tick captured by this handle.
+    pub fn identity(&self) -> SaveSnapshotIdentity {
+        self.identity
     }
 
     /// Returns the world seed preserved by this snapshot.
@@ -317,11 +335,50 @@ impl SimulationSaveSnapshot {
 }
 
 /// Captures the durable state at the simulation's current completed-tick boundary.
+///
+/// This compatibility entry point does not attach an application world
+/// generation and does not perform a size preflight. Background save
+/// orchestration should use [`try_capture_save_snapshot`] instead.
 pub fn capture_save_snapshot(sim: &Simulation) -> SimulationSaveSnapshot {
+    capture_save_snapshot_in_generation(sim, 0)
+}
+
+fn capture_save_snapshot_in_generation(
+    sim: &Simulation,
+    world_generation: u64,
+) -> SimulationSaveSnapshot {
     SimulationSaveSnapshot {
+        identity: SaveSnapshotIdentity {
+            world_generation,
+            tick: sim.tick,
+        },
         prototype_hash: prototype_hash(&sim.world.prototypes),
         state: SimulationSnapshotOwned::from_simulation(sim),
     }
+}
+
+/// Checks the default save limits before allocating an owned snapshot, then
+/// captures one immutable completed-tick generation.
+///
+/// The preflight walks the borrowed durable schema and computes its wire size,
+/// so an unsupported world fails without first cloning the whole world. The
+/// live simulation must remain read-locked by the caller for this function's
+/// duration; no state from different ticks can enter the resulting handle.
+pub fn try_capture_save_snapshot(
+    sim: &Simulation,
+    world_generation: u64,
+) -> Result<SimulationSaveSnapshot, SaveLoadError> {
+    try_capture_save_snapshot_with_limits(sim, world_generation, SaveLimits::default())
+}
+
+pub fn try_capture_save_snapshot_with_limits(
+    sim: &Simulation,
+    world_generation: u64,
+    limits: SaveLimits,
+) -> Result<SimulationSaveSnapshot, SaveLoadError> {
+    let snapshot = SimulationSnapshotRef::from_simulation(sim);
+    preflight_snapshot_with_limits(&snapshot, limits)?;
+    Ok(capture_save_snapshot_in_generation(sim, world_generation))
 }
 
 /// Serializes a previously captured snapshot without accessing the live simulation.
@@ -370,6 +427,22 @@ fn encode_snapshot_with_limits(
         .serialize_into(&mut bytes, snapshot)
         .map_err(SaveLoadError::from)?;
     Ok(bytes)
+}
+
+fn preflight_snapshot_with_limits(
+    snapshot: &impl Serialize,
+    limits: SaveLimits,
+) -> Result<(), SaveLoadError> {
+    if limits.max_encoded_bytes < SAVE_HEADER_SIZE as u64 {
+        return Err(SaveLoadError::TooLarge);
+    }
+    crate::save_limits::check_collections(snapshot, limits)?;
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .with_limit(limits.payload_bytes())
+        .serialized_size(snapshot)
+        .map(|_| ())
+        .map_err(SaveLoadError::from)
 }
 
 pub fn load_from_bytes(bytes: &[u8]) -> Result<Simulation, SaveLoadError> {
@@ -712,6 +785,21 @@ mod tests {
         payload.push(0);
         assert!(matches!(
             encode_snapshot_with_limits(0, &payload, limits),
+            Err(SaveLoadError::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn bounded_capture_rejects_before_creating_a_generation() {
+        let sim = Simulation::new_test_world(294);
+        let limits = SaveLimits {
+            max_decoded_bytes: 1,
+            max_record_bytes: 1,
+            ..SaveLimits::default()
+        };
+
+        assert!(matches!(
+            try_capture_save_snapshot_with_limits(&sim, 7, limits),
             Err(SaveLoadError::TooLarge)
         ));
     }

@@ -5,9 +5,10 @@ use factory_app::FactoryAppPlugin;
 use factory_app::build::resources::{BuildPlacementState, BuildSelection};
 use factory_app::resources::SimResource;
 use factory_app::save_load::{
-    BACKUP_ARTIFACT_MARKER, PendingSaveConfirmation, PendingSaveJobs, SaveCatalog,
-    SaveCompatibility, SaveKind, SaveLoadConfig, SaveLoadMetrics, SaveLoadTab, SaveLoadWindowState,
-    TEMP_ARTIFACT_MARKER, decode_container, encode_container, scan_catalog,
+    BACKUP_ARTIFACT_MARKER, MAX_RETAINED_SAVE_GENERATIONS, PendingSaveConfirmation,
+    PendingSaveJobs, SaveCatalog, SaveCompatibility, SaveKind, SaveLoadConfig, SaveLoadMetrics,
+    SaveLoadStatus, SaveLoadTab, SaveLoadWindowState, TEMP_ARTIFACT_MARKER, decode_container,
+    encode_container, request_system_save, scan_catalog,
 };
 use factory_app::simulation::SimCommandRequest;
 use factory_app::ui::resources::OpenContainer;
@@ -561,8 +562,100 @@ fn background_submission_remains_non_blocking_and_metrics_populate() {
     drain_save_jobs(&mut app);
     let metrics = app.world().resource::<SaveLoadMetrics>();
     assert!(metrics.last_bytes > 0);
+    assert!(metrics.last_snapshot_wire_bytes > 0);
+    assert_eq!(metrics.last_snapshot_world_generation, 0);
     assert_eq!(metrics.last_snapshot_tick, captured_tick);
+    assert!(metrics.last_snapshot_lock_hold_ms >= metrics.last_snapshot_capture_ms);
     assert!(metrics.last_total_ms >= metrics.last_write_ms);
+}
+
+#[test]
+fn save_jobs_reject_a_second_retained_generation_at_capacity() {
+    assert_eq!(MAX_RETAINED_SAVE_GENERATIONS, 1);
+    let config = SaveLoadConfig {
+        root_dir: unique_temp_dir("retained_generation_bound"),
+        ..SaveLoadConfig::default()
+    };
+    fs::create_dir_all(&config.root_dir).unwrap();
+    let sim = SimResource::new(factory_sim::Simulation::new_test_world(294));
+    let mut pending = PendingSaveJobs::default();
+    let mut status = SaveLoadStatus::default();
+    let mut metrics = SaveLoadMetrics::default();
+
+    assert!(request_system_save(
+        SaveKind::Quicksave,
+        &sim,
+        &config,
+        &mut pending,
+        &mut status,
+        &mut metrics,
+        true,
+    ));
+    assert!(pending.is_at_capacity());
+    assert!(!request_system_save(
+        SaveKind::Autosave { generation: 1 },
+        &sim,
+        &config,
+        &mut pending,
+        &mut status,
+        &mut metrics,
+        true,
+    ));
+    assert_eq!(pending.pending_ids().len(), 1);
+    assert!(
+        status
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("snapshot generation"))
+    );
+
+    drop(pending);
+    fs::remove_dir_all(config.root_dir).unwrap();
+}
+
+#[test]
+fn world_replacement_is_independent_after_snapshot_capture_releases_its_lock() {
+    let config = SaveLoadConfig {
+        root_dir: unique_temp_dir("snapshot_world_replacement"),
+        ..SaveLoadConfig::default()
+    };
+    fs::create_dir_all(&config.root_dir).unwrap();
+    let mut sim = SimResource::new(factory_sim::Simulation::new_test_world(294));
+    let original_hash = sim.read().state_hash();
+    let mut pending = PendingSaveJobs::default();
+    let mut status = SaveLoadStatus::default();
+    let mut metrics = SaveLoadMetrics::default();
+    assert!(request_system_save(
+        SaveKind::Quicksave,
+        &sim,
+        &config,
+        &mut pending,
+        &mut status,
+        &mut metrics,
+        true,
+    ));
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match sim.replace(factory_sim::Simulation::new_test_world(295)) {
+            Ok(()) => break,
+            Err(factory_app::resources::SimAccessError::Busy) => {
+                assert!(Instant::now() < deadline, "snapshot lock was not released");
+                std::thread::yield_now();
+            }
+            Err(error) => panic!("unexpected replacement error: {error:?}"),
+        }
+    }
+    let replacement_hash = sim.read().state_hash();
+    assert_ne!(replacement_hash, original_hash);
+
+    drop(pending);
+    let bytes = fs::read(config.root_dir.join("quicksave.factsim")).unwrap();
+    let (_, payload) = decode_container(&bytes).unwrap();
+    let saved = load_from_bytes(payload).unwrap();
+    assert_eq!(saved.state_hash(), original_hash);
+    assert_eq!(sim.read().state_hash(), replacement_hash);
+    fs::remove_dir_all(config.root_dir).unwrap();
 }
 
 #[test]
@@ -957,7 +1050,13 @@ fn oversized_world_preserves_previous_quicksave() {
         status.kind,
         factory_app::save_load::SaveLoadStatusKind::Error
     );
-    assert!(status.message.as_deref().unwrap().contains("SizeLimit"));
+    assert!(
+        status
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("snapshot capture budget")
+    );
     assert_eq!(fs::read(&path).unwrap(), original_bytes);
     let loaded = load_from_bytes(&original_bytes).unwrap();
     loaded.validate_state().unwrap();

@@ -5,11 +5,16 @@ use super::{
     SaveMetadata,
 };
 use crate::resources::SimResource;
-use factory_sim::{capture_save_snapshot, save_snapshot_to_bytes};
+use factory_sim::{save_snapshot_to_bytes, try_capture_save_snapshot};
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
+
+/// The full-copy architecture retains at most one immutable world generation.
+/// This is also a bound on background encoders and their temporary buffers.
+pub const MAX_RETAINED_SAVE_GENERATIONS: usize = 1;
 
 #[derive(bevy::prelude::Resource, Default)]
 pub struct PendingSaveJobs {
@@ -33,6 +38,10 @@ impl PendingSaveJobs {
     }
     pub fn pending_ids(&self) -> Vec<SaveId> {
         self.jobs.iter().map(|job| job.id.clone()).collect()
+    }
+
+    pub fn is_at_capacity(&self) -> bool {
+        self.jobs.len() >= MAX_RETAINED_SAVE_GENERATIONS
     }
 
     fn join_all(&mut self) {
@@ -70,8 +79,13 @@ pub(crate) struct CompletedJob {
 
 #[derive(Debug)]
 pub(crate) struct SaveJobOutcome {
+    pub snapshot_world_generation: u64,
     pub snapshot_tick: u64,
+    pub snapshot_lock_wait_ms: f64,
+    pub snapshot_lock_hold_ms: f64,
     pub snapshot_capture_ms: f64,
+    pub snapshot_blocked_fixed_ticks: u64,
+    pub snapshot_wire_bytes: usize,
     pub serialize_ms: f64,
     pub write_ms: f64,
     pub total_ms: f64,
@@ -103,8 +117,16 @@ pub(crate) fn queue_save(
         }
         return false;
     }
+    if pending.is_at_capacity() {
+        if explicit {
+            status.message =
+                Some("Cannot save yet: another snapshot generation is still being saved.".into());
+            status.kind = SaveLoadStatusKind::Info;
+        }
+        return false;
+    }
     let submission_start = Instant::now();
-    let sim = sim.clone_handle();
+    let source = sim.snapshot_source();
     let worker_id = id.clone();
     let worker_name = display_name.clone();
     let (capture_started_tx, capture_started_rx) = mpsc::sync_channel(0);
@@ -114,18 +136,34 @@ pub(crate) fn queue_save(
         // after FixedUpdate, so this pins its exact completed-tick boundary
         // without cloning the durable world on the main thread. Frame-side
         // readers remain concurrent; fixed ticks defer via `try_write`.
-        let sim = sim
+        let sim = source
+            .simulation
             .read()
             .map_err(|_| "simulation lock poisoned".to_string())?;
+        let lock_acquired = Instant::now();
+        let snapshot_lock_wait_ms = submission_start.elapsed().as_secs_f64() * 1000.0;
+        let blocked_before = source.blocked_fixed_ticks.load(Ordering::Relaxed);
         capture_started_tx
             .send(())
             .map_err(|_| "save request was abandoned before capture".to_string())?;
         let snapshot_start = Instant::now();
-        let snapshot = capture_save_snapshot(&sim);
+        let snapshot = try_capture_save_snapshot(&sim, source.world_generation).map_err(
+            |error| match error {
+                factory_sim::SaveLoadError::TooLarge => {
+                    "save exceeds this build's snapshot capture budget".into()
+                }
+                _ => format!("snapshot capture failed: {error:?}"),
+            },
+        )?;
         let snapshot_capture_ms = snapshot_start.elapsed().as_secs_f64() * 1000.0;
-        let snapshot_tick = snapshot.tick_count();
+        let snapshot_identity = snapshot.identity();
         let snapshot_seed = snapshot.world_seed();
         drop(sim);
+        let snapshot_lock_hold_ms = lock_acquired.elapsed().as_secs_f64() * 1000.0;
+        let snapshot_blocked_fixed_ticks = source
+            .blocked_fixed_ticks
+            .load(Ordering::Relaxed)
+            .saturating_sub(blocked_before);
         let serialize_start = Instant::now();
         let payload = save_snapshot_to_bytes(&snapshot).map_err(|error| match error {
             factory_sim::SaveLoadError::TooLarge => {
@@ -134,6 +172,7 @@ pub(crate) fn queue_save(
             _ => format!("simulation serialization failed: {error:?}"),
         })?;
         let serialize_ms = serialize_start.elapsed().as_secs_f64() * 1000.0;
+        let snapshot_wire_bytes = payload.len();
         // Release the world copy before allocating the enclosing file buffer.
         drop(snapshot);
         let metadata = SaveMetadata {
@@ -150,8 +189,13 @@ pub(crate) fn queue_save(
         let write_start = Instant::now();
         write_save_bytes(&path, &bytes).map_err(|error| error.to_string())?;
         Ok(SaveJobOutcome {
-            snapshot_tick,
+            snapshot_world_generation: snapshot_identity.world_generation,
+            snapshot_tick: snapshot_identity.tick,
+            snapshot_lock_wait_ms,
+            snapshot_lock_hold_ms,
             snapshot_capture_ms,
+            snapshot_blocked_fixed_ticks,
+            snapshot_wire_bytes,
             serialize_ms,
             write_ms: write_start.elapsed().as_secs_f64() * 1000.0,
             total_ms: worker_start.elapsed().as_secs_f64() * 1000.0,

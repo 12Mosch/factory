@@ -109,6 +109,7 @@ pub(crate) fn tick_sim(
     mut catch_up_stats: ResMut<FixedStepCatchUpStats>,
 ) {
     let Some(mut simulation) = sim.try_write() else {
+        sim.note_snapshot_blocked_fixed_tick();
         profile_stats.save_blocked_fixed_ticks =
             profile_stats.save_blocked_fixed_ticks.saturating_add(1);
         return;

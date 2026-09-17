@@ -52,39 +52,49 @@ The write probe uses a temporary raw simulation file; app container metadata,
 atomic replacement/rollback and directory synchronization are covered by the
 app tests, not attributed to this raw write number.
 
-The allocator reports cumulative requested bytes per phase, including realloc
-requests. These are temporary allocation-volume budgets, **not** retained heap,
-process RSS, or an exact simultaneous memory peak. They exclude fixture setup,
-the already-live simulation, OS filesystem cache and thread stacks. Tests sharing
-the allocator take the existing benchmark mutex; minor harness allocations can
-still add noise. No portable RSS claim is made.
+The allocator reports both cumulative requested bytes and peak live bytes above
+the start of each phase. Capture also reports the bytes still live when the
+owned snapshot has been returned. The save peak combines that retained snapshot
+with the encoder's peak increment, rather than adding unrelated allocation
+volume. These are allocator-visible heap measurements, not process RSS: they
+exclude the already-live simulation, OS filesystem cache and thread stacks.
+Tests sharing the allocator take the existing benchmark mutex; minor harness
+allocations can still add noise. No portable RSS claim is made.
 
-Payload and allocation budgets provide repeatable regression guards. Capture
-may allocate at most 8 times the fixture payload cap, encoding 4 times, and load
-16 times. Broad wall-time guards are capture <2 s, encode <5 s, validated load
-<10 s and validation <5 s. These catch gross regressions on shared CI; they are
-not frame-latency targets. Disk time is reported without a hard CI threshold
-because antivirus, filesystem and storage scheduling dominate its variance.
+Payload, allocation-volume and peak-live budgets provide repeatable regression
+guards. Capture may allocate at most 8 times the fixture payload cap, encoding
+4 times, and load 16 times. The combined save peak may be at most 12 times the
+fixture payload cap and the load peak 16 times. Broad wall-time guards are
+capture <2 s, encode <5 s, validated load <10 s and validation <5 s. These catch
+gross regressions on shared CI; they are not frame-latency targets. Disk time is
+reported without a hard CI threshold because antivirus, filesystem and storage
+scheduling dominate its variance.
 
 Reference machine: Windows, AMD Ryzen 9 9950X3D, Rust 1.98.1, normal test profile,
-2026-09-08. One reference run (milliseconds; not portable latency guarantees):
+2026-09-17. One reference run (milliseconds; not portable latency guarantees):
 
 | Fixture | Payload bytes | Capture | Encode | Write + sync | Read | Validated load | Validation |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Small | 1,105,640 | 0.676 | 2.084 | 5.046 | 4.003 | 3.200 | 0.324 |
-| Medium | 3,864,926 | 2.451 | 8.609 | 3.686 | 5.526 | 12.948 | 1.783 |
-| Large | 20,964,898 | 18.489 | 51.691 | 14.496 | 7.942 | 97.776 | 22.055 |
+| Small | 1,133,358 | 1.429 | 1.849 | 2.209 | 4.142 | 4.288 | 0.445 |
+| Medium | 4,003,926 | 6.009 | 8.131 | 3.545 | 4.289 | 18.347 | 2.221 |
+| Large | 22,388,172 | 32.996 | 44.718 | 20.371 | 7.076 | 138.591 | 25.003 |
 
 | Fixture | Capture allocation bytes | Encode allocation bytes | Load allocation bytes | Validation allocation bytes |
 | --- | ---: | ---: | ---: | ---: |
-| Small | 2,710,085 | 3,145,704 | 2,970,585 | 77,945 |
-| Medium | 10,749,101 | 12,582,888 | 11,987,257 | 402,881 |
-| Large | 58,207,627 | 50,331,624 | 72,603,567 | 3,986,281 |
+| Small | 2,784,157 | 3,194,664 | 6,117,189 | 127,273 |
+| Medium | 11,086,189 | 12,779,304 | 23,622,045 | 631,137 |
+| Large | 62,385,667 | 53,477,160 | 140,550,893 | 6,674,793 |
 
-The stress payload uses about 31% of the format ceiling. Its 18.5 ms capture is
+| Fixture | Combined save peak bytes | Snapshot retained bytes | Encoder peak increment | Load peak increment |
+| --- | ---: | ---: | ---: | ---: |
+| Small | 4,332,573 | 2,751,517 | 1,581,056 | 3,013,659 |
+| Medium | 17,279,469 | 10,955,245 | 6,324,224 | 11,401,235 |
+| Large | 85,978,755 | 60,288,643 | 25,690,112 | 65,135,183 |
+
+The stress payload uses about 33% of the format ceiling. Its 33.0 ms capture is
 longer than a 60 UPS tick interval, so deferred-tick catch-up remains necessary;
 it is not evidence that capture always fits inside one frame. The full manual
-fixture run took about 76 seconds, mostly simulation warmup with tick validation.
+fixture run took about 86 seconds, mostly simulation warmup with tick validation.
 
 ## The 64 MiB ceiling
 
@@ -115,14 +125,25 @@ update both encoder/decoder policy, memory/load budgets and these stress tests.
 
 ## Decision
 
-Keep the monolithic format for the measured supported sizes. No measurements here
-justify chunked or incremental persistence yet. Worker memory is reduced by
-releasing the owned snapshot before allocating the app container and releasing
-the raw payload before writing it. Capture still holds a read lock while copying;
-request submission only waits for that lock to pin a completed tick. Fixed steps
-are deferred through the existing pending-tick accounting, then consumed after
-the lock is released. Existing `save_load_ui` tests exercise this behavior and
-compare continuation hashes, including under capture contention.
+Keep the monolithic full-copy format for the measured supported sizes. No
+measurements here justify copy-on-write pages, chunked state, or incremental
+persistence yet. The application admits only one retained snapshot generation
+at a time. With no shared pages there are no worker-retained old pages or dirty
+page copies to add to the accounting; the measured owned snapshot is the whole
+retained generation. During encoding it coexists with one bounded payload
+buffer. The snapshot is dropped before allocating the similarly bounded app
+container, and the payload is dropped before writing. A second request is
+rejected without consuming a tick or input while that generation is retained.
+
+Before cloning, background capture walks the borrowed schema and enforces the
+same 64 MiB payload and collection limits as encoding. A world outside that
+budget therefore fails without allocating another whole-world generation and
+leaves the previous save intact. Capture still holds a read lock while
+preflighting and copying. Telemetry separates lock wait, lock hold, capture,
+blocked fixed steps, serialization, writing, and wire bytes. Fixed steps that
+meet the short read-lock interval remain queued with their commands, then run
+after release. Existing `save_load_ui` tests exercise this behavior and compare
+continuation hashes, including under capture contention.
 
 The large fixture exposed combat invalidating fluid/heat summaries after their
 normal tick phases. Completed ticks now rebuild those summaries when topology is
