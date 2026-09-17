@@ -33,14 +33,14 @@ impl Plugin for SaveLoadPlugin {
             .add_systems(
                 Update,
                 (
+                    // Surface completed results before admitting this frame's
+                    // requests, so a finished target is immediately reusable.
+                    poll_save_jobs,
                     handle_save_load_shortcuts.in_set(InGameSet),
                     sync_save_name_from_state.in_set(InGameSet),
                     handle_save_load_buttons.in_set(AppSet::UiInteraction),
                     handle_copy_world_seed_button.in_set(AppSet::UiInteraction),
                     run_autosave.in_set(InGameSet),
-                    // Save workers finish on their own thread; keep joining
-                    // and reporting them even on the world-setup screen.
-                    poll_save_jobs,
                     refresh_catalog_on_manager_open.in_set(InGameSet),
                     sync_save_load_window.in_set(InGameSet),
                 )

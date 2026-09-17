@@ -35,8 +35,7 @@ fn f5_writes_container_with_exact_simulation_payload() {
     freeze_time(&mut app);
     let captured = sim_tick_and_hash(&app);
 
-    press_key(&mut app, KeyCode::F5);
-    app.update();
+    tap_key(&mut app, KeyCode::F5);
     drain_save_jobs(&mut app);
 
     let path = app
@@ -65,8 +64,7 @@ fn f9_reads_existing_raw_quicksave_and_resets_transient_state() {
         ));
     }
     app.world_mut().resource_mut::<OpenContainer>().entity_id = Some(EntityId::new(999));
-    press_key(&mut app, KeyCode::F9);
-    app.update();
+    tap_key(&mut app, KeyCode::F9);
     assert_eq!(sim_tick_and_hash(&app), saved);
     assert!(
         app.world()
@@ -353,7 +351,15 @@ fn autosave_fills_generations_before_rotation() {
         config.autosave_slot_count = 5;
     }
     for generation in 1..=5 {
+        app.world_mut()
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+                1.0 / 60.0,
+            )));
         run_until_jobs_start(&mut app);
+        // With completion polling before admission, an interval of one tick
+        // intentionally starts another autosave on every advancing frame.
+        // Freeze while observing this generation's completion.
+        freeze_time(&mut app);
         drain_save_jobs(&mut app);
         let path = app
             .world()
@@ -551,8 +557,7 @@ fn deleting_a_save_removes_recovery_artifacts_without_resurrection() {
 fn background_submission_remains_non_blocking_and_metrics_populate() {
     let mut app = test_app(Duration::ZERO, "metrics");
     let captured_tick = app.world().resource::<SimResource>().read().tick_count();
-    press_key(&mut app, KeyCode::F5);
-    app.update();
+    tap_key(&mut app, KeyCode::F5);
     assert!(
         app.world()
             .resource::<SaveLoadMetrics>()
@@ -617,12 +622,42 @@ fn finished_save_job_does_not_consume_generation_capacity() {
 }
 
 #[test]
+fn completed_quicksave_is_reaped_before_same_target_admission() {
+    let mut app = test_app(Duration::ZERO, "completed_same_target");
+    tap_key(&mut app, KeyCode::F5);
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.world().resource::<PendingSaveJobs>().any_running() {
+        assert!(
+            Instant::now() < deadline,
+            "first save worker did not finish"
+        );
+        std::thread::yield_now();
+    }
+    assert!(
+        !app.world().resource::<PendingSaveJobs>().is_empty(),
+        "the first completion should still be waiting for the poller"
+    );
+
+    tap_key(&mut app, KeyCode::F5);
+
+    assert!(!app.world().resource::<PendingSaveJobs>().is_empty());
+    assert!(
+        !app.world()
+            .resource::<SaveLoadStatus>()
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("already being saved"))
+    );
+    drain_save_jobs(&mut app);
+}
+
+#[test]
 fn world_replacement_is_independent_after_snapshot_capture_releases_its_lock() {
     let mut app = test_app(Duration::ZERO, "snapshot_world_replacement");
     let root = app.world().resource::<SaveLoadConfig>().root_dir.clone();
     let original_hash = app.world().resource::<SimResource>().read().state_hash();
-    press_key(&mut app, KeyCode::F5);
-    app.update();
+    tap_key(&mut app, KeyCode::F5);
 
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -658,12 +693,7 @@ fn world_replacement_is_independent_after_snapshot_capture_releases_its_lock() {
         replacement_hash
     );
 
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .release(KeyCode::F5);
-    app.update();
-    press_key(&mut app, KeyCode::F5);
-    app.update();
+    tap_key(&mut app, KeyCode::F5);
     drain_save_jobs(&mut app);
     assert_eq!(
         app.world()
@@ -688,8 +718,7 @@ fn dropping_the_app_drains_an_immediately_requested_save() {
         .root_dir
         .join("quicksave.factsim");
 
-    press_key(&mut app, KeyCode::F5);
-    app.update();
+    tap_key(&mut app, KeyCode::F5);
     assert!(!app.world().resource::<PendingSaveJobs>().is_empty());
 
     drop(app);
@@ -712,8 +741,7 @@ fn commands_around_save_apply_once_and_continue_deterministically() {
     };
     app.world_mut()
         .write_message(SimCommandRequest(before_save));
-    press_key(&mut app, KeyCode::F5);
-    app.update();
+    tap_key(&mut app, KeyCode::F5);
     let snapshot_tick = app.world().resource::<SimResource>().read().tick_count();
 
     let after_save = SimCommand::MovePlayer {
@@ -757,6 +785,7 @@ fn large_world_save_captures_off_thread_and_resumes_fixed_ticks() {
     let submission_update_started = Instant::now();
     app.update();
     let submission_update = submission_update_started.elapsed();
+    finish_key_press(&mut app, KeyCode::F5);
     assert!(!app.world().resource::<PendingSaveJobs>().is_empty());
     app.world_mut()
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
@@ -1056,8 +1085,7 @@ fn oversized_world_preserves_previous_quicksave() {
         sim.validate_state().unwrap();
         assert!(save_to_bytes(&sim).is_err());
     }
-    press_key(&mut app, KeyCode::F5);
-    app.update();
+    tap_key(&mut app, KeyCode::F5);
     let deadline = Instant::now() + Duration::from_secs(120);
     while !app.world().resource::<PendingSaveJobs>().is_empty() {
         assert!(Instant::now() < deadline, "oversized save did not finish");
@@ -1214,6 +1242,19 @@ fn press_key(app: &mut App, key: KeyCode) {
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(key);
+}
+
+fn finish_key_press(app: &mut App, key: KeyCode) {
+    let mut keyboard = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+    keyboard.release(key);
+    keyboard.clear_just_pressed(key);
+    keyboard.clear_just_released(key);
+}
+
+fn tap_key(app: &mut App, key: KeyCode) {
+    press_key(app, key);
+    app.update();
+    finish_key_press(app, key);
 }
 
 fn assert_catalog_loads(config: &SaveLoadConfig, expected: (u64, u64)) {
