@@ -1,11 +1,11 @@
 use super::catalog::now_unix_ms;
-use super::container::{METADATA_SCHEMA_VERSION, encode_container, write_save_bytes};
+use super::container::{METADATA_SCHEMA_VERSION, write_save_snapshot};
 use super::{
     SaveId, SaveKind, SaveLoadConfig, SaveLoadMetrics, SaveLoadStatus, SaveLoadStatusKind,
     SaveMetadata,
 };
 use crate::resources::SimResource;
-use factory_sim::{save_snapshot_to_bytes, try_capture_save_snapshot};
+use factory_sim::try_capture_save_snapshot;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -185,17 +185,6 @@ pub(crate) fn queue_save(
             .blocked_fixed_ticks
             .load(Ordering::Relaxed)
             .saturating_sub(blocked_before);
-        let serialize_start = Instant::now();
-        let payload = save_snapshot_to_bytes(&snapshot).map_err(|error| match error {
-            factory_sim::SaveLoadError::TooLarge => {
-                "save exceeds this build's save size or collection limits".into()
-            }
-            _ => format!("simulation serialization failed: {error:?}"),
-        })?;
-        let serialize_ms = serialize_start.elapsed().as_secs_f64() * 1000.0;
-        let snapshot_wire_bytes = payload.len();
-        // Release the world copy before allocating the enclosing file buffer.
-        drop(snapshot);
         let metadata = SaveMetadata {
             schema_version: METADATA_SCHEMA_VERSION,
             id: worker_id,
@@ -205,10 +194,13 @@ pub(crate) fn queue_save(
             application_version: env!("CARGO_PKG_VERSION").into(),
             world_seed: Some(snapshot_seed),
         };
-        let bytes = encode_container(&metadata, &payload).map_err(|error| error.to_string())?;
-        drop(payload);
         let write_start = Instant::now();
-        write_save_bytes(&path, &bytes).map_err(|error| error.to_string())?;
+        let stream =
+            write_save_snapshot(&path, &metadata, &snapshot).map_err(|error| error.to_string())?;
+        let stream_ms = write_start.elapsed().as_secs_f64() * 1000.0;
+        // The captured world remains alive only until the streaming encoder is
+        // finished; no complete encoded payload or container is retained.
+        drop(snapshot);
         Ok(SaveJobOutcome {
             snapshot_world_generation: snapshot_identity.world_generation,
             snapshot_tick: snapshot_identity.tick,
@@ -216,11 +208,11 @@ pub(crate) fn queue_save(
             snapshot_lock_hold_ms,
             snapshot_capture_ms,
             snapshot_blocked_fixed_ticks,
-            snapshot_wire_bytes,
-            serialize_ms,
-            write_ms: write_start.elapsed().as_secs_f64() * 1000.0,
+            snapshot_wire_bytes: stream.simulation_bytes,
+            serialize_ms: stream.encode_ms,
+            write_ms: (stream_ms - stream.encode_ms).max(0.0),
             total_ms: worker_start.elapsed().as_secs_f64() * 1000.0,
-            bytes: bytes.len(),
+            bytes: stream.total_bytes,
         })
     });
     if capture_started_rx.recv().is_err() {

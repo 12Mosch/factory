@@ -59,4 +59,4 @@ impl SaveLimits {
 pub(crate) const COLLECTION_LIMIT_ERROR: &str = "save collection exceeds safety limit";
 
 mod codec;
-pub(crate) use codec::{check_collections, deserialize};
+pub(crate) use codec::{check_collections, deserialize_from};
