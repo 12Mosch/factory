@@ -6,8 +6,9 @@ use factory_app::build::resources::{BuildPlacementState, BuildSelection};
 use factory_app::resources::SimResource;
 use factory_app::save_load::{
     BACKUP_ARTIFACT_MARKER, PendingSaveConfirmation, PendingSaveJobs, SaveCatalog,
-    SaveCompatibility, SaveKind, SaveLoadConfig, SaveLoadMetrics, SaveLoadTab, SaveLoadWindowState,
-    TEMP_ARTIFACT_MARKER, decode_container, encode_container, scan_catalog,
+    SaveCompatibility, SaveKind, SaveLoadConfig, SaveLoadMetrics, SaveLoadStatus, SaveLoadTab,
+    SaveLoadWindowState, TEMP_ARTIFACT_MARKER, decode_container, encode_container,
+    request_system_save, scan_catalog,
 };
 use factory_app::simulation::SimCommandRequest;
 use factory_app::ui::resources::OpenContainer;
@@ -34,8 +35,7 @@ fn f5_writes_container_with_exact_simulation_payload() {
     freeze_time(&mut app);
     let captured = sim_tick_and_hash(&app);
 
-    press_key(&mut app, KeyCode::F5);
-    app.update();
+    tap_key(&mut app, KeyCode::F5);
     drain_save_jobs(&mut app);
 
     let path = app
@@ -64,8 +64,7 @@ fn f9_reads_existing_raw_quicksave_and_resets_transient_state() {
         ));
     }
     app.world_mut().resource_mut::<OpenContainer>().entity_id = Some(EntityId::new(999));
-    press_key(&mut app, KeyCode::F9);
-    app.update();
+    tap_key(&mut app, KeyCode::F9);
     assert_eq!(sim_tick_and_hash(&app), saved);
     assert!(
         app.world()
@@ -352,7 +351,15 @@ fn autosave_fills_generations_before_rotation() {
         config.autosave_slot_count = 5;
     }
     for generation in 1..=5 {
+        app.world_mut()
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+                1.0 / 60.0,
+            )));
         run_until_jobs_start(&mut app);
+        // With completion polling before admission, an interval of one tick
+        // intentionally starts another autosave on every advancing frame.
+        // Freeze while observing this generation's completion.
+        freeze_time(&mut app);
         drain_save_jobs(&mut app);
         let path = app
             .world()
@@ -550,8 +557,7 @@ fn deleting_a_save_removes_recovery_artifacts_without_resurrection() {
 fn background_submission_remains_non_blocking_and_metrics_populate() {
     let mut app = test_app(Duration::ZERO, "metrics");
     let captured_tick = app.world().resource::<SimResource>().read().tick_count();
-    press_key(&mut app, KeyCode::F5);
-    app.update();
+    tap_key(&mut app, KeyCode::F5);
     assert!(
         app.world()
             .resource::<SaveLoadMetrics>()
@@ -561,8 +567,146 @@ fn background_submission_remains_non_blocking_and_metrics_populate() {
     drain_save_jobs(&mut app);
     let metrics = app.world().resource::<SaveLoadMetrics>();
     assert!(metrics.last_bytes > 0);
+    assert!(metrics.last_snapshot_wire_bytes > 0);
+    assert_eq!(metrics.last_snapshot_world_generation, 0);
     assert_eq!(metrics.last_snapshot_tick, captured_tick);
+    assert!(metrics.last_snapshot_lock_hold_ms >= metrics.last_snapshot_capture_ms);
     assert!(metrics.last_total_ms >= metrics.last_write_ms);
+}
+
+#[test]
+fn finished_save_job_does_not_consume_generation_capacity() {
+    let config = SaveLoadConfig {
+        root_dir: unique_temp_dir("retained_generation_bound"),
+        ..SaveLoadConfig::default()
+    };
+    fs::create_dir_all(&config.root_dir).unwrap();
+    let sim = SimResource::new(factory_sim::Simulation::new_test_world(294));
+    let mut pending = PendingSaveJobs::default();
+    let mut status = SaveLoadStatus::default();
+    let mut metrics = SaveLoadMetrics::default();
+
+    assert!(request_system_save(
+        SaveKind::Quicksave,
+        &sim,
+        &config,
+        &mut pending,
+        &mut status,
+        &mut metrics,
+        true,
+    ));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while pending.any_running() {
+        assert!(
+            Instant::now() < deadline,
+            "first save worker did not finish"
+        );
+        std::thread::yield_now();
+    }
+    assert!(
+        !pending.is_empty(),
+        "the completed result should still be waiting for the poller"
+    );
+    assert!(request_system_save(
+        SaveKind::Autosave { generation: 1 },
+        &sim,
+        &config,
+        &mut pending,
+        &mut status,
+        &mut metrics,
+        true,
+    ));
+
+    drop(pending);
+    fs::remove_dir_all(config.root_dir).unwrap();
+}
+
+#[test]
+fn completed_quicksave_is_reaped_before_same_target_admission() {
+    let mut app = test_app(Duration::ZERO, "completed_same_target");
+    tap_key(&mut app, KeyCode::F5);
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.world().resource::<PendingSaveJobs>().any_running() {
+        assert!(
+            Instant::now() < deadline,
+            "first save worker did not finish"
+        );
+        std::thread::yield_now();
+    }
+    assert!(
+        !app.world().resource::<PendingSaveJobs>().is_empty(),
+        "the first completion should still be waiting for the poller"
+    );
+
+    tap_key(&mut app, KeyCode::F5);
+
+    assert!(!app.world().resource::<PendingSaveJobs>().is_empty());
+    assert!(
+        !app.world()
+            .resource::<SaveLoadStatus>()
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("already being saved"))
+    );
+    drain_save_jobs(&mut app);
+}
+
+#[test]
+fn world_replacement_is_independent_after_snapshot_capture_releases_its_lock() {
+    let mut app = test_app(Duration::ZERO, "snapshot_world_replacement");
+    let root = app.world().resource::<SaveLoadConfig>().root_dir.clone();
+    let original_hash = app.world().resource::<SimResource>().read().state_hash();
+    tap_key(&mut app, KeyCode::F5);
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let result = app
+            .world_mut()
+            .resource_mut::<SimResource>()
+            .replace(factory_sim::Simulation::new_test_world(295));
+        match result {
+            Ok(()) => break,
+            Err(factory_app::resources::SimAccessError::Busy) => {
+                assert!(Instant::now() < deadline, "snapshot lock was not released");
+                std::thread::yield_now();
+            }
+            Err(error) => panic!("unexpected replacement error: {error:?}"),
+        }
+    }
+    let replacement_hash = app.world().resource::<SimResource>().read().state_hash();
+    assert_ne!(replacement_hash, original_hash);
+
+    drain_save_jobs(&mut app);
+    assert_eq!(
+        app.world()
+            .resource::<SaveLoadMetrics>()
+            .last_snapshot_world_generation,
+        0
+    );
+    let bytes = fs::read(root.join("quicksave.factsim")).unwrap();
+    let (_, payload) = decode_container(&bytes).unwrap();
+    let saved = load_from_bytes(payload).unwrap();
+    assert_eq!(saved.state_hash(), original_hash);
+    assert_eq!(
+        app.world().resource::<SimResource>().read().state_hash(),
+        replacement_hash
+    );
+
+    tap_key(&mut app, KeyCode::F5);
+    drain_save_jobs(&mut app);
+    assert_eq!(
+        app.world()
+            .resource::<SaveLoadMetrics>()
+            .last_snapshot_world_generation,
+        1
+    );
+    let bytes = fs::read(root.join("quicksave.factsim")).unwrap();
+    let (_, payload) = decode_container(&bytes).unwrap();
+    assert_eq!(
+        load_from_bytes(payload).unwrap().state_hash(),
+        replacement_hash
+    );
 }
 
 #[test]
@@ -574,8 +718,7 @@ fn dropping_the_app_drains_an_immediately_requested_save() {
         .root_dir
         .join("quicksave.factsim");
 
-    press_key(&mut app, KeyCode::F5);
-    app.update();
+    tap_key(&mut app, KeyCode::F5);
     assert!(!app.world().resource::<PendingSaveJobs>().is_empty());
 
     drop(app);
@@ -598,8 +741,7 @@ fn commands_around_save_apply_once_and_continue_deterministically() {
     };
     app.world_mut()
         .write_message(SimCommandRequest(before_save));
-    press_key(&mut app, KeyCode::F5);
-    app.update();
+    tap_key(&mut app, KeyCode::F5);
     let snapshot_tick = app.world().resource::<SimResource>().read().tick_count();
 
     let after_save = SimCommand::MovePlayer {
@@ -643,6 +785,7 @@ fn large_world_save_captures_off_thread_and_resumes_fixed_ticks() {
     let submission_update_started = Instant::now();
     app.update();
     let submission_update = submission_update_started.elapsed();
+    finish_key_press(&mut app, KeyCode::F5);
     assert!(!app.world().resource::<PendingSaveJobs>().is_empty());
     app.world_mut()
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
@@ -942,8 +1085,7 @@ fn oversized_world_preserves_previous_quicksave() {
         sim.validate_state().unwrap();
         assert!(save_to_bytes(&sim).is_err());
     }
-    press_key(&mut app, KeyCode::F5);
-    app.update();
+    tap_key(&mut app, KeyCode::F5);
     let deadline = Instant::now() + Duration::from_secs(120);
     while !app.world().resource::<PendingSaveJobs>().is_empty() {
         assert!(Instant::now() < deadline, "oversized save did not finish");
@@ -957,7 +1099,13 @@ fn oversized_world_preserves_previous_quicksave() {
         status.kind,
         factory_app::save_load::SaveLoadStatusKind::Error
     );
-    assert!(status.message.as_deref().unwrap().contains("SizeLimit"));
+    assert!(
+        status
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("snapshot capture budget")
+    );
     assert_eq!(fs::read(&path).unwrap(), original_bytes);
     let loaded = load_from_bytes(&original_bytes).unwrap();
     loaded.validate_state().unwrap();
@@ -1066,14 +1214,15 @@ fn run_until_jobs_start(app: &mut App) {
 }
 
 fn drain_save_jobs(app: &mut App) {
-    for _ in 0..300 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
         if app.world().resource::<PendingSaveJobs>().is_empty() {
             return;
         }
+        assert!(Instant::now() < deadline, "save jobs did not drain");
         app.update();
-        std::thread::yield_now();
+        std::thread::sleep(Duration::from_millis(1));
     }
-    panic!("save jobs did not drain");
 }
 
 fn run_until_tick(app: &mut App, tick: u64) {
@@ -1093,6 +1242,19 @@ fn press_key(app: &mut App, key: KeyCode) {
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(key);
+}
+
+fn finish_key_press(app: &mut App, key: KeyCode) {
+    let mut keyboard = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+    keyboard.release(key);
+    keyboard.clear_just_pressed(key);
+    keyboard.clear_just_released(key);
+}
+
+fn tap_key(app: &mut App, key: KeyCode) {
+    press_key(app, key);
+    app.update();
+    finish_key_press(app, key);
 }
 
 fn assert_catalog_loads(config: &SaveLoadConfig, expected: (u64, u64)) {

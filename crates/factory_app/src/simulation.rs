@@ -109,6 +109,7 @@ pub(crate) fn tick_sim(
     mut catch_up_stats: ResMut<FixedStepCatchUpStats>,
 ) {
     let Some(mut simulation) = sim.try_write() else {
+        sim.note_snapshot_blocked_fixed_tick();
         profile_stats.save_blocked_fixed_ticks =
             profile_stats.save_blocked_fixed_ticks.saturating_add(1);
         return;
@@ -140,6 +141,7 @@ pub(crate) fn tick_sim(
 mod tests {
     use super::*;
     use factory_sim::{EnemyDifficultyPreset, Simulation, load_from_bytes, save_to_bytes};
+    use std::sync::atomic::Ordering;
     use std::sync::mpsc;
     use std::thread;
 
@@ -274,6 +276,15 @@ mod tests {
                 .resource::<SimProfileStats>()
                 .save_blocked_fixed_ticks,
             1
+        );
+        assert_eq!(
+            app.world()
+                .resource::<SimResource>()
+                .snapshot_source()
+                .blocked_fixed_ticks
+                .load(Ordering::Relaxed),
+            0,
+            "an unrelated reader must not count as snapshot contention"
         );
 
         release_tx

@@ -32,6 +32,7 @@ mod robots;
 mod rocket_silos;
 pub(in crate::simulation) mod rolling_stock;
 mod rolling_stock_loading;
+mod snapshot_generations;
 mod solar;
 mod statistics;
 mod terrain;

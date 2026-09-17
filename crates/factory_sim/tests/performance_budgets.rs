@@ -43,32 +43,63 @@ static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 static ALLOCATION_COUNT: AtomicU64 = AtomicU64::new(0);
 static ALLOCATED_BYTES: AtomicU64 = AtomicU64::new(0);
+static LIVE_ALLOCATED_BYTES: AtomicU64 = AtomicU64::new(0);
+static PEAK_LIVE_ALLOCATED_BYTES: AtomicU64 = AtomicU64::new(0);
 static BENCHMARK_LOCK: Mutex<()> = Mutex::new(());
 
 struct CountingAllocator;
 
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
-        ALLOCATED_BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
-        unsafe { System.alloc(layout) }
+        let pointer = unsafe { System.alloc(layout) };
+        if !pointer.is_null() {
+            record_allocation(layout.size() as u64);
+        }
+        pointer
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        LIVE_ALLOCATED_BYTES.fetch_sub(layout.size() as u64, Ordering::Relaxed);
         unsafe { System.dealloc(ptr, layout) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
-        ALLOCATED_BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
-        unsafe { System.alloc_zeroed(layout) }
+        let pointer = unsafe { System.alloc_zeroed(layout) };
+        if !pointer.is_null() {
+            record_allocation(layout.size() as u64);
+        }
+        pointer
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
-        ALLOCATED_BYTES.fetch_add(new_size as u64, Ordering::Relaxed);
-        unsafe { System.realloc(ptr, layout, new_size) }
+        let pointer = unsafe { System.realloc(ptr, layout, new_size) };
+        if !pointer.is_null() {
+            ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
+            ALLOCATED_BYTES.fetch_add(new_size as u64, Ordering::Relaxed);
+            let old_size = layout.size() as u64;
+            let new_size = new_size as u64;
+            let live = if new_size >= old_size {
+                LIVE_ALLOCATED_BYTES.fetch_add(new_size - old_size, Ordering::Relaxed) + new_size
+                    - old_size
+            } else {
+                LIVE_ALLOCATED_BYTES.fetch_sub(old_size - new_size, Ordering::Relaxed)
+                    - (old_size - new_size)
+            };
+            record_peak(live);
+        }
+        pointer
     }
+}
+
+fn record_allocation(bytes: u64) {
+    ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
+    ALLOCATED_BYTES.fetch_add(bytes, Ordering::Relaxed);
+    let live = LIVE_ALLOCATED_BYTES.fetch_add(bytes, Ordering::Relaxed) + bytes;
+    record_peak(live);
+}
+
+fn record_peak(live: u64) {
+    PEAK_LIVE_ALLOCATED_BYTES.fetch_max(live, Ordering::Relaxed);
 }
 
 #[test]

@@ -7,6 +7,13 @@ and spatial-index copies; their exhaustive struct construction forces new fields
 to be classified when added. `EntityStore` has its own shared
 per-kind registry in `entities/store.rs` and `simulation/entity_states.rs`.
 
+An owned handle also carries a `SaveSnapshotIdentity` consisting of the
+application's world-generation number and the completed tick. That identity is
+orchestration metadata, not portable durable state, so it is not encoded into
+the save. Background capture preflights the borrowed registry against the save
+limits before cloning it. The application retains at most one such full-copy
+generation; a competing request is rejected while the first is encoding.
+
 ## Classification
 
 | Owner | Durable gameplay state | Derived data or scratch |
