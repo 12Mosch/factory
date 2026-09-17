@@ -2,6 +2,7 @@ use super::robot_ops::RobotLogisticWorkState;
 use super::*;
 use crate::SaveLimits;
 use bincode::Options;
+use std::io::{Read, Write};
 
 // Save version 9 intentionally invalidates older saves: construction planning
 // became part of deterministic simulation state and no v8 migration is kept.
@@ -390,7 +391,25 @@ pub fn save_snapshot_to_bytes_with_limits(
     snapshot: &SimulationSaveSnapshot,
     limits: SaveLimits,
 ) -> Result<Vec<u8>, SaveLoadError> {
-    encode_snapshot_with_limits(snapshot.prototype_hash, &snapshot.state, limits)
+    let mut bytes = Vec::with_capacity(SAVE_HEADER_SIZE);
+    save_snapshot_to_writer_with_limits(snapshot, &mut bytes, limits)?;
+    Ok(bytes)
+}
+
+/// Serializes a captured immutable snapshot directly into `writer`.
+pub fn save_snapshot_to_writer(
+    snapshot: &SimulationSaveSnapshot,
+    writer: &mut impl Write,
+) -> Result<(), SaveLoadError> {
+    save_snapshot_to_writer_with_limits(snapshot, writer, SaveLimits::default())
+}
+
+pub fn save_snapshot_to_writer_with_limits(
+    snapshot: &SimulationSaveSnapshot,
+    writer: &mut impl Write,
+    limits: SaveLimits,
+) -> Result<(), SaveLoadError> {
+    encode_snapshot_into_with_limits(snapshot.prototype_hash, &snapshot.state, writer, limits)
 }
 
 pub fn save_to_bytes(sim: &Simulation) -> Result<Vec<u8>, SaveLoadError> {
@@ -401,31 +420,69 @@ pub fn save_to_bytes_with_limits(
     sim: &Simulation,
     limits: SaveLimits,
 ) -> Result<Vec<u8>, SaveLoadError> {
-    let prototype_hash = prototype_hash(&sim.world.prototypes);
-    let snapshot = SimulationSnapshotRef::from_simulation(sim);
-    encode_snapshot_with_limits(prototype_hash, &snapshot, limits)
+    let mut bytes = Vec::with_capacity(SAVE_HEADER_SIZE);
+    save_to_writer_with_limits(sim, &mut bytes, limits)?;
+    Ok(bytes)
 }
 
-/// Encodes either borrowed or owned durable state with the common save header.
+/// Serializes the live simulation directly into `writer`.
+pub fn save_to_writer(sim: &Simulation, writer: &mut impl Write) -> Result<(), SaveLoadError> {
+    save_to_writer_with_limits(sim, writer, SaveLimits::default())
+}
+
+pub fn save_to_writer_with_limits(
+    sim: &Simulation,
+    writer: &mut impl Write,
+    limits: SaveLimits,
+) -> Result<(), SaveLoadError> {
+    let prototype_hash = prototype_hash(&sim.world.prototypes);
+    let snapshot = SimulationSnapshotRef::from_simulation(sim);
+    encode_snapshot_into_with_limits(prototype_hash, &snapshot, writer, limits)
+}
+
+fn encode_snapshot_into_with_limits(
+    prototype_hash: u64,
+    snapshot: &impl Serialize,
+    writer: &mut impl Write,
+    limits: SaveLimits,
+) -> Result<(), SaveLoadError> {
+    if limits.max_encoded_bytes < SAVE_HEADER_SIZE as u64 {
+        return Err(SaveLoadError::TooLarge);
+    }
+    crate::save_limits::check_collections(snapshot, limits)?;
+    // Bincode performs its bounded size pass before emitting payload bytes.
+    // Write the header only after that pass succeeds, so a size failure cannot
+    // leave a writer holding a plausible partial save.
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .with_limit(limits.payload_bytes())
+        .serialized_size(snapshot)
+        .map_err(SaveLoadError::from)?;
+    writer.write_all(&SAVE_MAGIC).map_err(io_save_error)?;
+    writer
+        .write_all(&SAVE_VERSION.to_le_bytes())
+        .map_err(io_save_error)?;
+    writer
+        .write_all(&PROTOTYPE_FORMAT_VERSION.to_le_bytes())
+        .map_err(io_save_error)?;
+    writer
+        .write_all(&prototype_hash.to_le_bytes())
+        .map_err(io_save_error)?;
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .serialize_into(writer, snapshot)
+        .map_err(SaveLoadError::from)?;
+    Ok(())
+}
+
+#[cfg(test)]
 fn encode_snapshot_with_limits(
     prototype_hash: u64,
     snapshot: &impl Serialize,
     limits: SaveLimits,
 ) -> Result<Vec<u8>, SaveLoadError> {
-    if limits.max_encoded_bytes < SAVE_HEADER_SIZE as u64 {
-        return Err(SaveLoadError::TooLarge);
-    }
-    crate::save_limits::check_collections(snapshot, limits)?;
     let mut bytes = Vec::with_capacity(SAVE_HEADER_SIZE);
-    bytes.extend_from_slice(&SAVE_MAGIC);
-    bytes.extend_from_slice(&SAVE_VERSION.to_le_bytes());
-    bytes.extend_from_slice(&PROTOTYPE_FORMAT_VERSION.to_le_bytes());
-    bytes.extend_from_slice(&prototype_hash.to_le_bytes());
-    bincode::DefaultOptions::new()
-        .with_fixint_encoding()
-        .with_limit(limits.payload_bytes())
-        .serialize_into(&mut bytes, snapshot)
-        .map_err(SaveLoadError::from)?;
+    encode_snapshot_into_with_limits(prototype_hash, snapshot, &mut bytes, limits)?;
     Ok(bytes)
 }
 
@@ -456,8 +513,85 @@ pub fn load_from_bytes_with_limits(
     if bytes.len() as u64 > limits.max_simulation_bytes() {
         return Err(SaveLoadError::TooLarge);
     }
-    let (header, snapshot_bytes) = read_header(bytes)?;
+    load_from_reader_with_limits(&mut std::io::Cursor::new(bytes), limits)
+}
 
+/// Decodes and validates one complete save from `reader` without buffering the
+/// encoded payload. The candidate world is returned only after all durable and
+/// rebuilt-state validation succeeds.
+pub fn load_from_reader(reader: &mut impl Read) -> Result<Simulation, SaveLoadError> {
+    load_from_reader_with_limits(reader, SaveLimits::default())
+}
+
+pub fn load_from_reader_with_limits(
+    reader: &mut impl Read,
+    limits: SaveLimits,
+) -> Result<Simulation, SaveLoadError> {
+    if limits.max_encoded_bytes < SAVE_HEADER_SIZE as u64 {
+        return Err(SaveLoadError::TooLarge);
+    }
+    let header = read_header_from(reader)?;
+    validate_header(header)?;
+
+    let (snapshot, payload_bytes): (SimulationSnapshotOwned, u64) =
+        crate::save_limits::deserialize_from(reader, limits).map_err(SaveLoadError::from)?;
+    reject_trailing_or_oversized(reader, payload_bytes, limits.payload_bytes())?;
+
+    finish_load(header, snapshot)
+}
+
+fn reject_trailing_or_oversized(
+    reader: &mut impl Read,
+    payload_bytes: u64,
+    maximum: u64,
+) -> Result<(), SaveLoadError> {
+    let mut total = payload_bytes;
+    let mut found_trailing = false;
+    let mut trailing = [0; 8192];
+    loop {
+        let remaining = maximum.saturating_sub(total);
+        let count = usize::try_from(remaining.saturating_add(1).min(trailing.len() as u64))
+            .expect("trailing read length is bounded by the buffer length");
+        match reader.read(&mut trailing[..count]) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(io_save_error(error)),
+            Ok(0) => break,
+            Ok(read) => {
+                found_trailing = true;
+                total += read as u64;
+                if total > maximum {
+                    return Err(SaveLoadError::TooLarge);
+                }
+            }
+        }
+    }
+    if found_trailing {
+        Err(SaveLoadError::Codec(
+            bincode::ErrorKind::Custom("save payload has trailing bytes".into()).into(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn finish_load(
+    header: SaveHeader,
+    snapshot: SimulationSnapshotOwned,
+) -> Result<Simulation, SaveLoadError> {
+    let computed_hash = prototype_hash(&snapshot.prototypes);
+    if header.prototype_hash != computed_hash {
+        return Err(SaveLoadError::PrototypeHashMismatch {
+            stored: header.prototype_hash,
+            computed: computed_hash,
+        });
+    }
+    let sim = snapshot.into_simulation()?;
+    sim.validate_state()
+        .map_err(SaveLoadError::InvalidSimulationState)?;
+    Ok(sim)
+}
+
+fn validate_header(header: SaveHeader) -> Result<(), SaveLoadError> {
     if header.magic != SAVE_MAGIC {
         return Err(SaveLoadError::InvalidMagic {
             found: header.magic,
@@ -475,25 +609,17 @@ pub fn load_from_bytes_with_limits(
             supported: PROTOTYPE_FORMAT_VERSION,
         });
     }
+    Ok(())
+}
 
-    if snapshot_bytes.len() as u64 > limits.payload_bytes() {
-        return Err(size_limit_error());
-    }
+fn read_header_from(reader: &mut impl Read) -> Result<SaveHeader, SaveLoadError> {
+    let mut bytes = [0; SAVE_HEADER_SIZE];
+    reader.read_exact(&mut bytes).map_err(io_save_error)?;
+    read_header(&bytes).map(|(header, _)| header)
+}
 
-    let snapshot: SimulationSnapshotOwned =
-        crate::save_limits::deserialize(snapshot_bytes, limits).map_err(SaveLoadError::from)?;
-    let computed_hash = prototype_hash(&snapshot.prototypes);
-    if header.prototype_hash != computed_hash {
-        return Err(SaveLoadError::PrototypeHashMismatch {
-            stored: header.prototype_hash,
-            computed: computed_hash,
-        });
-    }
-
-    let sim = snapshot.into_simulation()?;
-    sim.validate_state()
-        .map_err(SaveLoadError::InvalidSimulationState)?;
-    Ok(sim)
+fn io_save_error(error: std::io::Error) -> SaveLoadError {
+    SaveLoadError::Codec(bincode::ErrorKind::Io(error).into())
 }
 
 fn read_header(bytes: &[u8]) -> Result<(SaveHeader, &[u8]), SaveLoadError> {
@@ -530,10 +656,6 @@ pub fn inspect_save_header(bytes: &[u8]) -> Result<SaveHeaderInfo, SaveLoadError
         prototype_format_version: header.prototype_format_version,
         prototype_hash: header.prototype_hash,
     })
-}
-
-fn size_limit_error() -> SaveLoadError {
-    SaveLoadError::TooLarge
 }
 
 fn unexpected_eof_error(message: &'static str) -> SaveLoadError {
@@ -745,6 +867,110 @@ pub(in crate::simulation) fn assert_save_continuation(
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+    use std::io;
+
+    struct FragmentedReader {
+        bytes: io::Cursor<Vec<u8>>,
+        interrupt_next: bool,
+    }
+
+    impl Read for FragmentedReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if self.interrupt_next {
+                self.interrupt_next = false;
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            self.interrupt_next = true;
+            let count = buffer.len().min(3);
+            self.bytes.read(&mut buffer[..count])
+        }
+    }
+
+    #[derive(Default)]
+    struct FragmentedWriter {
+        bytes: Vec<u8>,
+        interrupt_next: bool,
+    }
+
+    impl Write for FragmentedWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            if self.interrupt_next {
+                self.interrupt_next = false;
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            self.interrupt_next = true;
+            let count = buffer.len().min(3);
+            self.bytes.extend_from_slice(&buffer[..count]);
+            Ok(count)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FailingIo;
+
+    impl Read for FailingIo {
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::PermissionDenied.into())
+        }
+    }
+
+    impl Write for FailingIo {
+        fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::PermissionDenied.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn byte_helpers_and_fragmented_streams_are_equivalent() {
+        let mut sim = Simulation::new_test_world(295);
+        for _ in 0..12 {
+            sim.tick();
+        }
+        let expected = save_to_bytes(&sim).unwrap();
+        let mut writer = FragmentedWriter::default();
+        save_to_writer(&sim, &mut writer).unwrap();
+        assert_eq!(writer.bytes, expected);
+
+        let mut reader = FragmentedReader {
+            bytes: io::Cursor::new(expected),
+            interrupt_next: true,
+        };
+        let loaded = load_from_reader(&mut reader).unwrap();
+        assert_eq!(loaded.state_hash(), sim.state_hash());
+    }
+
+    #[test]
+    fn streaming_reports_truncation_trailing_bytes_and_io_failures() {
+        let sim = Simulation::new_test_world(296);
+        let bytes = save_to_bytes(&sim).unwrap();
+        let mut truncated = io::Cursor::new(&bytes[..bytes.len() - 1]);
+        assert!(matches!(
+            load_from_reader(&mut truncated),
+            Err(SaveLoadError::Codec(_))
+        ));
+
+        let mut with_trailing = bytes.clone();
+        with_trailing.push(0);
+        assert!(matches!(
+            load_from_reader(&mut io::Cursor::new(with_trailing)),
+            Err(SaveLoadError::Codec(_))
+        ));
+        assert!(matches!(
+            load_from_reader(&mut FailingIo),
+            Err(SaveLoadError::Codec(_))
+        ));
+        assert!(matches!(
+            save_to_writer(&sim, &mut FailingIo),
+            Err(SaveLoadError::Codec(_))
+        ));
+    }
 
     /// Invalid chunk shape fails before constructing a generator from its tiles.
     #[test]

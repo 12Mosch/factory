@@ -17,7 +17,7 @@ pub use types::*;
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use factory_sim::{SaveLoadError, load_from_bytes};
+use factory_sim::SaveLoadError;
 use std::env;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -445,8 +445,12 @@ pub(crate) fn load_save(
         );
         return false;
     }
-    let bytes = match container::read_simulation_payload(&entry.path) {
-        Ok(bytes) => bytes,
+    let loaded = match container::load_simulation(&entry.path) {
+        Ok(loaded) => loaded,
+        Err(container::ContainerError::Simulation(error)) => {
+            set_error(status, format_save_load_error(error));
+            return false;
+        }
         Err(error) => {
             set_error(
                 status,
@@ -455,31 +459,23 @@ pub(crate) fn load_save(
             return false;
         }
     };
-    match load_from_bytes(&bytes) {
-        Ok(loaded) => {
-            let tick = loaded.tick_count();
-            let player_tile = loaded.player().position_tiles();
-            if let Err(error) = state.sim.replace(loaded) {
-                set_error(
-                    status,
-                    match error {
-                        SimAccessError::Busy => "Cannot load while a save is in progress.",
-                        SimAccessError::Poisoned => "Cannot load: simulation access failed.",
-                    },
-                );
-                return false;
-            }
-            enter_swapped_world(state, tick, player_tile);
-            status.message = Some(format!("{} loaded.", entry.metadata.display_name));
-            status.kind = SaveLoadStatusKind::Success;
-            status.last_completed_id = Some(id.clone());
-            true
-        }
-        Err(error) => {
-            set_error(status, format_save_load_error(error));
-            false
-        }
+    let tick = loaded.tick_count();
+    let player_tile = loaded.player().position_tiles();
+    if let Err(error) = state.sim.replace(loaded) {
+        set_error(
+            status,
+            match error {
+                SimAccessError::Busy => "Cannot load while a save is in progress.",
+                SimAccessError::Poisoned => "Cannot load: simulation access failed.",
+            },
+        );
+        return false;
     }
+    enter_swapped_world(state, tick, player_tile);
+    status.message = Some(format!("{} loaded.", entry.metadata.display_name));
+    status.kind = SaveLoadStatusKind::Success;
+    status.last_completed_id = Some(id.clone());
+    true
 }
 
 pub(crate) fn enter_swapped_world(state: &mut LoadState, tick: u64, player_tile: (f32, f32)) {

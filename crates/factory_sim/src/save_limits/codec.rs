@@ -1,11 +1,16 @@
 //! Recursive serde adapters keep collection checks independent of snapshot fields.
 use super::{COLLECTION_LIMIT_ERROR, SaveLimits};
+use serde::Serialize;
 use serde::de::{self, DeserializeSeed, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor};
 use serde::ser::{
     self, SerializeMap, SerializeSeq, SerializeStruct, SerializeStructVariant, SerializeTuple,
     SerializeTupleStruct, SerializeTupleVariant,
 };
-use serde::{Deserialize, Serialize};
+use std::cell::Cell;
+use std::io::{self, Read};
+use std::rc::Rc;
+
+const PAYLOAD_LIMIT_ERROR: &str = "save payload exceeds safety limit";
 
 pub(crate) fn check_collections(
     value: &impl Serialize,
@@ -242,7 +247,8 @@ impl<T> Guard<T> {
         }
     }
 }
-pub(crate) fn deserialize<'de, T: Deserialize<'de>>(
+#[cfg(test)]
+pub(crate) fn deserialize<'de, T: serde::Deserialize<'de>>(
     bytes: &'de [u8],
     limits: SaveLimits,
 ) -> Result<T, bincode::Error> {
@@ -254,6 +260,98 @@ pub(crate) fn deserialize<'de, T: Deserialize<'de>>(
         return Err(Box::new(bincode::ErrorKind::SizeLimit));
     }
     options.deserialize_seed(Guard::new(std::marker::PhantomData::<T>, limits), bytes)
+}
+
+/// Decodes from a reader without first retaining the complete wire payload.
+///
+/// `bincode`'s ordinary I/O reader allocates string and byte buffers before a
+/// serde visitor can inspect their declared length. This adapter checks those
+/// lengths first, in addition to the recursive sequence/map checks in `Guard`.
+pub(crate) fn deserialize_from<T: serde::de::DeserializeOwned>(
+    reader: &mut impl Read,
+    limits: SaveLimits,
+) -> Result<(T, u64), bincode::Error> {
+    use bincode::Options;
+
+    let options = bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .with_limit(limits.payload_bytes());
+    let consumed = Rc::new(Cell::new(0));
+    let bounded = BoundedBincodeReader {
+        inner: reader,
+        remaining: limits.payload_bytes(),
+        max_collection_entries: limits.max_collection_entries,
+        consumed: Rc::clone(&consumed),
+    };
+    let value = options
+        .deserialize_from_custom_seed(Guard::new(std::marker::PhantomData::<T>, limits), bounded)?;
+    Ok((value, consumed.get()))
+}
+
+struct BoundedBincodeReader<R> {
+    inner: R,
+    remaining: u64,
+    max_collection_entries: u64,
+    consumed: Rc<Cell<u64>>,
+}
+
+impl<R: Read> BoundedBincodeReader<R> {
+    fn check_collection(&self, length: usize) -> Result<(), bincode::Error> {
+        if length as u64 > self.max_collection_entries {
+            Err(Box::new(bincode::ErrorKind::Custom(
+                COLLECTION_LIMIT_ERROR.into(),
+            )))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl<R: Read> Read for BoundedBincodeReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        if self.remaining == 0 {
+            return Err(io::Error::other(PAYLOAD_LIMIT_ERROR));
+        }
+        let allowed = usize::try_from(self.remaining.min(buffer.len() as u64))
+            .expect("allowed read length is bounded by the buffer length");
+        let read = self.inner.read(&mut buffer[..allowed])?;
+        self.remaining -= read as u64;
+        self.consumed.set(self.consumed.get() + read as u64);
+        Ok(read)
+    }
+}
+
+impl<'de, R: Read> bincode::BincodeRead<'de> for BoundedBincodeReader<R> {
+    fn forward_read_str<V>(&mut self, length: usize, visitor: V) -> bincode::Result<V::Value>
+    where
+        V: serde::de::Visitor<'de>,
+    {
+        self.check_collection(length)?;
+        let mut bytes = vec![0; length];
+        self.read_exact(&mut bytes)?;
+        let value = std::str::from_utf8(&bytes).map_err(bincode::ErrorKind::InvalidUtf8Encoding)?;
+        visitor.visit_str(value)
+    }
+
+    fn get_byte_buffer(&mut self, length: usize) -> bincode::Result<Vec<u8>> {
+        self.check_collection(length)?;
+        let mut bytes = vec![0; length];
+        self.read_exact(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    fn forward_read_bytes<V>(&mut self, length: usize, visitor: V) -> bincode::Result<V::Value>
+    where
+        V: serde::de::Visitor<'de>,
+    {
+        self.check_collection(length)?;
+        let mut bytes = vec![0; length];
+        self.read_exact(&mut bytes)?;
+        visitor.visit_bytes(&bytes)
+    }
 }
 
 macro_rules! forward_decode {
@@ -515,7 +613,7 @@ mod tests {
     use bincode::Options;
     use std::collections::BTreeMap;
 
-    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    #[derive(Debug, PartialEq, Serialize, serde::Deserialize)]
     enum Nested {
         Unit,
         Newtype(Vec<u8>),
@@ -570,5 +668,32 @@ mod tests {
         assert!(deserialize::<Vec<u64>>(&truncated, limits).is_err());
         assert!(deserialize::<String>(&truncated, limits).is_err());
         assert!(deserialize::<u8>(&[1, 2], limits).is_err());
+    }
+
+    #[test]
+    fn reader_path_rejects_forged_and_oversized_collections() {
+        let limits = SaveLimits {
+            max_collection_entries: 3,
+            ..SaveLimits::default()
+        };
+        let value = Nested::Newtype(vec![0; 4]);
+        let bytes = bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .serialize(&value)
+            .unwrap();
+        let error =
+            deserialize_from::<Nested>(&mut std::io::Cursor::new(bytes), limits).unwrap_err();
+        assert!(matches!(
+            crate::SaveLoadError::from(error),
+            crate::SaveLoadError::TooLarge
+        ));
+
+        let forged = u64::MAX.to_le_bytes();
+        let error =
+            deserialize_from::<String>(&mut std::io::Cursor::new(forged), limits).unwrap_err();
+        assert!(matches!(
+            crate::SaveLoadError::from(error),
+            crate::SaveLoadError::TooLarge
+        ));
     }
 }

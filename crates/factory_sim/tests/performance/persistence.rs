@@ -1,9 +1,9 @@
 //! Persistence budgets share deterministic populated factory builders with tick budgets.
 use super::*;
 use factory_sim::{
-    MAX_SNAPSHOT_BYTES, SAVE_HEADER_SIZE, save_snapshot_to_bytes, try_capture_save_snapshot,
+    MAX_SNAPSHOT_BYTES, SAVE_HEADER_SIZE, save_snapshot_to_writer, try_capture_save_snapshot,
 };
-use std::io::Write;
+use std::io::{BufWriter, Write};
 
 #[test]
 fn persistence_supported_worlds() {
@@ -73,46 +73,33 @@ fn benchmark(
     assert_eq!(snapshot.identity().world_generation, 1);
     // Move encoding and writing to the same kind of worker used by the app.
     let worker = std::thread::spawn(move || {
-        let (bytes, encode, encode_alloc, encode_peak, encode_retained) =
-            measure(|| save_snapshot_to_bytes(&snapshot).unwrap());
-        drop(snapshot);
         let path = std::env::temp_dir().join(format!(
             "factory-persistence-{}-{name}.factsim",
             std::process::id()
         ));
-        let (_, write, write_alloc, write_peak, _) = measure(|| {
-            let mut file = std::fs::File::create(&path).unwrap();
-            file.write_all(&bytes).unwrap();
-            file.sync_all().unwrap();
+        let (_, stream_write, stream_alloc, stream_peak, stream_retained) = measure(|| {
+            let file = std::fs::File::create(&path).unwrap();
+            let mut file = BufWriter::new(file);
+            save_snapshot_to_writer(&snapshot, &mut file).unwrap();
+            file.flush().unwrap();
+            file.get_ref().sync_all().unwrap();
         });
+        // The encoded payload was never retained alongside the captured world.
+        drop(snapshot);
         let (disk_bytes, read, _, read_peak, _) = measure(|| std::fs::read(&path).unwrap());
         std::fs::remove_file(path).unwrap();
-        assert_eq!(bytes, disk_bytes);
         (
-            bytes,
-            encode,
-            encode_alloc,
-            encode_peak,
-            encode_retained,
-            write,
-            write_alloc,
-            write_peak,
+            disk_bytes,
+            stream_write,
+            stream_alloc,
+            stream_peak,
+            stream_retained,
             read,
             read_peak,
         )
     });
-    let (
-        bytes,
-        encode,
-        encode_alloc,
-        encode_peak,
-        encode_retained,
-        write,
-        write_alloc,
-        write_peak,
-        read,
-        read_peak,
-    ) = worker.join().unwrap();
+    let (bytes, stream_write, stream_alloc, stream_peak, stream_retained, read, read_peak) =
+        worker.join().unwrap();
     let (mut loaded, load, load_alloc, load_peak, _) = measure(|| load_from_bytes(&bytes).unwrap());
     let (_, validate, validation_alloc, validation_peak, _) =
         measure(|| loaded.validate_state().unwrap());
@@ -126,14 +113,13 @@ fn benchmark(
         assert_eq!(loaded.state_hash(), sim.state_hash());
     }
     let payload = bytes.len() as u64 - SAVE_HEADER_SIZE as u64;
-    let save_peak_retained = capture_peak.max(capture_retained.saturating_add(encode_peak));
+    let save_peak_retained = capture_peak.max(capture_retained.saturating_add(stream_peak));
     assert!(size_budget <= MAX_SNAPSHOT_BYTES);
     eprintln!(
-        "persistence {name}: chunks={} machines={machines} belts={belts} tick={tick} payload={payload} capture_ms={:.3} encode_ms={:.3} write_sync_ms={:.3} read_ms={:.3} load_validated_ms={:.3} validation_ms={:.3} allocated_bytes(capture/encode/write/load/validation)={capture_alloc}/{encode_alloc}/{write_alloc}/{load_alloc}/{validation_alloc} peak_extra_bytes(save/capture/encode/write/read/load/validation)={save_peak_retained}/{capture_peak}/{encode_peak}/{write_peak}/{read_peak}/{load_peak}/{validation_peak} retained_bytes(capture/encode)={capture_retained}/{encode_retained}",
+        "persistence {name}: chunks={} machines={machines} belts={belts} tick={tick} payload={payload} capture_ms={:.3} stream_encode_write_sync_ms={:.3} test_read_ms={:.3} load_validated_ms={:.3} validation_ms={:.3} allocated_bytes(capture/stream/load/validation)={capture_alloc}/{stream_alloc}/{load_alloc}/{validation_alloc} peak_extra_bytes(save/capture/stream/test_read/load/validation)={save_peak_retained}/{capture_peak}/{stream_peak}/{read_peak}/{load_peak}/{validation_peak} retained_bytes(snapshot_capture/stream)={capture_retained}/{stream_retained}",
         sim.world().chunks.len(),
         ms(capture),
-        ms(encode),
-        ms(write),
+        ms(stream_write),
         ms(read),
         ms(load),
         ms(validate)
@@ -147,7 +133,10 @@ fn benchmark(
         capture < Duration::from_secs(2),
         "{name}: capture {capture:?}"
     );
-    assert!(encode < Duration::from_secs(5), "{name}: encode {encode:?}");
+    assert!(
+        stream_write < Duration::from_secs(5),
+        "{name}: stream encode/write {stream_write:?}"
+    );
     assert!(load < Duration::from_secs(10), "{name}: load {load:?}");
     assert!(
         validate < Duration::from_secs(5),
@@ -158,8 +147,12 @@ fn benchmark(
         "{name}: capture allocation {capture_alloc}"
     );
     assert!(
-        encode_alloc <= size_budget * 4,
-        "{name}: encode allocation {encode_alloc}"
+        stream_alloc <= size_budget * 4,
+        "{name}: stream encode/write allocation {stream_alloc}"
+    );
+    assert_eq!(
+        stream_retained, 0,
+        "{name}: streaming must not retain an encoded payload"
     );
     assert!(
         load_alloc <= size_budget * 16,

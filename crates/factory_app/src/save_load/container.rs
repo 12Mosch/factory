@@ -1,9 +1,13 @@
 use super::{SaveId, SaveKind, SaveMetadata};
-use factory_sim::{SAVE_HEADER_SIZE, SaveLimits};
-use std::io::{self, Read, Write};
+use factory_sim::{
+    SAVE_HEADER_SIZE, SaveLimits, SaveLoadError, Simulation, SimulationSaveSnapshot,
+    load_from_reader_with_limits, save_snapshot_to_writer,
+};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 use std::{fs, str};
 
 static SAVE_ARTIFACT_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -42,6 +46,7 @@ pub enum ContainerError {
     MetadataEncoding(String),
     Truncated,
     InvalidContainerMagic,
+    Simulation(SaveLoadError),
 }
 
 impl std::fmt::Display for ContainerError {
@@ -60,8 +65,16 @@ impl std::fmt::Display for ContainerError {
             Self::MetadataEncoding(error) => write!(formatter, "metadata encoding failed: {error}"),
             Self::Truncated => write!(formatter, "save container is truncated"),
             Self::InvalidContainerMagic => write!(formatter, "invalid save container magic"),
+            Self::Simulation(error) => write!(formatter, "simulation codec failed: {error:?}"),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct StreamWriteMetrics {
+    pub total_bytes: usize,
+    pub simulation_bytes: usize,
+    pub encode_ms: f64,
 }
 
 impl From<io::Error> for ContainerError {
@@ -193,9 +206,50 @@ fn read_inspection_bytes(reader: &mut impl Read, buffer: &mut [u8]) -> Result<()
     })
 }
 
-/// Reads a container payload, retaining support for legacy raw quicksaves.
-pub(crate) fn read_simulation_payload(path: &Path) -> Result<Vec<u8>, ContainerError> {
-    read_payload(&mut fs::File::open(path)?, SaveLimits::default())
+/// Streams a container (or legacy raw quicksave) into a detached candidate
+/// simulation. The caller remains responsible for installing that candidate.
+pub(crate) fn load_simulation(path: &Path) -> Result<Simulation, ContainerError> {
+    let file = fs::File::open(path)?;
+    load_simulation_from_reader(&mut BufReader::new(file), SaveLimits::default())
+}
+
+fn load_simulation_from_reader(
+    reader: &mut impl Read,
+    limits: SaveLimits,
+) -> Result<Simulation, ContainerError> {
+    check_size(SAVE_HEADER_SIZE as u64, limits.max_simulation_bytes())?;
+    let mut magic = [0; 8];
+    read_inspection_bytes(reader, &mut magic)?;
+    if magic != CONTAINER_MAGIC {
+        let mut raw = io::Cursor::new(magic).chain(reader);
+        return load_from_reader_with_limits(&mut raw, limits).map_err(ContainerError::Simulation);
+    }
+
+    let mut prefix = [0; 8];
+    read_inspection_bytes(reader, &mut prefix)?;
+    check_version(u32::from_le_bytes(
+        prefix[..4].try_into().expect("fixed range"),
+    ))?;
+    let metadata_len = u32::from_le_bytes(prefix[4..].try_into().expect("fixed range")) as usize;
+    if metadata_len > limits.max_metadata_bytes {
+        return Err(ContainerError::MetadataTooLarge(metadata_len));
+    }
+    let overhead = PREFIX_SIZE as u64 + metadata_len as u64;
+    check_size(overhead, limits.max_encoded_bytes)?;
+    let copied = io::copy(&mut reader.take(metadata_len as u64), &mut io::sink())?;
+    if copied != metadata_len as u64 {
+        return Err(ContainerError::Truncated);
+    }
+    let maximum = limits
+        .max_simulation_bytes()
+        .min(limits.max_encoded_bytes - overhead);
+    let mut payload = reader.take(maximum.saturating_add(1));
+    let simulation_limits = SaveLimits {
+        max_encoded_bytes: maximum,
+        ..limits
+    };
+    load_from_reader_with_limits(&mut payload, simulation_limits)
+        .map_err(ContainerError::Simulation)
 }
 
 /// Recovery retains artifact bytes for exact duplicate comparisons, but never
@@ -226,6 +280,7 @@ fn check_version(version: u32) -> Result<(), ContainerError> {
 
 /// Bound actual reads, including files that grow after opening. Only the payload
 /// is retained; metadata and the prefix never share a full-file allocation.
+#[cfg(test)]
 fn read_payload(reader: &mut impl Read, limits: SaveLimits) -> Result<Vec<u8>, ContainerError> {
     check_size(SAVE_HEADER_SIZE as u64, limits.max_simulation_bytes())?;
     let mut magic = [0; 8];
@@ -308,12 +363,80 @@ pub(crate) fn write_save_bytes(path: &Path, bytes: &[u8]) -> Result<(), Containe
     with_save_artifact_lock(|| write_save_bytes_locked(path, bytes, SaveLimits::default()))
 }
 
+/// Encodes a snapshot through a buffered temporary file and commits it only
+/// after the encoder has finished and the buffer has been flushed and synced.
+pub(crate) fn write_save_snapshot(
+    path: &Path,
+    metadata: &SaveMetadata,
+    snapshot: &SimulationSaveSnapshot,
+) -> Result<StreamWriteMetrics, ContainerError> {
+    with_save_artifact_lock(|| {
+        write_save_snapshot_locked(path, metadata, snapshot, SaveLimits::default())
+    })
+}
+
+fn write_save_snapshot_locked(
+    path: &Path,
+    metadata: &SaveMetadata,
+    snapshot: &SimulationSaveSnapshot,
+    limits: SaveLimits,
+) -> Result<StreamWriteMetrics, ContainerError> {
+    let metadata_text = ron::ser::to_string(metadata)
+        .map_err(|error| ContainerError::MetadataEncoding(error.to_string()))?;
+    let metadata_bytes = metadata_text.as_bytes();
+    if metadata_bytes.len() > limits.max_metadata_bytes {
+        return Err(ContainerError::MetadataTooLarge(metadata_bytes.len()));
+    }
+    let metadata_len = u32::try_from(metadata_bytes.len())
+        .map_err(|_| ContainerError::MetadataTooLarge(metadata_bytes.len()))?;
+    let overhead = PREFIX_SIZE as u64 + metadata_bytes.len() as u64;
+    check_size(overhead, limits.max_encoded_bytes)?;
+    let payload_maximum = limits
+        .max_simulation_bytes()
+        .min(limits.max_encoded_bytes - overhead);
+
+    write_temporary_and_commit(path, |writer| {
+        writer.write_all(&CONTAINER_MAGIC)?;
+        writer.write_all(&CONTAINER_VERSION.to_le_bytes())?;
+        writer.write_all(&metadata_len.to_le_bytes())?;
+        writer.write_all(metadata_bytes)?;
+        let encode_start = Instant::now();
+        let simulation_bytes = {
+            let mut payload = LimitedWriter::new(writer, payload_maximum);
+            save_snapshot_to_writer(snapshot, &mut payload).map_err(ContainerError::Simulation)?;
+            payload.written
+        };
+        Ok(StreamWriteMetrics {
+            total_bytes: overhead as usize + simulation_bytes,
+            simulation_bytes,
+            encode_ms: encode_start.elapsed().as_secs_f64() * 1000.0,
+        })
+    })
+}
+
 /// Implements save installation while the process-wide artifact lock is held.
 fn write_save_bytes_locked(
     path: &Path,
     bytes: &[u8],
     limits: SaveLimits,
 ) -> Result<(), ContainerError> {
+    write_temporary_and_commit(path, |temp| {
+        check_size(bytes.len() as u64, limits.max_encoded_bytes)?;
+        if bytes.starts_with(&CONTAINER_MAGIC) {
+            let offset = container_payload_offset_with_limits(bytes, limits)?;
+            check_size((bytes.len() - offset) as u64, limits.max_simulation_bytes())?;
+        } else {
+            check_size(bytes.len() as u64, limits.max_simulation_bytes())?;
+        }
+        temp.write_all(bytes)?;
+        Ok(())
+    })
+}
+
+fn write_temporary_and_commit<T>(
+    path: &Path,
+    encode: impl FnOnce(&mut BufWriter<fs::File>) -> Result<T, ContainerError>,
+) -> Result<T, ContainerError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -327,20 +450,14 @@ fn write_save_bytes_locked(
     let mut installed = false;
 
     let result = (|| {
-        let mut temp = fs::OpenOptions::new()
+        let temp = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&temp_path)?;
-        // Reject before installation while retaining the same artifact cleanup.
-        check_size(bytes.len() as u64, limits.max_encoded_bytes)?;
-        if bytes.starts_with(&CONTAINER_MAGIC) {
-            let offset = container_payload_offset_with_limits(bytes, limits)?;
-            check_size((bytes.len() - offset) as u64, limits.max_simulation_bytes())?;
-        } else {
-            check_size(bytes.len() as u64, limits.max_simulation_bytes())?;
-        }
-        temp.write_all(bytes)?;
-        temp.sync_all()?;
+        let mut temp = BufWriter::new(temp);
+        let outcome = encode(&mut temp)?;
+        temp.flush()?;
+        temp.get_ref().sync_all()?;
         drop(temp);
         sync_parent_directory(path)?;
 
@@ -356,7 +473,7 @@ fn write_save_bytes_locked(
             let _ = discard_save_artifact(&backup_path);
             let _ = sync_parent_directory(path);
         }
-        Ok(())
+        Ok(outcome)
     })();
 
     if result.is_err() {
@@ -367,6 +484,45 @@ fn write_save_bytes_locked(
         let _ = sync_parent_directory(path);
     }
     result
+}
+
+struct LimitedWriter<W> {
+    inner: W,
+    remaining: u64,
+    written: usize,
+}
+
+impl<W> LimitedWriter<W> {
+    fn new(inner: W, maximum: u64) -> Self {
+        Self {
+            inner,
+            remaining: maximum,
+            written: 0,
+        }
+    }
+}
+
+impl<W: Write> Write for LimitedWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        if self.remaining == 0 {
+            return Err(io::Error::other(
+                "simulation payload exceeds container limit",
+            ));
+        }
+        let allowed = usize::try_from(self.remaining.min(bytes.len() as u64))
+            .expect("allowed write length is bounded by the source slice");
+        let written = self.inner.write(&bytes[..allowed])?;
+        self.remaining -= written as u64;
+        self.written += written;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 /// Atomically installs a validated backup while preserving a concurrently
@@ -810,7 +966,10 @@ pub(crate) fn fallback_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use factory_sim::{Simulation, load_from_bytes, save_to_bytes};
+    use factory_sim::{
+        Simulation, load_from_bytes, save_snapshot_to_bytes, save_to_bytes,
+        try_capture_save_snapshot,
+    };
 
     struct FailingReader(io::ErrorKind);
 
@@ -874,6 +1033,32 @@ mod tests {
     }
 
     #[test]
+    fn streamed_container_matches_byte_format_and_loads_without_payload_buffer() {
+        let mut simulation = Simulation::new_test_world(78);
+        for _ in 0..12 {
+            simulation.tick();
+        }
+        let snapshot = try_capture_save_snapshot(&simulation, 3).unwrap();
+        let expected_payload = save_snapshot_to_bytes(&snapshot).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "factory-container-stream-{}-{}",
+            std::process::id(),
+            SAVE_ARTIFACT_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let path = root.join("manual-stream.factsim");
+        let metadata = metadata("Streamed");
+        let metrics = write_save_snapshot(&path, &metadata, &snapshot).unwrap();
+        assert_eq!(metrics.simulation_bytes, expected_payload.len());
+        let bytes = fs::read(&path).unwrap();
+        let (decoded_metadata, payload) = decode_container(&bytes).unwrap();
+        assert_eq!(decoded_metadata, metadata);
+        assert_eq!(payload, expected_payload);
+        let loaded = load_simulation(&path).unwrap();
+        assert_eq!(loaded.state_hash(), simulation.state_hash());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn atomic_writer_creates_and_replaces_one_file() {
         let root = std::env::temp_dir().join(format!(
             "factory-container-atomic-{}-{}",
@@ -885,6 +1070,28 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"first");
         write_save_bytes(&path, b"second").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"second");
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_stream_never_replaces_the_previous_save() {
+        let root = std::env::temp_dir().join(format!(
+            "factory-container-failed-stream-{}-{}",
+            std::process::id(),
+            SAVE_ARTIFACT_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let path = root.join("manual-test.factsim");
+        write_save_bytes(&path, b"previous valid save").unwrap();
+
+        let result: Result<(), ContainerError> = write_temporary_and_commit(&path, |writer| {
+            writer.write_all(b"partial replacement")?;
+            Err(ContainerError::Io(io::Error::other(
+                "injected encoder failure",
+            )))
+        });
+        assert!(matches!(result, Err(ContainerError::Io(_))));
+        assert_eq!(fs::read(&path).unwrap(), b"previous valid save");
         assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
         fs::remove_dir_all(root).unwrap();
     }

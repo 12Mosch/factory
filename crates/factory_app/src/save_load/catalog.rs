@@ -1,7 +1,7 @@
 use super::compatibility::classify_header;
 use super::container::{
     CONTAINER_VERSION, ContainerError, SaveArtifactKind, discard_save_artifact, fallback_metadata,
-    inspect_container, parse_save_artifact, promote_backup, read_simulation_payload,
+    inspect_container, load_simulation, parse_save_artifact, promote_backup,
     retired_save_artifact_primary, with_save_artifact_lock,
 };
 use super::{
@@ -220,8 +220,9 @@ fn remove_recovery_artifact(path: &Path) {
 fn primary_state(path: &Path, kind: &SaveKind, current_hash: u64) -> PrimaryState {
     let inspection = inspect_file(path, kind, current_hash);
     match inspection.compatibility {
-        SaveCompatibility::Compatible => match read_simulation_payload(path) {
-            Ok(payload) => simulation_payload_state(&payload),
+        SaveCompatibility::Compatible => match load_simulation(path) {
+            Ok(_) => PrimaryState::Valid,
+            Err(ContainerError::Simulation(error)) => classify_simulation_result(Err(error)),
             Err(ContainerError::Io(_) | ContainerError::TooLarge) => {
                 PrimaryState::IntactButIncompatible
             }
@@ -236,11 +237,6 @@ fn primary_state(path: &Path, kind: &SaveKind, current_hash: u64) -> PrimaryStat
         }
         _ => PrimaryState::IntactButIncompatible,
     }
-}
-
-/// Distinguishes corruption from an intact payload requiring another game version.
-fn simulation_payload_state(payload: &[u8]) -> PrimaryState {
-    classify_simulation_result(load_from_bytes(payload))
 }
 
 fn classify_simulation_result(
@@ -534,12 +530,18 @@ mod tests {
             classify_backup_result(bytes.clone(), rejected()),
             RecoveryBackup::Inaccessible(ContainerError::TooLarge)
         ));
-        assert_eq!(simulation_payload_state(&bytes), PrimaryState::Valid);
+        assert_eq!(
+            classify_simulation_result(load_from_bytes(&bytes)),
+            PrimaryState::Valid
+        );
         assert!(matches!(
             classify_backup_result(bytes.clone(), load_from_bytes(&bytes)),
             RecoveryBackup::Candidate(_)
         ));
-        assert_eq!(simulation_payload_state(&[0]), PrimaryState::Corrupt);
+        assert_eq!(
+            classify_simulation_result(load_from_bytes(&[0])),
+            PrimaryState::Corrupt
+        );
         assert!(matches!(
             classify_backup_result(vec![0], load_from_bytes(&[0])),
             RecoveryBackup::Corrupt
