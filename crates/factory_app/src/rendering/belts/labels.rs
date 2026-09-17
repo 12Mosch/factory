@@ -30,7 +30,7 @@ pub(super) fn spawn_or_reuse_belt_item_label(
     let translation = label_translation(item.translation);
     let label = belt_item_label(sim, item.item_id);
 
-    if let Some(entity) = pool.labels.pop() {
+    if let Some(entity) = pool.take_label() {
         commands.entity(entity).insert((
             Text2d::new(label),
             TextFont::from_font_size(BELT_ITEM_LABEL_FONT_SIZE),

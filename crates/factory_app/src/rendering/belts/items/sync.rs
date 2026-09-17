@@ -81,6 +81,7 @@ pub(crate) fn sync_belt_item_rendering(params: BeltItemRenderParams) {
         if detail.is_changed() && cache.has_items() {
             pool_cached_belt_items(&mut cache, &mut pool, &mut sprites, &mut labels);
         }
+        pool.trim_excess(&mut commands);
         return;
     }
 
@@ -140,6 +141,8 @@ pub(crate) fn sync_belt_item_rendering(params: BeltItemRenderParams) {
         &mut sprites,
         &mut labels,
     );
+
+    pool.trim_excess(&mut commands);
 }
 
 fn collect_changed_belts(
@@ -487,7 +490,7 @@ fn sync_label_visibility(
             && deactivate(&mut marker.active)
         {
             *visibility = Visibility::Hidden;
-            pool.labels.push(entity);
+            pool.labels.push_back(entity);
         }
     }
 }
@@ -550,14 +553,14 @@ fn pool_cached_item(
         && deactivate(&mut marker.active)
     {
         *visibility = Visibility::Hidden;
-        pool.sprites.push(item.sprite);
+        pool.sprites.push_back(item.sprite);
     }
     if let Some(label) = item.label
         && let Ok((_, mut marker, _, _, mut visibility)) = labels.get_mut(label)
         && deactivate(&mut marker.active)
     {
         *visibility = Visibility::Hidden;
-        pool.labels.push(label);
+        pool.labels.push_back(label);
     }
 }
 
@@ -582,7 +585,7 @@ pub(super) fn spawn_or_reuse_belt_item_sprite(
         active: true,
     };
 
-    if let Some(entity) = pool.sprites.pop() {
+    if let Some(entity) = pool.take_sprite() {
         commands.entity(entity).insert((
             visual_assets.belt_item_sprite(item.color, Vec2::splat(BELT_ITEM_SPRITE_SIZE)),
             Transform::from_translation(item.translation),

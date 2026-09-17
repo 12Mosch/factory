@@ -1,16 +1,20 @@
 use super::*;
 use bevy::prelude::*;
 use factory_data::{BasePrototypeIds, EntityPrototypeId};
-use factory_sim::{CHUNK_SIZE, Direction, EntityId, Simulation};
+use factory_sim::{CHUNK_SIZE, ChunkCoord, Direction, EntityId, Simulation};
 
 use crate::constants::BELT_DIRECTION_HEAD_SIZE;
 use crate::rendering::belts::items::{
     collect_visible_belt_items_into, transport_item_render_state_with_ids,
 };
 use crate::rendering::belts::labels::transport_item_label_render_state;
-use crate::rendering::resources::{BeltItemRenderPool, RenderDetail, VisibleEntityIds};
+use crate::rendering::resources::{
+    BELT_ITEM_POOL_MAX_UNUSED, BELT_ITEM_POOL_SPARE_UNUSED, BELT_ITEM_POOL_TRIM_GRACE_SYNCS,
+    BELT_ITEM_POOL_TRIM_PER_SYNC, BeltItemRenderPool, RenderDetail, VisibleEntityIds,
+};
 use crate::resources::SimResource;
 use crate::utils::find_entity_prototype_id;
+use std::collections::HashSet;
 
 #[test]
 pub(crate) fn belt_item_render_state_changes_only_when_sim_position_changes() {
@@ -393,6 +397,143 @@ fn collect_visible_belt_items_into_clears_stale_items_when_visibility_empty() {
     assert!(items.is_empty());
 }
 
+#[test]
+fn belt_item_pool_trims_spike_but_reuses_reserve_and_regrows() {
+    const SPIKE_BELTS: usize = 600;
+    const STEADY_BELTS: usize = 2;
+    const ITEMS_PER_BELT: usize = 2;
+    const SPIKE_ITEMS: usize = SPIKE_BELTS * ITEMS_PER_BELT;
+    const STEADY_ITEMS: usize = STEADY_BELTS * ITEMS_PER_BELT;
+    const POOLED_SPIKE: usize = SPIKE_ITEMS - STEADY_ITEMS;
+    // SPIKE_ITEMS (1,200) exceeds the 512-entity spare reserve so trimming is
+    // observable, while fitting the 4,096 emergency threshold to exercise
+    // grace-gated gradual release.
+
+    let mut sim = Simulation::new_test_world(123);
+    for y in -4..=4 {
+        for x in -4..=4 {
+            sim.ensure_chunk_generated(ChunkCoord { x, y });
+        }
+    }
+    let belt_ids = place_belts_with_items(&mut sim, SPIKE_BELTS, ITEMS_PER_BELT);
+    let spike_ids: Vec<EntityId> = belt_ids.clone();
+    let steady_ids: Vec<EntityId> = belt_ids[..STEADY_BELTS].to_vec();
+
+    let visible_for = |ids: &[EntityId], revision: u64| VisibleEntityIds {
+        ids: ids.iter().copied().collect(),
+        membership_revision: revision,
+        visible_revision: 1,
+        entity_topology_revision: 1,
+        ..Default::default()
+    };
+
+    let mut app = App::new();
+    let spike_revision = 2;
+    app.insert_resource(SimResource::new(sim))
+        .insert_resource(visible_for(&spike_ids, spike_revision))
+        .init_resource::<RenderDetail>()
+        .init_resource::<BeltItemRenderPool>()
+        .add_systems(Update, sync_belt_item_rendering);
+
+    // Growth: a large visible population spawns pooled-reusable entities.
+    app.update();
+    assert_eq!(active_belt_item_sprite_count(&mut app), SPIKE_ITEMS);
+    assert_eq!(active_belt_item_label_count(&mut app), SPIKE_ITEMS);
+    assert_eq!(pooled_belt_item_counts(&app), (0, 0));
+    let spike_total = total_belt_item_counts(&mut app);
+    assert_eq!(spike_total, (SPIKE_ITEMS, SPIKE_ITEMS));
+
+    // Collapse to a small steady state. The spike fits the emergency
+    // threshold, so hysteresis keeps the whole pooled reserve for now: a
+    // one-frame dip must not despawn anything.
+    *app.world_mut().resource_mut::<VisibleEntityIds>() = visible_for(&steady_ids, 3);
+    app.update();
+    assert_eq!(active_belt_item_sprite_count(&mut app), STEADY_ITEMS);
+    assert_eq!(active_belt_item_label_count(&mut app), STEADY_ITEMS);
+    assert_eq!(pooled_belt_item_counts(&app), (POOLED_SPIKE, POOLED_SPIKE));
+    let pooled_sprite_ids: HashSet<Entity> = all_belt_item_sprite_entities(&mut app)
+        .into_iter()
+        .collect();
+    let pooled_label_ids: HashSet<Entity> =
+        all_belt_item_label_entities(&mut app).into_iter().collect();
+    assert_eq!(pooled_sprite_ids.len(), SPIKE_ITEMS);
+    assert_eq!(pooled_label_ids.len(), SPIKE_ITEMS);
+
+    // Reuse: immediate regrowth finds every pooled entity instead of spawning
+    // anything anew.
+    *app.world_mut().resource_mut::<VisibleEntityIds>() =
+        visible_for(&spike_ids, spike_revision + 1_000);
+    app.update();
+    assert_eq!(active_belt_item_sprite_count(&mut app), SPIKE_ITEMS);
+    assert_eq!(active_belt_item_label_count(&mut app), SPIKE_ITEMS);
+    let regrown_sprites: HashSet<Entity> = active_belt_item_sprite_entities(&mut app)
+        .into_iter()
+        .collect();
+    let regrown_labels: HashSet<Entity> = active_belt_item_label_entities(&mut app)
+        .into_iter()
+        .collect();
+    assert_eq!(regrown_sprites.len(), SPIKE_ITEMS);
+    assert!(
+        regrown_sprites.is_subset(&pooled_sprite_ids),
+        "immediate regrowth should reuse pooled sprites with zero new spawns"
+    );
+    assert!(
+        regrown_labels.is_subset(&pooled_label_ids),
+        "immediate regrowth should reuse pooled labels with zero new spawns"
+    );
+    assert_eq!(total_belt_item_counts(&mut app), spike_total);
+
+    // Return to steady state and let trimming converge. Idle frames with no
+    // visibility or item change must still release excess capacity once the
+    // grace period elapses. Frame count derives from the policy: grace syncs
+    // plus one budget per trim sync plus margin.
+    let steady_revision = spike_revision + 2_000;
+    *app.world_mut().resource_mut::<VisibleEntityIds>() = visible_for(&steady_ids, steady_revision);
+    app.update();
+    let settle_frames = BELT_ITEM_POOL_TRIM_GRACE_SYNCS as usize
+        + (POOLED_SPIKE - BELT_ITEM_POOL_SPARE_UNUSED).div_ceil(BELT_ITEM_POOL_TRIM_PER_SYNC)
+        + 5;
+    for _ in 0..settle_frames {
+        app.update();
+    }
+    assert_eq!(active_belt_item_sprite_count(&mut app), STEADY_ITEMS);
+    assert_eq!(active_belt_item_label_count(&mut app), STEADY_ITEMS);
+    assert_eq!(
+        pooled_belt_item_counts(&app),
+        (BELT_ITEM_POOL_SPARE_UNUSED, BELT_ITEM_POOL_SPARE_UNUSED)
+    );
+    // Trimming only touches unused entities: the steady-state items stay live.
+    assert_eq!(
+        total_belt_item_counts(&mut app),
+        (
+            STEADY_ITEMS + BELT_ITEM_POOL_SPARE_UNUSED,
+            STEADY_ITEMS + BELT_ITEM_POOL_SPARE_UNUSED
+        )
+    );
+    let retained_sprite_ids: HashSet<Entity> = app
+        .world()
+        .resource::<BeltItemRenderPool>()
+        .sprites
+        .iter()
+        .copied()
+        .collect();
+
+    // Subsequent growth reuses every retained entity and only spawns the rest.
+    *app.world_mut().resource_mut::<VisibleEntityIds>() =
+        visible_for(&spike_ids, steady_revision + 1);
+    app.update();
+    assert_eq!(active_belt_item_sprite_count(&mut app), SPIKE_ITEMS);
+    assert_eq!(active_belt_item_label_count(&mut app), SPIKE_ITEMS);
+    let regrown_again: HashSet<Entity> = active_belt_item_sprite_entities(&mut app)
+        .into_iter()
+        .collect();
+    assert!(
+        retained_sprite_ids.is_subset(&regrown_again),
+        "regrowth should reuse the whole retained reserve"
+    );
+    assert_eq!(total_belt_item_counts(&mut app), spike_total);
+}
+
 fn visible_entity_ids<const N: usize>(ids: [EntityId; N]) -> VisibleEntityIds {
     VisibleEntityIds {
         ids: ids.into_iter().collect(),
@@ -439,6 +580,132 @@ fn active_belt_item_label_state(app: &mut App) -> Option<(Entity, Vec3)> {
             (marker.active && *visibility == Visibility::Visible)
                 .then_some((entity, transform.translation))
         })
+}
+
+fn place_belts_with_items(
+    sim: &mut Simulation,
+    count: usize,
+    items_per_belt: usize,
+) -> Vec<EntityId> {
+    assert!(
+        items_per_belt <= 2,
+        "test helper inserts at most one item per lane"
+    );
+    let prototype_id = find_entity_prototype_id(sim.catalog(), "transport_belt");
+    let iron_ore = BasePrototypeIds::from_catalog(sim.catalog()).items.iron_ore;
+    let mut placed = Vec::with_capacity(count);
+    let mut chunks: Vec<ChunkCoord> = sim.world().chunks.keys().copied().collect();
+    chunks.sort_unstable();
+    for coord in chunks {
+        for local_y in 0..CHUNK_SIZE {
+            for local_x in 0..CHUNK_SIZE {
+                if placed.len() == count {
+                    return placed;
+                }
+                let (x, y) = coord.tile_at(local_x, local_y);
+                if factory_sim::placement::validate(
+                    sim,
+                    factory_sim::placement::EntityPlacementRequest {
+                        prototype_id,
+                        x,
+                        y,
+                        direction: Direction::East,
+                    },
+                )
+                .is_err()
+                {
+                    continue;
+                }
+                let belt_id = factory_sim::placement::place(
+                    sim,
+                    factory_sim::placement::EntityPlacementRequest {
+                        prototype_id,
+                        x,
+                        y,
+                        direction: Direction::East,
+                    },
+                )
+                .expect("validated belt should place");
+                for lane in 0..items_per_belt {
+                    sim.insert_item_onto_belt(belt_id, lane, iron_ore)
+                        .expect("empty belt lane should accept item");
+                }
+                placed.push(belt_id);
+            }
+        }
+    }
+    panic!("could only place {} of {count} belts", placed.len());
+}
+
+fn active_belt_item_sprite_count(app: &mut App) -> usize {
+    app.world_mut()
+        .query::<(&BeltItemSprite, &Visibility)>()
+        .iter(app.world())
+        .filter(|(marker, visibility)| marker.active && **visibility == Visibility::Visible)
+        .count()
+}
+
+fn active_belt_item_label_count(app: &mut App) -> usize {
+    app.world_mut()
+        .query::<(&BeltItemLabel, &Visibility)>()
+        .iter(app.world())
+        .filter(|(marker, visibility)| marker.active && **visibility == Visibility::Visible)
+        .count()
+}
+
+fn pooled_belt_item_counts(app: &App) -> (usize, usize) {
+    let pool = app.world().resource::<BeltItemRenderPool>();
+    (pool.sprites.len(), pool.labels.len())
+}
+
+fn active_belt_item_sprite_entities(app: &mut App) -> Vec<Entity> {
+    app.world_mut()
+        .query::<(Entity, &BeltItemSprite, &Visibility)>()
+        .iter(app.world())
+        .filter_map(|(entity, marker, visibility)| {
+            (marker.active && *visibility == Visibility::Visible).then_some(entity)
+        })
+        .collect()
+}
+
+fn active_belt_item_label_entities(app: &mut App) -> Vec<Entity> {
+    app.world_mut()
+        .query::<(Entity, &BeltItemLabel, &Visibility)>()
+        .iter(app.world())
+        .filter_map(|(entity, marker, visibility)| {
+            (marker.active && *visibility == Visibility::Visible).then_some(entity)
+        })
+        .collect()
+}
+
+fn all_belt_item_sprite_entities(app: &mut App) -> Vec<Entity> {
+    app.world_mut()
+        .query::<(Entity, &BeltItemSprite)>()
+        .iter(app.world())
+        .map(|(entity, _)| entity)
+        .collect()
+}
+
+fn all_belt_item_label_entities(app: &mut App) -> Vec<Entity> {
+    app.world_mut()
+        .query::<(Entity, &BeltItemLabel)>()
+        .iter(app.world())
+        .map(|(entity, _)| entity)
+        .collect()
+}
+
+fn total_belt_item_counts(app: &mut App) -> (usize, usize) {
+    let sprites = app
+        .world_mut()
+        .query::<&BeltItemSprite>()
+        .iter(app.world())
+        .count();
+    let labels = app
+        .world_mut()
+        .query::<&BeltItemLabel>()
+        .iter(app.world())
+        .count();
+    (sprites, labels)
 }
 
 fn first_placeable_tile(
