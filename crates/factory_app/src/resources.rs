@@ -8,6 +8,7 @@ use std::time::Duration;
 pub struct SimResource {
     inner: Option<Arc<RwLock<Simulation>>>,
     replacement_revision: u64,
+    active_snapshot_captures: Arc<AtomicU64>,
     snapshot_blocked_fixed_ticks: Arc<AtomicU64>,
 }
 
@@ -26,6 +27,7 @@ impl SimResource {
         Self {
             inner: None,
             replacement_revision: 0,
+            active_snapshot_captures: Arc::new(AtomicU64::new(0)),
             snapshot_blocked_fixed_ticks: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -35,6 +37,7 @@ impl SimResource {
         Self {
             inner: Some(Arc::new(RwLock::new(sim))),
             replacement_revision: 0,
+            active_snapshot_captures: Arc::new(AtomicU64::new(0)),
             snapshot_blocked_fixed_ticks: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -106,19 +109,23 @@ impl SimResource {
         SnapshotSource {
             simulation: self.clone_handle(),
             world_generation: self.replacement_revision,
+            active_captures: Arc::clone(&self.active_snapshot_captures),
             blocked_fixed_ticks: Arc::clone(&self.snapshot_blocked_fixed_ticks),
         }
     }
 
     pub(crate) fn note_snapshot_blocked_fixed_tick(&self) {
-        self.snapshot_blocked_fixed_ticks
-            .fetch_add(1, Ordering::Relaxed);
+        if self.active_snapshot_captures.load(Ordering::Acquire) > 0 {
+            self.snapshot_blocked_fixed_ticks
+                .fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
 pub(crate) struct SnapshotSource {
     pub(crate) simulation: Arc<RwLock<Simulation>>,
     pub(crate) world_generation: u64,
+    pub(crate) active_captures: Arc<AtomicU64>,
     pub(crate) blocked_fixed_ticks: Arc<AtomicU64>,
 }
 

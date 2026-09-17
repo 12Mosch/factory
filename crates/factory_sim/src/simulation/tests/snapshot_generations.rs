@@ -3,8 +3,9 @@ use super::support::*;
 use std::sync::{Arc, Barrier};
 
 /// Exercises mutations whose entity-state indexes occupy different 256-entry
-/// pages while a detached generation is being encoded. Moving the player to a
-/// different terrain chunk in the same interval covers spatial ownership too.
+/// pages while a worker retains a detached generation. Moving the player to a
+/// different terrain chunk before releasing the encoder covers spatial
+/// ownership deterministically, independent of thread scheduling.
 #[test]
 fn snapshot_bytes_ignore_cross_page_transfer_and_cross_chunk_movement() {
     let mut sim = Simulation::new_test_world(294);
@@ -61,7 +62,6 @@ fn snapshot_bytes_ignore_cross_page_transfer_and_cross_chunk_movement() {
         worker_barrier.wait();
         save_snapshot_to_bytes(&snapshot).unwrap()
     });
-    barrier.wait();
 
     crate::entity_transfer::entity_slot_to_player(&mut sim, source, 0).unwrap();
     crate::entity_transfer::player_slot_to_entity(&mut sim, destination, 0).unwrap();
@@ -71,6 +71,7 @@ fn snapshot_bytes_ignore_cross_page_transfer_and_cross_chunk_movement() {
     sim.teleport_player_to_tile(far_x, far_y);
     sim.tick();
     sim.validate_state().unwrap();
+    barrier.wait();
 
     let captured = load_from_bytes(&encoder.join().unwrap()).unwrap();
     assert_eq!(captured.tick_count(), captured_tick);

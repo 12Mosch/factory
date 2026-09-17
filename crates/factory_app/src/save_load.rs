@@ -11,7 +11,7 @@ pub use container::{
     BACKUP_ARTIFACT_MARKER, CONTAINER_MAGIC, CONTAINER_VERSION, MAX_METADATA_BYTES,
     METADATA_SCHEMA_VERSION, TEMP_ARTIFACT_MARKER, decode_container, encode_container,
 };
-pub use jobs::{MAX_RETAINED_SAVE_GENERATIONS, PendingSaveJobs};
+pub use jobs::PendingSaveJobs;
 pub(crate) use timestamp::local_datetime_from_unix_ms;
 pub use types::*;
 
