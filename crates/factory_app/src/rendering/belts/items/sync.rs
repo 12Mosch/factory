@@ -490,7 +490,7 @@ fn sync_label_visibility(
             && deactivate(&mut marker.active)
         {
             *visibility = Visibility::Hidden;
-            pool.labels.push(entity);
+            pool.labels.push_back(entity);
         }
     }
 }
@@ -553,14 +553,14 @@ fn pool_cached_item(
         && deactivate(&mut marker.active)
     {
         *visibility = Visibility::Hidden;
-        pool.sprites.push(item.sprite);
+        pool.sprites.push_back(item.sprite);
     }
     if let Some(label) = item.label
         && let Ok((_, mut marker, _, _, mut visibility)) = labels.get_mut(label)
         && deactivate(&mut marker.active)
     {
         *visibility = Visibility::Hidden;
-        pool.labels.push(label);
+        pool.labels.push_back(label);
     }
 }
 
