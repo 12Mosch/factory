@@ -296,11 +296,13 @@ struct BoundedBincodeReader<R> {
 }
 
 impl<R: Read> BoundedBincodeReader<R> {
-    fn check_collection(&self, length: usize) -> Result<(), bincode::Error> {
+    fn check_allocation(&self, length: usize) -> Result<(), bincode::Error> {
         if length as u64 > self.max_collection_entries {
             Err(Box::new(bincode::ErrorKind::Custom(
                 COLLECTION_LIMIT_ERROR.into(),
             )))
+        } else if length as u64 > self.remaining {
+            Err(Box::new(bincode::ErrorKind::SizeLimit))
         } else {
             Ok(())
         }
@@ -329,7 +331,7 @@ impl<'de, R: Read> bincode::BincodeRead<'de> for BoundedBincodeReader<R> {
     where
         V: serde::de::Visitor<'de>,
     {
-        self.check_collection(length)?;
+        self.check_allocation(length)?;
         let mut bytes = vec![0; length];
         self.read_exact(&mut bytes)?;
         let value = std::str::from_utf8(&bytes).map_err(bincode::ErrorKind::InvalidUtf8Encoding)?;
@@ -337,7 +339,7 @@ impl<'de, R: Read> bincode::BincodeRead<'de> for BoundedBincodeReader<R> {
     }
 
     fn get_byte_buffer(&mut self, length: usize) -> bincode::Result<Vec<u8>> {
-        self.check_collection(length)?;
+        self.check_allocation(length)?;
         let mut bytes = vec![0; length];
         self.read_exact(&mut bytes)?;
         Ok(bytes)
@@ -347,7 +349,7 @@ impl<'de, R: Read> bincode::BincodeRead<'de> for BoundedBincodeReader<R> {
     where
         V: serde::de::Visitor<'de>,
     {
-        self.check_collection(length)?;
+        self.check_allocation(length)?;
         let mut bytes = vec![0; length];
         self.read_exact(&mut bytes)?;
         visitor.visit_bytes(&bytes)
@@ -695,5 +697,15 @@ mod tests {
             crate::SaveLoadError::from(error),
             crate::SaveLoadError::TooLarge
         ));
+
+        let consumed = Rc::new(Cell::new(0));
+        let mut reader = BoundedBincodeReader {
+            inner: std::io::Cursor::new(Vec::<u8>::new()),
+            remaining: 3,
+            max_collection_entries: 100,
+            consumed,
+        };
+        let error = bincode::BincodeRead::get_byte_buffer(&mut reader, 4).unwrap_err();
+        assert!(matches!(*error, bincode::ErrorKind::SizeLimit));
     }
 }

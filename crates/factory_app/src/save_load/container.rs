@@ -222,7 +222,7 @@ fn load_simulation_from_reader(
     read_inspection_bytes(reader, &mut magic)?;
     if magic != CONTAINER_MAGIC {
         let mut raw = io::Cursor::new(magic).chain(reader);
-        return load_from_reader_with_limits(&mut raw, limits).map_err(ContainerError::Simulation);
+        return load_from_reader_with_limits(&mut raw, limits).map_err(map_simulation_error);
     }
 
     let mut prefix = [0; 8];
@@ -248,8 +248,19 @@ fn load_simulation_from_reader(
         max_encoded_bytes: maximum,
         ..limits
     };
-    load_from_reader_with_limits(&mut payload, simulation_limits)
-        .map_err(ContainerError::Simulation)
+    load_from_reader_with_limits(&mut payload, simulation_limits).map_err(map_simulation_error)
+}
+
+/// Keeps external reader failures distinct from malformed simulation bytes so
+/// recovery never replaces a primary that merely became temporarily unreadable.
+fn map_simulation_error(error: SaveLoadError) -> ContainerError {
+    match error {
+        SaveLoadError::TooLarge => ContainerError::TooLarge,
+        error => match error.into_io_error() {
+            Ok(error) => ContainerError::Io(error),
+            Err(error) => ContainerError::Simulation(error),
+        },
+    }
 }
 
 /// Recovery retains artifact bytes for exact duplicate comparisons, but never
@@ -276,47 +287,6 @@ fn check_version(version: u32) -> Result<(), ContainerError> {
     } else {
         Ok(())
     }
-}
-
-/// Bound actual reads, including files that grow after opening. Only the payload
-/// is retained; metadata and the prefix never share a full-file allocation.
-#[cfg(test)]
-fn read_payload(reader: &mut impl Read, limits: SaveLimits) -> Result<Vec<u8>, ContainerError> {
-    check_size(SAVE_HEADER_SIZE as u64, limits.max_simulation_bytes())?;
-    let mut magic = [0; 8];
-    read_inspection_bytes(reader, &mut magic)?;
-    let (payload, maximum) = if magic == CONTAINER_MAGIC {
-        let mut prefix = [0; 8];
-        read_inspection_bytes(reader, &mut prefix)?;
-        check_version(u32::from_le_bytes(
-            prefix[..4].try_into().expect("fixed range"),
-        ))?;
-        let metadata_len =
-            u32::from_le_bytes(prefix[4..].try_into().expect("fixed range")) as usize;
-        if metadata_len > limits.max_metadata_bytes {
-            return Err(ContainerError::MetadataTooLarge(metadata_len));
-        }
-        let overhead = PREFIX_SIZE as u64 + metadata_len as u64;
-        check_size(overhead, limits.max_encoded_bytes)?;
-        // Metadata is optional for loading, but its declared bytes must exist.
-        let copied = io::copy(&mut reader.take(metadata_len as u64), &mut io::sink())?;
-        if copied != metadata_len as u64 {
-            return Err(ContainerError::Truncated);
-        }
-        (
-            Vec::new(),
-            limits
-                .max_simulation_bytes()
-                .min(limits.max_encoded_bytes - overhead),
-        )
-    } else {
-        (magic.to_vec(), limits.max_simulation_bytes())
-    };
-    let payload = read_bounded_bytes(reader, payload, maximum)?;
-    if payload.len() < SAVE_HEADER_SIZE {
-        return Err(ContainerError::Truncated);
-    }
-    Ok(payload)
 }
 
 fn read_bounded_bytes(
@@ -403,7 +373,7 @@ fn write_save_snapshot_locked(
         let encode_start = Instant::now();
         let simulation_bytes = {
             let mut payload = LimitedWriter::new(writer, payload_maximum);
-            save_snapshot_to_writer(snapshot, &mut payload).map_err(ContainerError::Simulation)?;
+            save_snapshot_to_writer(snapshot, &mut payload).map_err(map_simulation_error)?;
             payload.written
         };
         Ok(StreamWriteMetrics {
@@ -979,6 +949,24 @@ mod tests {
         }
     }
 
+    struct FailAfterReader {
+        bytes: io::Cursor<Vec<u8>>,
+        fail_at: u64,
+        kind: io::ErrorKind,
+    }
+
+    impl Read for FailAfterReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let position = self.bytes.position();
+            if position >= self.fail_at {
+                return Err(io::Error::from(self.kind));
+            }
+            let count = usize::try_from((self.fail_at - position).min(buffer.len() as u64))
+                .expect("read length is bounded by the destination buffer");
+            self.bytes.read(&mut buffer[..count])
+        }
+    }
+
     fn metadata(name: &str) -> SaveMetadata {
         fallback_metadata(SaveId::new("test"), SaveKind::Named, name.into(), 42)
     }
@@ -1056,6 +1044,26 @@ mod tests {
         let loaded = load_simulation(&path).unwrap();
         assert_eq!(loaded.state_hash(), simulation.state_hash());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn payload_io_failure_remains_inaccessible_after_headers_succeed() {
+        let simulation = Simulation::new_test_world(79);
+        let payload = save_to_bytes(&simulation).unwrap();
+        let bytes = encode_container(&metadata("I/O Failure"), &payload).unwrap();
+        let fail_at = container_payload_offset(&bytes).unwrap() + SAVE_HEADER_SIZE + 16;
+        assert!(fail_at < bytes.len());
+        let mut reader = FailAfterReader {
+            bytes: io::Cursor::new(bytes),
+            fail_at: fail_at as u64,
+            kind: io::ErrorKind::PermissionDenied,
+        };
+
+        assert!(matches!(
+            load_simulation_from_reader(&mut reader, SaveLimits::default()),
+            Err(ContainerError::Io(error))
+                if error.kind() == io::ErrorKind::PermissionDenied
+        ));
     }
 
     #[test]
@@ -1139,10 +1147,10 @@ mod tests {
         let path = root.join("manual-boundary.factsim");
         with_save_artifact_lock(|| {
             write_save_bytes_locked(&path, &bytes, limits).unwrap();
-            let decoded = read_payload(&mut fs::File::open(&path).unwrap(), limits).unwrap();
-            assert_eq!(decoded, payload);
             assert_eq!(
-                load_from_bytes(&decoded).unwrap().state_hash(),
+                load_simulation_from_reader(&mut fs::File::open(&path).unwrap(), limits)
+                    .unwrap()
+                    .state_hash(),
                 sim.state_hash()
             );
             let mut oversized = bytes.clone();
@@ -1155,7 +1163,7 @@ mod tests {
             assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
             let mut reader = io::Cursor::new(&oversized);
             assert!(matches!(
-                read_payload(&mut reader, limits),
+                load_simulation_from_reader(&mut reader, limits),
                 Err(ContainerError::TooLarge)
             ));
             assert_eq!(reader.position(), bytes.len() as u64 + 1);
@@ -1166,13 +1174,15 @@ mod tests {
             ..limits
         };
         assert_eq!(
-            read_payload(&mut io::Cursor::new(&payload), raw_limits).unwrap(),
-            payload
+            load_simulation_from_reader(&mut io::Cursor::new(&payload), raw_limits)
+                .unwrap()
+                .state_hash(),
+            sim.state_hash()
         );
         let mut raw = payload;
         raw.push(0);
         assert!(matches!(
-            read_payload(&mut io::Cursor::new(raw), raw_limits),
+            load_simulation_from_reader(&mut io::Cursor::new(raw), raw_limits),
             Err(ContainerError::TooLarge)
         ));
     }
@@ -1221,17 +1231,17 @@ mod tests {
         bytes.extend_from_slice(&CONTAINER_VERSION.to_le_bytes());
         bytes.extend_from_slice(&u32::MAX.to_le_bytes());
         assert!(matches!(
-            read_payload(&mut io::Cursor::new(&bytes), SaveLimits::default()),
+            load_simulation_from_reader(&mut io::Cursor::new(&bytes), SaveLimits::default()),
             Err(ContainerError::MetadataTooLarge(_))
         ));
         bytes[12..16].copy_from_slice(&10_u32.to_le_bytes());
         assert!(matches!(
-            read_payload(&mut io::Cursor::new(&bytes), SaveLimits::default()),
+            load_simulation_from_reader(&mut io::Cursor::new(&bytes), SaveLimits::default()),
             Err(ContainerError::Truncated)
         ));
         bytes[8..12].copy_from_slice(&(CONTAINER_VERSION + 1).to_le_bytes());
         assert!(matches!(
-            read_payload(&mut io::Cursor::new(&bytes), SaveLimits::default()),
+            load_simulation_from_reader(&mut io::Cursor::new(&bytes), SaveLimits::default()),
             Err(ContainerError::UnsupportedVersion(_))
         ));
         assert!(matches!(
@@ -1239,7 +1249,7 @@ mod tests {
             Err(ContainerError::UnsupportedVersion(_))
         ));
         assert!(matches!(
-            read_payload(
+            load_simulation_from_reader(
                 &mut FailingReader(io::ErrorKind::PermissionDenied),
                 SaveLimits::default()
             ),

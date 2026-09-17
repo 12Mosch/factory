@@ -574,6 +574,24 @@ fn reject_trailing_or_oversized(
     }
 }
 
+impl SaveLoadError {
+    /// Extracts an underlying reader/writer failure while keeping an
+    /// unexpected EOF classified as malformed or truncated save data.
+    pub fn into_io_error(self) -> Result<std::io::Error, Self> {
+        match self {
+            Self::Codec(codec) => match *codec {
+                bincode::ErrorKind::Io(error)
+                    if error.kind() != std::io::ErrorKind::UnexpectedEof =>
+                {
+                    Ok(error)
+                }
+                kind => Err(Self::Codec(Box::new(kind))),
+            },
+            error => Err(error),
+        }
+    }
+}
+
 fn finish_load(
     header: SaveHeader,
     snapshot: SimulationSnapshotOwned,
