@@ -1,7 +1,7 @@
 use super::{SaveId, SaveKind, SaveMetadata};
 use factory_sim::{
     SAVE_HEADER_SIZE, SaveLimits, SaveLoadError, Simulation, SimulationSaveSnapshot,
-    load_from_reader_with_limits, save_snapshot_to_writer,
+    load_from_reader_with_limits, save_snapshot_records_to_writer,
 };
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -383,7 +383,8 @@ fn write_save_snapshot_locked(
         let encode_start = Instant::now();
         let simulation_bytes = {
             let mut payload = LimitedWriter::new(writer, payload_maximum);
-            save_snapshot_to_writer(snapshot, &mut payload).map_err(map_simulation_error)?;
+            save_snapshot_records_to_writer(snapshot, &mut payload)
+                .map_err(map_simulation_error)?;
             payload.written
         };
         Ok(StreamWriteMetrics {
@@ -947,7 +948,7 @@ pub(crate) fn fallback_metadata(
 mod tests {
     use super::*;
     use factory_sim::{
-        Simulation, load_from_bytes, save_snapshot_to_bytes, save_to_bytes,
+        RECORD_MAGIC, Simulation, load_from_bytes, save_snapshot_records_to_bytes, save_to_bytes,
         try_capture_save_snapshot,
     };
 
@@ -1037,7 +1038,7 @@ mod tests {
             simulation.tick();
         }
         let snapshot = try_capture_save_snapshot(&simulation, 3).unwrap();
-        let expected_payload = save_snapshot_to_bytes(&snapshot).unwrap();
+        let expected_payload = save_snapshot_records_to_bytes(&snapshot).unwrap();
         let root = std::env::temp_dir().join(format!(
             "factory-container-stream-{}-{}",
             std::process::id(),
@@ -1051,8 +1052,39 @@ mod tests {
         let (decoded_metadata, payload) = decode_container(&bytes).unwrap();
         assert_eq!(decoded_metadata, metadata);
         assert_eq!(payload, expected_payload);
+        // Production saves now carry the indexed record container.
+        assert_eq!(&payload[..8], &RECORD_MAGIC);
         let loaded = load_simulation(&path).unwrap();
         assert_eq!(loaded.state_hash(), simulation.state_hash());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copied_container_is_a_self_contained_portable_export() {
+        let mut simulation = Simulation::new_test_world(80);
+        for _ in 0..12 {
+            simulation.tick();
+        }
+        let snapshot = try_capture_save_snapshot(&simulation, 5).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "factory-container-copy-{}-{}",
+            std::process::id(),
+            SAVE_ARTIFACT_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let path = root.join("manual-copy.factsim");
+        let exported = root.join("exported-copy.factsim");
+        let metrics = write_save_snapshot(&path, &metadata("Copied"), &snapshot).unwrap();
+        assert_eq!(
+            metrics.simulation_bytes,
+            save_snapshot_records_to_bytes(&snapshot).unwrap().len()
+        );
+        // Export is a plain file copy across the transport/commit boundary.
+        fs::copy(&path, &exported).unwrap();
+        let original = load_simulation(&path).unwrap();
+        let duplicate = load_simulation(&exported).unwrap();
+        assert_eq!(duplicate.state_hash(), simulation.state_hash());
+        assert_eq!(duplicate.tick_count(), original.tick_count());
+        assert_eq!(duplicate.state_hash(), original.state_hash());
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -30,11 +30,11 @@
 use super::robot_ops::RobotLogisticWorkState;
 use super::save::{
     PROTOTYPE_FORMAT_VERSION, SAVE_VERSION, SaveLoadError, SimulationSaveSnapshot,
-    SimulationSnapshotOwned, try_capture_save_snapshot_with_limits,
+    SimulationSnapshotOwned, capture_save_snapshot,
 };
 use super::*;
 use bincode::Options;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 
 /// Magic bytes at the start of a record-container save.
@@ -53,6 +53,12 @@ const MAX_RECORD_KEY_BYTES: usize = 96;
 const FLAG_REQUIRED: u32 = 1;
 /// All manifest flag bits defined by container v1.
 const KNOWN_FLAGS: u32 = FLAG_REQUIRED;
+/// Structural bound on records per generation: 14 globals plus one record
+/// per world chunk. Supported worlds stay resident below 4,096 chunks and
+/// reach the format ceiling near 8,800, so this leaves wide headroom while
+/// keeping manifest, entry, and decode-slot vectors small even for hostile
+/// inputs whose decoded payloads still fit the byte budgets.
+pub const MAX_RECORD_COUNT: u32 = 32_768;
 
 const KEY_CORE: &str = "core";
 const KEY_PROTOTYPES: &str = "prototypes";
@@ -145,83 +151,57 @@ pub struct RecordIndex {
     pub records: Vec<RecordSummary>,
 }
 
-// Record group payloads. Each mirrors a slice of the ordered durable-state
-// registry in `save.rs`; together they carry exactly the current snapshot.
+// Record group payloads. Each group mirrors a slice of the ordered
+// durable-state registry in `save.rs`; together they carry exactly the
+// current snapshot. Groups encode as bincode tuples of borrowed fields in
+// the documented order, so encoding never clones snapshot subsystems; the
+// decoder destructures the same tuples. Field order here is the wire order.
 
-#[derive(serde::Serialize, serde::Deserialize)]
-struct CoreRecord {
-    tick: u64,
-    world_seed: u64,
-    day_night_cycle: Option<DayNightCycleState>,
-    config: SimulationConfig,
-    entity_topology_revision: u64,
-    world_chunk_revision: u64,
-    world_walkability_revision: u64,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct StatisticsRecord {
-    items: ItemStatistics,
-    fluids: FluidStatistics,
-    power: PowerStatistics,
-    rockets_launched: u64,
-    player_deaths: u64,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct PlayerRecord {
-    player: PlayerState,
-    equipment: PlayerEquipmentState,
-    weapon: PlayerWeaponState,
-    delayed_combat: DelayedCombatState,
-    inventory: Inventory,
-    corpses: BTreeMap<u64, PlayerCorpse>,
-    manual_mining: Option<ManualMiningProgress>,
-    crafting_queue: CraftingQueue,
-    onboarding: OnboardingProgress,
-    research: ResearchState,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct PowerRecord {
-    summary: PowerSummary,
-    networks: Vec<PowerNetworkSnapshot>,
-    entity_statuses: DenseEntityMap<EntityPowerStatus>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct FluidsRecord {
-    networks: Vec<FluidNetworkSnapshot>,
-    topology_dirty: bool,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct HeatRecord {
-    networks: Vec<HeatNetworkSnapshot>,
-    topology_dirty: bool,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct RobotsRecord {
-    networks: Vec<RobotNetworkSnapshot>,
-    logistic_work: RobotLogisticWorkState,
-    flights: RobotFlightSubsystem,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct TrainsRecord {
-    rolling_stock: RollingStockSubsystem,
-    pending_searches: BTreeMap<TrainId, rolling_stock_ops::PendingTrainRouteSearch>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct EnvironmentRecord {
-    pollution: PollutionState,
-    enemies: EnemySubsystem,
-    transport: TransportLaneCache,
-    enemy_navigation: enemy::EnemyNavigation,
-    attack_targets: enemy::AttackTargetCache,
-}
+type CoreTuple = (
+    u64,
+    u64,
+    Option<DayNightCycleState>,
+    SimulationConfig,
+    u64,
+    u64,
+    u64,
+);
+type StatisticsTuple = (ItemStatistics, FluidStatistics, PowerStatistics, u64, u64);
+type PlayerTuple = (
+    PlayerState,
+    PlayerEquipmentState,
+    PlayerWeaponState,
+    DelayedCombatState,
+    Inventory,
+    BTreeMap<u64, PlayerCorpse>,
+    Option<ManualMiningProgress>,
+    CraftingQueue,
+    OnboardingProgress,
+    ResearchState,
+);
+type PowerTuple = (
+    PowerSummary,
+    Vec<PowerNetworkSnapshot>,
+    DenseEntityMap<EntityPowerStatus>,
+);
+type FluidsTuple = (Vec<FluidNetworkSnapshot>, bool);
+type HeatTuple = (Vec<HeatNetworkSnapshot>, bool);
+type RobotsTuple = (
+    Vec<RobotNetworkSnapshot>,
+    RobotLogisticWorkState,
+    RobotFlightSubsystem,
+);
+type TrainsTuple = (
+    RollingStockSubsystem,
+    BTreeMap<TrainId, rolling_stock_ops::PendingTrainRouteSearch>,
+);
+type EnvironmentTuple = (
+    PollutionState,
+    EnemySubsystem,
+    TransportLaneCache,
+    enemy::EnemyNavigation,
+    enemy::AttackTargetCache,
+);
 
 fn chunk_key(coord: ChunkCoord) -> String {
     format!("chunk/{}/{}", coord.x, coord.y)
@@ -324,6 +304,9 @@ fn validate_header(header: &RecordHeader, limits: crate::SaveLimits) -> Result<(
         });
     }
     if u64::from(header.record_count) > limits.max_collection_entries {
+        return Err(SaveLoadError::TooLarge);
+    }
+    if header.record_count > MAX_RECORD_COUNT {
         return Err(SaveLoadError::TooLarge);
     }
     if u64::from(header.index_len) > limits.max_encoded_bytes {
@@ -435,23 +418,25 @@ fn parse_entries(
     Ok(entries)
 }
 
-/// Enforces stable keys: no duplicates and byte-wise deterministic ordering.
+/// Enforces stable keys with one linear pass: duplicates and
+/// out-of-order keys are both rejected by the adjacent comparison, without
+/// cloning every key into a set on hostile or large manifests.
 fn validate_index_order(entries: &[ManifestEntry]) -> Result<(), SaveLoadError> {
-    let mut seen = BTreeSet::new();
-    for entry in entries {
-        if !seen.insert(entry.key.clone()) {
-            return Err(record_error(format!(
-                "record index contains duplicate key {:?}",
-                entry.key
-            )));
-        }
-    }
     for pair in entries.windows(2) {
-        if pair[0].key >= pair[1].key {
-            return Err(record_error(format!(
-                "record index is not in deterministic order: {:?} precedes {:?}",
-                pair[0].key, pair[1].key
-            )));
+        match pair[0].key.cmp(&pair[1].key) {
+            std::cmp::Ordering::Equal => {
+                return Err(record_error(format!(
+                    "record index contains duplicate key {:?}",
+                    pair[0].key
+                )));
+            }
+            std::cmp::Ordering::Greater => {
+                return Err(record_error(format!(
+                    "record index is not in deterministic order: {:?} precedes {:?}",
+                    pair[0].key, pair[1].key
+                )));
+            }
+            std::cmp::Ordering::Less => {}
         }
     }
     Ok(())
@@ -483,8 +468,11 @@ fn validate_index_layout(
     if decoded_total > limits.max_decoded_bytes {
         return Err(SaveLoadError::TooLarge);
     }
+    // The complete artifact is bounded by the encoded budget. `max_record_bytes`
+    // deliberately does not apply here: it bounds one record so a partitioned
+    // world larger than any single record stays valid.
     let total = expected;
-    if total > limits.max_simulation_bytes() {
+    if total > limits.max_encoded_bytes {
         return Err(SaveLoadError::TooLarge);
     }
     Ok(total)
@@ -522,106 +510,107 @@ fn checksum(bytes: &[u8]) -> [u8; 32] {
     *blake3::hash(bytes).as_bytes()
 }
 
-/// Collects every record payload for one snapshot generation.
-///
-/// Chunks become one record per world chunk; all other durable state keeps
-/// explicit global ownership. The returned list is unsorted; the writer sorts
-/// it into deterministic manifest order.
-fn collect_records(
-    state: &SimulationSnapshotOwned,
-    limits: crate::SaveLimits,
-) -> Result<Vec<(String, Vec<u8>)>, SaveLoadError> {
-    let mut records = Vec::new();
-    let mut push = |key: String, payload: Vec<u8>| {
-        validate_key_bytes(&key)?;
-        records.push((key, payload));
-        Ok::<(), SaveLoadError>(())
-    };
+/// Lists every record key for one snapshot generation: the 14 global keys
+/// plus one key per world chunk. Chunks become one record per world chunk;
+/// all other durable state keeps explicit global ownership.
+fn all_group_keys(state: &SimulationSnapshotOwned) -> Vec<String> {
+    let mut keys = Vec::with_capacity(REQUIRED_GLOBAL_KEYS.len() + state.chunks.len());
+    keys.extend(REQUIRED_GLOBAL_KEYS.iter().map(|key| key.to_string()));
+    keys.extend(state.chunks.keys().map(|coord| chunk_key(*coord)));
+    keys
+}
 
-    let core = CoreRecord {
-        tick: state.tick,
-        world_seed: state.world_seed,
-        day_night_cycle: state.day_night_cycle,
-        config: state.config,
-        entity_topology_revision: state.entity_topology_revision,
-        world_chunk_revision: state.world_chunk_revision,
-        world_walkability_revision: state.world_walkability_revision,
-    };
-    push(KEY_CORE.into(), encode_group(&core, limits)?)?;
-    push(
-        KEY_PROTOTYPES.into(),
-        encode_group(&state.prototypes, limits)?,
-    )?;
-    push(KEY_CHART.into(), encode_group(&state.chart, limits)?)?;
-    push(
-        KEY_CHUNK_QUEUE.into(),
-        encode_group(&state.chunk_generation_queue, limits)?,
-    )?;
-    let statistics = StatisticsRecord {
-        items: state.item_statistics.clone(),
-        fluids: state.fluid_statistics.clone(),
-        power: state.power_statistics.clone(),
-        rockets_launched: state.rockets_launched,
-        player_deaths: state.player_deaths,
-    };
-    push(KEY_STATISTICS.into(), encode_group(&statistics, limits)?)?;
-    push(KEY_ENTITIES.into(), encode_group(&state.entities, limits)?)?;
-    push(
-        KEY_CONSTRUCTION.into(),
-        encode_group(&state.construction, limits)?,
-    )?;
-    let player = PlayerRecord {
-        player: state.player,
-        equipment: state.player_equipment.clone(),
-        weapon: state.player_weapon,
-        delayed_combat: state.delayed_combat.clone(),
-        inventory: state.player_inventory.clone(),
-        corpses: state.corpses.clone(),
-        manual_mining: state.manual_mining_progress,
-        crafting_queue: state.crafting_queue.clone(),
-        onboarding: state.onboarding_progress,
-        research: state.research.clone(),
-    };
-    push(KEY_PLAYER.into(), encode_group(&player, limits)?)?;
-    let power = PowerRecord {
-        summary: state.power_summary,
-        networks: state.power_networks.clone(),
-        entity_statuses: state.entity_power_statuses.clone(),
-    };
-    push(KEY_POWER.into(), encode_group(&power, limits)?)?;
-    let fluids = FluidsRecord {
-        networks: state.fluid_networks.clone(),
-        topology_dirty: state.fluid_topology_dirty,
-    };
-    push(KEY_FLUIDS.into(), encode_group(&fluids, limits)?)?;
-    let heat = HeatRecord {
-        networks: state.heat_networks.clone(),
-        topology_dirty: state.heat_topology_dirty,
-    };
-    push(KEY_HEAT.into(), encode_group(&heat, limits)?)?;
-    let robots = RobotsRecord {
-        networks: state.robot_networks.clone(),
-        logistic_work: state.robot_logistic_work.clone(),
-        flights: state.robot_flights.clone(),
-    };
-    push(KEY_ROBOTS.into(), encode_group(&robots, limits)?)?;
-    let trains = TrainsRecord {
-        rolling_stock: state.rolling_stock.clone(),
-        pending_searches: state.pending_train_route_searches.clone(),
-    };
-    push(KEY_TRAINS.into(), encode_group(&trains, limits)?)?;
-    let environment = EnvironmentRecord {
-        pollution: state.pollution.clone(),
-        enemies: state.enemies.clone(),
-        transport: state.transport.clone(),
-        enemy_navigation: state.enemy_navigation.clone(),
-        attack_targets: state.attack_targets.clone(),
-    };
-    push(KEY_ENVIRONMENT.into(), encode_group(&environment, limits)?)?;
-    for (coord, chunk) in &state.chunks {
-        push(chunk_key(*coord), encode_group(chunk, limits)?)?;
+/// Encodes one record payload directly from borrowed snapshot state.
+///
+/// Tuples serialize field-by-field in declaration order, matching the tuple
+/// aliases above, so no snapshot subsystem is cloned to encode.
+fn encode_group_by_key(
+    state: &SimulationSnapshotOwned,
+    key: &str,
+    limits: crate::SaveLimits,
+) -> Result<Vec<u8>, SaveLoadError> {
+    match key {
+        KEY_CORE => encode_group(
+            &(
+                state.tick,
+                state.world_seed,
+                &state.day_night_cycle,
+                &state.config,
+                state.entity_topology_revision,
+                state.world_chunk_revision,
+                state.world_walkability_revision,
+            ),
+            limits,
+        ),
+        KEY_PROTOTYPES => encode_group(&state.prototypes, limits),
+        KEY_CHART => encode_group(&state.chart, limits),
+        KEY_CHUNK_QUEUE => encode_group(&state.chunk_generation_queue, limits),
+        KEY_STATISTICS => encode_group(
+            &(
+                &state.item_statistics,
+                &state.fluid_statistics,
+                &state.power_statistics,
+                state.rockets_launched,
+                state.player_deaths,
+            ),
+            limits,
+        ),
+        KEY_ENTITIES => encode_group(&state.entities, limits),
+        KEY_CONSTRUCTION => encode_group(&state.construction, limits),
+        KEY_PLAYER => encode_group(
+            &(
+                &state.player,
+                &state.player_equipment,
+                &state.player_weapon,
+                &state.delayed_combat,
+                &state.player_inventory,
+                &state.corpses,
+                &state.manual_mining_progress,
+                &state.crafting_queue,
+                &state.onboarding_progress,
+                &state.research,
+            ),
+            limits,
+        ),
+        KEY_POWER => encode_group(
+            &(
+                &state.power_summary,
+                &state.power_networks,
+                &state.entity_power_statuses,
+            ),
+            limits,
+        ),
+        KEY_FLUIDS => encode_group(&(&state.fluid_networks, state.fluid_topology_dirty), limits),
+        KEY_HEAT => encode_group(&(&state.heat_networks, state.heat_topology_dirty), limits),
+        KEY_ROBOTS => encode_group(
+            &(
+                &state.robot_networks,
+                &state.robot_logistic_work,
+                &state.robot_flights,
+            ),
+            limits,
+        ),
+        KEY_TRAINS => encode_group(
+            &(&state.rolling_stock, &state.pending_train_route_searches),
+            limits,
+        ),
+        KEY_ENVIRONMENT => encode_group(
+            &(
+                &state.pollution,
+                &state.enemies,
+                &state.transport,
+                &state.enemy_navigation,
+                &state.attack_targets,
+            ),
+            limits,
+        ),
+        _ => match parse_chunk_key(key).and_then(|coord| state.chunks.get(&coord)) {
+            Some(chunk) => encode_group(chunk, limits),
+            None => Err(record_error(format!(
+                "record encoder has no payload for key {key:?}"
+            ))),
+        },
     }
-    Ok(records)
 }
 
 /// Serializes a captured immutable snapshot as an indexed record container.
@@ -633,6 +622,15 @@ pub fn save_snapshot_records_to_writer(
 }
 
 /// Serializes a captured immutable snapshot with explicit limits.
+///
+/// The writer runs in two passes so independent records are actually
+/// streamed: the first pass encodes each group only to learn its length and
+/// checksum (payloads are dropped immediately), and the second pass
+/// re-encodes each group straight into the writer. Encoding is a pure
+/// function of the immutable snapshot, so the second pass verifies every
+/// length and checksum before writing; a mismatch aborts instead of tearing
+/// the file. Peak encoding memory is one record payload plus the manifest,
+/// at the cost of encoding twice.
 pub fn save_snapshot_records_to_writer_with_limits(
     snapshot: &SimulationSaveSnapshot,
     writer: &mut impl Write,
@@ -640,72 +638,93 @@ pub fn save_snapshot_records_to_writer_with_limits(
 ) -> Result<(), SaveLoadError> {
     let state = snapshot.snapshot_state();
     let prototype_hash_value = prototype_hash(&state.prototypes);
-    let mut records = collect_records(state, limits)?;
-    records.sort_by(|left, right| left.0.cmp(&right.0));
+    let keys = all_group_keys(state);
+    if keys.len() > MAX_RECORD_COUNT as usize
+        || u64::try_from(keys.len()).unwrap_or(u64::MAX) > limits.max_collection_entries
+    {
+        return Err(SaveLoadError::TooLarge);
+    }
 
-    let record_count = u32::try_from(records.len())
-        .map_err(|_| SaveLoadError::TooLarge)
-        .and_then(|count| {
-            if u64::from(count) > limits.max_collection_entries {
-                Err(SaveLoadError::TooLarge)
-            } else {
-                Ok(count)
-            }
-        })?;
-
-    // Manifest sizes are bounded before any byte is written so an oversized
-    // world fails without leaving a plausible partial save behind.
-    let mut entries = Vec::with_capacity(records.len());
-    for (key, payload) in &records {
+    // Pass 1: lengths and checksums only. Each payload is dropped before the
+    // next group encodes, so no two record payloads coexist.
+    let mut sizes = Vec::with_capacity(keys.len());
+    for key in &keys {
+        let payload = encode_group_by_key(state, key, limits)?;
         let encoded_len = payload.len() as u64;
         if encoded_len > limits.max_record_bytes || encoded_len > limits.max_decoded_bytes {
             return Err(SaveLoadError::TooLarge);
         }
-        // Identity codec: decoded length equals encoded length.
-        entries.push(ManifestEntry {
-            key: key.clone(),
-            schema_version: RECORD_SCHEMA_VERSION,
-            codec_id: RECORD_CODEC_IDENTITY,
-            required: true,
-            offset: 0,
-            encoded_len,
-            decoded_len: encoded_len,
-            checksum: checksum(payload),
-        });
+        sizes.push((encoded_len, checksum(&payload)));
     }
-    let mut manifest_bytes = Vec::new();
-    for entry in &entries {
-        encode_entry(entry, &mut manifest_bytes);
+
+    // Deterministic manifest order.
+    let mut order: Vec<usize> = (0..keys.len()).collect();
+    order.sort_by(|&left, &right| keys[left].cmp(&keys[right]));
+    let record_count = u32::try_from(keys.len()).map_err(|_| SaveLoadError::TooLarge)?;
+
+    // Manifest sizes are bounded before any byte is written so an oversized
+    // world fails without leaving a plausible partial save behind.
+    // Aggregate decoded bytes are bounded here; entry framing sizes the
+    // manifest from keys alone below.
+    let mut decoded_total = 0u64;
+    for (encoded_len, _) in &sizes {
+        decoded_total = decoded_total
+            .checked_add(*encoded_len)
+            .ok_or(SaveLoadError::TooLarge)?;
     }
-    let index_len = u32::try_from(manifest_bytes.len()).map_err(|_| SaveLoadError::TooLarge)?;
+    if decoded_total > limits.max_decoded_bytes {
+        return Err(SaveLoadError::TooLarge);
+    }
+    let mut entries = Vec::with_capacity(keys.len());
+    // Size the manifest from keys alone.
+    let mut sizing = Vec::new();
+    for &index in &order {
+        let (encoded_len, digest) = sizes[index];
+        encode_entry(
+            &ManifestEntry {
+                key: keys[index].clone(),
+                schema_version: RECORD_SCHEMA_VERSION,
+                codec_id: RECORD_CODEC_IDENTITY,
+                required: true,
+                offset: 0,
+                encoded_len,
+                // Identity codec: decoded length equals encoded length.
+                decoded_len: encoded_len,
+                checksum: digest,
+            },
+            &mut sizing,
+        );
+    }
+    let index_len = u32::try_from(sizing.len()).map_err(|_| SaveLoadError::TooLarge)?;
     if u64::from(index_len) > limits.max_encoded_bytes {
         return Err(SaveLoadError::TooLarge);
     }
     let data_start = (RECORD_HEADER_SIZE as u64)
         .checked_add(u64::from(index_len))
         .ok_or(SaveLoadError::TooLarge)?;
-    let mut expected = data_start;
-    let mut decoded_total = 0u64;
-    for entry in &mut entries {
-        entry.offset = expected;
-        expected = expected
-            .checked_add(entry.encoded_len)
-            .ok_or(SaveLoadError::TooLarge)?;
-        decoded_total = decoded_total
-            .checked_add(entry.decoded_len)
+    let mut cursor = data_start;
+    for &index in &order {
+        let (encoded_len, digest) = sizes[index];
+        entries.push(ManifestEntry {
+            key: keys[index].clone(),
+            schema_version: RECORD_SCHEMA_VERSION,
+            codec_id: RECORD_CODEC_IDENTITY,
+            required: true,
+            offset: cursor,
+            encoded_len,
+            decoded_len: encoded_len,
+            checksum: digest,
+        });
+        cursor = cursor
+            .checked_add(encoded_len)
             .ok_or(SaveLoadError::TooLarge)?;
     }
-    if decoded_total > limits.max_decoded_bytes {
-        return Err(SaveLoadError::TooLarge);
-    }
-    // Re-encode the manifest now that offsets are assigned.
-    manifest_bytes.clear();
+    let mut manifest_bytes = Vec::with_capacity(sizing.len());
     for entry in &entries {
         encode_entry(entry, &mut manifest_bytes);
     }
     debug_assert_eq!(manifest_bytes.len(), index_len as usize);
-    let total = expected;
-    if total > limits.max_simulation_bytes() {
+    if cursor > limits.max_encoded_bytes {
         return Err(SaveLoadError::TooLarge);
     }
 
@@ -724,9 +743,18 @@ pub fn save_snapshot_records_to_writer_with_limits(
         .write_all(&encode_header(&header))
         .map_err(io_save_error)?;
     writer.write_all(&manifest_bytes).map_err(io_save_error)?;
-    for ((_, payload), entry) in records.iter().zip(entries.iter()) {
-        debug_assert_eq!(payload.len() as u64, entry.encoded_len);
-        writer.write_all(payload).map_err(io_save_error)?;
+
+    // Pass 2: stream each record. Lengths and checksums are re-verified
+    // against the manifest so a nondeterministic encoder cannot tear the file.
+    for entry in &entries {
+        let payload = encode_group_by_key(state, &entry.key, limits)?;
+        if payload.len() as u64 != entry.encoded_len || checksum(&payload) != entry.checksum {
+            return Err(record_error(format!(
+                "record {:?} re-encoded differently between passes",
+                entry.key
+            )));
+        }
+        writer.write_all(&payload).map_err(io_save_error)?;
     }
     Ok(())
 }
@@ -757,12 +785,23 @@ pub fn save_records_to_writer(
 }
 
 /// Captures the current completed tick with explicit limits, then serializes.
+///
+/// The preflight walks the borrowed schema (collection counts and the chunk
+/// count that determines the record count) before cloning. Aggregate byte
+/// budgets are enforced per record and for the whole container during
+/// encoding, without the monolithic whole-snapshot size pass: a world that
+/// partitions into valid records must not be rejected because its
+/// monolithic form would exceed one record's budget.
 pub fn save_records_to_writer_with_limits(
     sim: &Simulation,
     writer: &mut impl Write,
     limits: crate::SaveLimits,
 ) -> Result<(), SaveLoadError> {
-    let snapshot = try_capture_save_snapshot_with_limits(sim, 0, limits)?;
+    super::save::check_borrowed_snapshot_collections(sim, limits)?;
+    if sim.world.chunks.len() + REQUIRED_GLOBAL_KEYS.len() > MAX_RECORD_COUNT as usize {
+        return Err(SaveLoadError::TooLarge);
+    }
+    let snapshot = capture_save_snapshot(sim);
     save_snapshot_records_to_writer_with_limits(&snapshot, writer, limits)
 }
 
@@ -802,65 +841,29 @@ fn read_exact_limited(
     Ok(bytes)
 }
 
-struct DecodedRecords {
-    header: RecordHeader,
-    entries: Vec<ManifestEntry>,
-    payloads: Vec<Vec<u8>>,
-}
-
-fn read_records(
-    header: RecordHeader,
-    reader: &mut impl Read,
-    limits: crate::SaveLimits,
-) -> Result<DecodedRecords, SaveLoadError> {
-    let manifest_bytes = read_exact_limited(reader, u64::from(header.index_len), "record index")?;
-    if checksum(&manifest_bytes) != header.index_checksum {
-        return Err(record_error("record index checksum mismatch"));
-    }
-    let entries = parse_entries(&manifest_bytes, header.record_count, limits)?;
-    validate_index_order(&entries)?;
-    let data_start = (RECORD_HEADER_SIZE as u64)
-        .checked_add(u64::from(header.index_len))
-        .ok_or_else(|| record_error("record offsets overflow"))?;
-    validate_index_layout(&entries, data_start, limits)?;
-
-    // Records stream in manifest order at record granularity: each payload is
-    // bounded by the manifest before it is retained.
-    let mut payloads = Vec::with_capacity(entries.len());
-    for entry in &entries {
-        payloads.push(read_exact_limited(
-            reader,
-            entry.encoded_len,
-            &format!("record {:?}", entry.key),
-        )?);
-    }
-    // No trailing bytes may follow the packed records.
-    let mut trailing = [0; 1];
-    loop {
-        match reader.read(&mut trailing) {
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(io_save_error(error)),
-            Ok(0) => break,
-            Ok(_) => return Err(record_error("record container has trailing bytes")),
-        }
-    }
-    Ok(DecodedRecords {
-        header,
-        entries,
-        payloads,
-    })
-}
-
-fn verify_record_checksums(decoded: &DecodedRecords) -> Result<(), SaveLoadError> {
-    for (entry, payload) in decoded.entries.iter().zip(decoded.payloads.iter()) {
-        if checksum(payload) != entry.checksum {
-            return Err(record_error(format!(
-                "record {:?} checksum mismatch",
-                entry.key
-            )));
-        }
-    }
-    Ok(())
+/// Decoded record slots: one generation under assembly.
+///
+/// Each payload is decoded into its slot immediately after its checksum
+/// verifies, and the payload bytes are dropped before the next record reads.
+/// Retained decode memory is the manifest plus decoded state, never decoded
+/// state plus every encoded payload at once.
+#[derive(Default)]
+struct PartialSnapshot {
+    core: Option<CoreTuple>,
+    prototypes: Option<PrototypeCatalog>,
+    chart: Option<ChartState>,
+    chunk_queue: Option<ChunkGenerationQueue>,
+    statistics: Option<StatisticsTuple>,
+    entities: Option<EntityStore>,
+    construction: Option<ConstructionState>,
+    player: Option<PlayerTuple>,
+    power: Option<PowerTuple>,
+    fluids: Option<FluidsTuple>,
+    heat: Option<HeatTuple>,
+    robots: Option<RobotsTuple>,
+    trains: Option<TrainsTuple>,
+    environment: Option<EnvironmentTuple>,
+    chunks: BTreeMap<ChunkCoord, Chunk>,
 }
 
 /// Enforces the identity codec for records this build must decode. Unknown
@@ -882,167 +885,257 @@ fn check_identity_codec(entry: &ManifestEntry) -> Result<(), SaveLoadError> {
     Ok(())
 }
 
-/// Assembles one complete snapshot generation from verified records.
+fn check_record_schema(entry: &ManifestEntry) -> Result<(), SaveLoadError> {
+    if entry.schema_version != RECORD_SCHEMA_VERSION {
+        return Err(record_error(format!(
+            "record {:?} uses unsupported schema version {} (supported: {RECORD_SCHEMA_VERSION})",
+            entry.key, entry.schema_version
+        )));
+    }
+    Ok(())
+}
+
+/// Decodes one verified payload into its assembly slot.
 ///
 /// Unknown records annotated optional are skipped after their bounds and
 /// checksums were verified; unknown records annotated required abort the
-/// load. Missing required records, chunk-coordinate mismatches, and
-/// header/core identity mismatches all abort before any world is built.
-fn assemble_snapshot(
-    decoded: &DecodedRecords,
+/// load. Chunk keys must be canonical: formatting the parsed coordinates
+/// must reproduce the key, so aliases such as `chunk/01/2` cannot load
+/// under a key that selective access and re-saving would not reproduce.
+fn decode_into_slot(
+    partial: &mut PartialSnapshot,
+    entry: &ManifestEntry,
+    payload: &[u8],
     limits: crate::SaveLimits,
-) -> Result<SimulationSnapshotOwned, SaveLoadError> {
-    let mut core: Option<CoreRecord> = None;
-    let mut prototypes: Option<PrototypeCatalog> = None;
-    let mut chart: Option<ChartState> = None;
-    let mut chunk_queue: Option<ChunkGenerationQueue> = None;
-    let mut statistics: Option<StatisticsRecord> = None;
-    let mut entities: Option<EntityStore> = None;
-    let mut construction: Option<ConstructionState> = None;
-    let mut player: Option<PlayerRecord> = None;
-    let mut power: Option<PowerRecord> = None;
-    let mut fluids: Option<FluidsRecord> = None;
-    let mut heat: Option<HeatRecord> = None;
-    let mut robots: Option<RobotsRecord> = None;
-    let mut trains: Option<TrainsRecord> = None;
-    let mut environment: Option<EnvironmentRecord> = None;
-    let mut chunks: BTreeMap<ChunkCoord, Chunk> = BTreeMap::new();
-
-    for (entry, payload) in decoded.entries.iter().zip(decoded.payloads.iter()) {
-        let known = is_global_key(&entry.key) || parse_chunk_key(&entry.key).is_some();
-        if known {
-            check_identity_codec(entry)?;
+) -> Result<(), SaveLoadError> {
+    let known = is_global_key(&entry.key) || parse_chunk_key(&entry.key).is_some();
+    if known {
+        check_identity_codec(entry)?;
+    }
+    match entry.key.as_str() {
+        KEY_CORE => {
+            check_record_schema(entry)?;
+            partial.core = Some(decode_group(&entry.key, payload, limits)?);
         }
-        if entry.schema_version != RECORD_SCHEMA_VERSION && is_global_key(&entry.key) {
-            return Err(record_error(format!(
-                "record {:?} uses unsupported schema version {} (supported: {RECORD_SCHEMA_VERSION})",
-                entry.key, entry.schema_version
-            )));
+        KEY_PROTOTYPES => {
+            check_record_schema(entry)?;
+            partial.prototypes = Some(decode_group(&entry.key, payload, limits)?);
         }
-        match entry.key.as_str() {
-            KEY_CORE => core = Some(decode_group(&entry.key, payload, limits)?),
-            KEY_PROTOTYPES => prototypes = Some(decode_group(&entry.key, payload, limits)?),
-            KEY_CHART => chart = Some(decode_group(&entry.key, payload, limits)?),
-            KEY_CHUNK_QUEUE => chunk_queue = Some(decode_group(&entry.key, payload, limits)?),
-            KEY_STATISTICS => statistics = Some(decode_group(&entry.key, payload, limits)?),
-            KEY_ENTITIES => entities = Some(decode_group(&entry.key, payload, limits)?),
-            KEY_CONSTRUCTION => {
-                construction = Some(decode_group(&entry.key, payload, limits)?);
-            }
-            KEY_PLAYER => player = Some(decode_group(&entry.key, payload, limits)?),
-            KEY_POWER => power = Some(decode_group(&entry.key, payload, limits)?),
-            KEY_FLUIDS => fluids = Some(decode_group(&entry.key, payload, limits)?),
-            KEY_HEAT => heat = Some(decode_group(&entry.key, payload, limits)?),
-            KEY_ROBOTS => robots = Some(decode_group(&entry.key, payload, limits)?),
-            KEY_TRAINS => trains = Some(decode_group(&entry.key, payload, limits)?),
-            KEY_ENVIRONMENT => {
-                environment = Some(decode_group(&entry.key, payload, limits)?);
-            }
-            _ => {
-                if let Some(coord) = parse_chunk_key(&entry.key) {
-                    if entry.schema_version != RECORD_SCHEMA_VERSION {
-                        return Err(record_error(format!(
-                            "record {:?} uses unsupported schema version {}",
-                            entry.key, entry.schema_version
-                        )));
-                    }
-                    let chunk: Chunk = decode_group(&entry.key, payload, limits)?;
-                    if chunk.coord != coord {
-                        return Err(record_error(format!(
-                            "record {:?} carries chunk at ({}, {})",
-                            entry.key, chunk.coord.x, chunk.coord.y
-                        )));
-                    }
-                    if chunks.insert(coord, chunk).is_some() {
-                        return Err(record_error(format!(
-                            "record index carries duplicate chunk {coord:?}"
-                        )));
-                    }
-                } else if entry.required {
+        KEY_CHART => {
+            check_record_schema(entry)?;
+            partial.chart = Some(decode_group(&entry.key, payload, limits)?);
+        }
+        KEY_CHUNK_QUEUE => {
+            check_record_schema(entry)?;
+            partial.chunk_queue = Some(decode_group(&entry.key, payload, limits)?);
+        }
+        KEY_STATISTICS => {
+            check_record_schema(entry)?;
+            partial.statistics = Some(decode_group(&entry.key, payload, limits)?);
+        }
+        KEY_ENTITIES => {
+            check_record_schema(entry)?;
+            partial.entities = Some(decode_group(&entry.key, payload, limits)?);
+        }
+        KEY_CONSTRUCTION => {
+            check_record_schema(entry)?;
+            partial.construction = Some(decode_group(&entry.key, payload, limits)?);
+        }
+        KEY_PLAYER => {
+            check_record_schema(entry)?;
+            partial.player = Some(decode_group(&entry.key, payload, limits)?);
+        }
+        KEY_POWER => {
+            check_record_schema(entry)?;
+            partial.power = Some(decode_group(&entry.key, payload, limits)?);
+        }
+        KEY_FLUIDS => {
+            check_record_schema(entry)?;
+            partial.fluids = Some(decode_group(&entry.key, payload, limits)?);
+        }
+        KEY_HEAT => {
+            check_record_schema(entry)?;
+            partial.heat = Some(decode_group(&entry.key, payload, limits)?);
+        }
+        KEY_ROBOTS => {
+            check_record_schema(entry)?;
+            partial.robots = Some(decode_group(&entry.key, payload, limits)?);
+        }
+        KEY_TRAINS => {
+            check_record_schema(entry)?;
+            partial.trains = Some(decode_group(&entry.key, payload, limits)?);
+        }
+        KEY_ENVIRONMENT => {
+            check_record_schema(entry)?;
+            partial.environment = Some(decode_group(&entry.key, payload, limits)?);
+        }
+        _ => {
+            if let Some(coord) = parse_chunk_key(&entry.key) {
+                check_record_schema(entry)?;
+                if chunk_key(coord) != entry.key {
                     return Err(record_error(format!(
-                        "record {:?} is required but unknown to this build",
+                        "record {:?} is not a canonical chunk key",
                         entry.key
                     )));
                 }
-                // Unknown optional records were already bounds- and
-                // checksum-verified; their payloads need no decoding.
+                let chunk: Chunk = decode_group(&entry.key, payload, limits)?;
+                if chunk.coord != coord {
+                    return Err(record_error(format!(
+                        "record {:?} carries chunk at ({}, {})",
+                        entry.key, chunk.coord.x, chunk.coord.y
+                    )));
+                }
+                if partial.chunks.insert(coord, chunk).is_some() {
+                    return Err(record_error(format!(
+                        "record index carries duplicate chunk {coord:?}"
+                    )));
+                }
+            } else if entry.required {
+                return Err(record_error(format!(
+                    "record {:?} is required but unknown to this build",
+                    entry.key
+                )));
             }
+            // Unknown optional records were already bounds- and
+            // checksum-verified; their payloads need no decoding.
         }
     }
+    Ok(())
+}
 
+/// Assembles one complete snapshot generation from decoded slots.
+///
+/// Missing required records and header/core identity mismatches abort before
+/// any world is built, so every record resolves to one generation.
+fn assemble_snapshot(
+    header: &RecordHeader,
+    partial: PartialSnapshot,
+) -> Result<SimulationSnapshotOwned, SaveLoadError> {
     let missing = |key: &str| {
         record_error(format!(
             "record container is missing required record {key:?}"
         ))
     };
-    let core = core.ok_or_else(|| missing(KEY_CORE))?;
+    let core = partial.core.ok_or_else(|| missing(KEY_CORE))?;
     // Every record resolves to the single generation named by the header.
-    if core.tick != decoded.header.tick || core.world_seed != decoded.header.world_seed {
+    if core.0 != header.tick || core.1 != header.world_seed {
         return Err(record_error(
             "record container mixes snapshot generations between its header and core record",
         ));
     }
-    let prototypes = prototypes.ok_or_else(|| missing(KEY_PROTOTYPES))?;
-    let chart = chart.ok_or_else(|| missing(KEY_CHART))?;
-    let chunk_queue = chunk_queue.ok_or_else(|| missing(KEY_CHUNK_QUEUE))?;
-    let statistics = statistics.ok_or_else(|| missing(KEY_STATISTICS))?;
-    let entities = entities.ok_or_else(|| missing(KEY_ENTITIES))?;
-    let construction = construction.ok_or_else(|| missing(KEY_CONSTRUCTION))?;
-    let player = player.ok_or_else(|| missing(KEY_PLAYER))?;
-    let power = power.ok_or_else(|| missing(KEY_POWER))?;
-    let fluids = fluids.ok_or_else(|| missing(KEY_FLUIDS))?;
-    let heat = heat.ok_or_else(|| missing(KEY_HEAT))?;
-    let robots = robots.ok_or_else(|| missing(KEY_ROBOTS))?;
-    let trains = trains.ok_or_else(|| missing(KEY_TRAINS))?;
-    let environment = environment.ok_or_else(|| missing(KEY_ENVIRONMENT))?;
+    let statistics = partial.statistics.ok_or_else(|| missing(KEY_STATISTICS))?;
+    let player = partial.player.ok_or_else(|| missing(KEY_PLAYER))?;
+    let power = partial.power.ok_or_else(|| missing(KEY_POWER))?;
+    let fluids = partial.fluids.ok_or_else(|| missing(KEY_FLUIDS))?;
+    let heat = partial.heat.ok_or_else(|| missing(KEY_HEAT))?;
+    let robots = partial.robots.ok_or_else(|| missing(KEY_ROBOTS))?;
+    let trains = partial.trains.ok_or_else(|| missing(KEY_TRAINS))?;
+    let environment = partial
+        .environment
+        .ok_or_else(|| missing(KEY_ENVIRONMENT))?;
 
     Ok(SimulationSnapshotOwned {
-        tick: core.tick,
-        day_night_cycle: core.day_night_cycle,
-        world_seed: core.world_seed,
-        prototypes,
-        chunks,
-        chunk_generation_queue: chunk_queue,
-        chart,
-        item_statistics: statistics.items,
-        fluid_statistics: statistics.fluids,
-        power_statistics: statistics.power,
-        rockets_launched: statistics.rockets_launched,
-        player_deaths: statistics.player_deaths,
-        entities,
-        construction,
-        player: player.player,
-        player_equipment: player.equipment,
-        player_weapon: player.weapon,
-        delayed_combat: player.delayed_combat,
-        player_inventory: player.inventory,
-        corpses: player.corpses,
-        manual_mining_progress: player.manual_mining,
-        crafting_queue: player.crafting_queue,
-        onboarding_progress: player.onboarding,
-        research: player.research,
-        power_summary: power.summary,
-        power_networks: power.networks,
-        entity_power_statuses: power.entity_statuses,
-        fluid_networks: fluids.networks,
-        fluid_topology_dirty: fluids.topology_dirty,
-        heat_networks: heat.networks,
-        heat_topology_dirty: heat.topology_dirty,
-        robot_networks: robots.networks,
-        robot_logistic_work: robots.logistic_work,
-        robot_flights: robots.flights,
-        rolling_stock: trains.rolling_stock,
-        pending_train_route_searches: trains.pending_searches,
-        pollution: environment.pollution,
-        enemies: environment.enemies,
-        config: core.config,
-        entity_topology_revision: core.entity_topology_revision,
-        world_chunk_revision: core.world_chunk_revision,
-        world_walkability_revision: core.world_walkability_revision,
-        transport: environment.transport,
-        enemy_navigation: environment.enemy_navigation,
-        attack_targets: environment.attack_targets,
+        tick: core.0,
+        day_night_cycle: core.2,
+        world_seed: core.1,
+        prototypes: partial.prototypes.ok_or_else(|| missing(KEY_PROTOTYPES))?,
+        chunks: partial.chunks,
+        chunk_generation_queue: partial
+            .chunk_queue
+            .ok_or_else(|| missing(KEY_CHUNK_QUEUE))?,
+        chart: partial.chart.ok_or_else(|| missing(KEY_CHART))?,
+        item_statistics: statistics.0,
+        fluid_statistics: statistics.1,
+        power_statistics: statistics.2,
+        rockets_launched: statistics.3,
+        player_deaths: statistics.4,
+        entities: partial.entities.ok_or_else(|| missing(KEY_ENTITIES))?,
+        construction: partial
+            .construction
+            .ok_or_else(|| missing(KEY_CONSTRUCTION))?,
+        player: player.0,
+        player_equipment: player.1,
+        player_weapon: player.2,
+        delayed_combat: player.3,
+        player_inventory: player.4,
+        corpses: player.5,
+        manual_mining_progress: player.6,
+        crafting_queue: player.7,
+        onboarding_progress: player.8,
+        research: player.9,
+        power_summary: power.0,
+        power_networks: power.1,
+        entity_power_statuses: power.2,
+        fluid_networks: fluids.0,
+        fluid_topology_dirty: fluids.1,
+        heat_networks: heat.0,
+        heat_topology_dirty: heat.1,
+        robot_networks: robots.0,
+        robot_logistic_work: robots.1,
+        robot_flights: robots.2,
+        rolling_stock: trains.0,
+        pending_train_route_searches: trains.1,
+        pollution: environment.0,
+        enemies: environment.1,
+        config: core.3,
+        entity_topology_revision: core.4,
+        world_chunk_revision: core.5,
+        world_walkability_revision: core.6,
+        transport: environment.2,
+        enemy_navigation: environment.3,
+        attack_targets: environment.4,
     })
+}
+
+/// Reads the manifest and decodes every record one at a time.
+///
+/// Each payload is bounded by the manifest, checksum-verified, decoded into
+/// its assembly slot, and dropped before the next record reads, so encoded
+/// payloads never accumulate. No trailing bytes may follow the packed
+/// records.
+fn read_records_into_snapshot(
+    header: RecordHeader,
+    reader: &mut impl Read,
+    limits: crate::SaveLimits,
+) -> Result<SimulationSnapshotOwned, SaveLoadError> {
+    let manifest_bytes = read_exact_limited(reader, u64::from(header.index_len), "record index")?;
+    if checksum(&manifest_bytes) != header.index_checksum {
+        return Err(record_error("record index checksum mismatch"));
+    }
+    let entries = parse_entries(&manifest_bytes, header.record_count, limits)?;
+    validate_index_order(&entries)?;
+    let data_start = (RECORD_HEADER_SIZE as u64)
+        .checked_add(u64::from(header.index_len))
+        .ok_or_else(|| record_error("record offsets overflow"))?;
+    validate_index_layout(&entries, data_start, limits)?;
+
+    let mut partial = PartialSnapshot::default();
+    for entry in &entries {
+        let payload = read_exact_limited(
+            reader,
+            entry.encoded_len,
+            &format!("record {:?}", entry.key),
+        )?;
+        if checksum(&payload) != entry.checksum {
+            return Err(record_error(format!(
+                "record {:?} checksum mismatch",
+                entry.key
+            )));
+        }
+        decode_into_slot(&mut partial, entry, &payload, limits)?;
+        // The payload is dropped here, before the next record reads.
+    }
+    // No trailing bytes may follow the packed records.
+    let mut trailing = [0; 1];
+    loop {
+        match reader.read(&mut trailing) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(io_save_error(error)),
+            Ok(0) => break,
+            Ok(_) => return Err(record_error("record container has trailing bytes")),
+        }
+    }
+    assemble_snapshot(&header, partial)
 }
 
 fn finish_record_load(
@@ -1088,10 +1181,8 @@ fn load_from_full_header(
 ) -> Result<Simulation, SaveLoadError> {
     let header = parse_header(header_bytes)?;
     validate_header(&header, limits)?;
-    let decoded = read_records(header.clone(), reader, limits)?;
-    verify_record_checksums(&decoded)?;
-    let snapshot = assemble_snapshot(&decoded, limits)?;
-    finish_record_load(&decoded.header, snapshot)
+    let snapshot = read_records_into_snapshot(header.clone(), reader, limits)?;
+    finish_record_load(&header, snapshot)
 }
 
 /// Inspects a record container without decoding its payloads.
@@ -1126,7 +1217,14 @@ pub fn inspect_record_index_with_limits(
     let entries = parse_entries(manifest, header.record_count, limits)?;
     validate_index_order(&entries)?;
     let data_start = manifest_end as u64;
-    validate_index_layout(&entries, data_start, limits)?;
+    // Inspection verifies the physical file length, not just the manifest:
+    // missing or trailing payload bytes must not inspect as a valid index.
+    let expected_len = validate_index_layout(&entries, data_start, limits)?;
+    if bytes.len() as u64 != expected_len {
+        return Err(record_error(
+            "record container length does not match its index",
+        ));
+    }
     Ok(RecordIndex {
         save_version: header.save_version,
         prototype_format_version: header.prototype_format_version,
@@ -1400,11 +1498,11 @@ mod tests {
         let sim = record_test_sim();
         let bytes = save_records_to_bytes(&sim).unwrap();
         let core_bytes = extract_record_bytes(&bytes, "core").expect("core extracts");
-        let core: CoreRecord = bincode::DefaultOptions::new()
+        let core: CoreTuple = bincode::DefaultOptions::new()
             .with_fixint_encoding()
             .deserialize(&core_bytes)
             .expect("core decodes");
-        assert_eq!(core.tick, sim.tick_count());
+        assert_eq!(core.0, sim.tick_count());
         let chunk_keys: Vec<String> = inspect_record_index(&bytes)
             .unwrap()
             .records
@@ -1425,12 +1523,82 @@ mod tests {
     }
 
     #[test]
-    fn copied_bytes_are_self_contained() {
+    fn noncanonical_chunk_key_alias_is_rejected() {
         let sim = record_test_sim();
         let bytes = save_records_to_bytes(&sim).unwrap();
-        let exported = bytes.clone();
-        let loaded = load_from_bytes(&exported).expect("exported copy loads");
+        let (header, parsed) = parse_test_file(&bytes);
+        let mut records = to_test_records(&parsed);
+        let chunk = records
+            .iter_mut()
+            .find(|record| record.key.starts_with("chunk/"))
+            .expect("a chunk record exists");
+        let coord = parse_chunk_key(&chunk.key).expect("test key parses");
+        // Same coordinates, non-canonical spelling: selective access by the
+        // canonical key would miss it and re-saving would rename it.
+        chunk.key = format!("chunk/{:+}/{:03}", coord.x, coord.y);
+        assert_ne!(chunk.key, chunk_key(coord));
+        let rebuilt = rebuild_test_file(&header, records, true);
+        assert!(matches!(
+            load_from_bytes(&rebuilt),
+            Err(SaveLoadError::Codec(_))
+        ));
+    }
+
+    #[test]
+    fn record_count_cap_rejects_hostile_manifests() {
+        let header = RecordHeader {
+            save_version: SAVE_VERSION,
+            prototype_format_version: PROTOTYPE_FORMAT_VERSION,
+            prototype_hash: 0,
+            record_format_version: RECORD_FORMAT_VERSION,
+            tick: 0,
+            world_seed: 0,
+            record_count: MAX_RECORD_COUNT + 1,
+            index_len: 0,
+            index_checksum: [0; 32],
+        };
+        assert!(matches!(
+            validate_header(&header, SaveLimits::default()),
+            Err(SaveLoadError::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn per_record_budgets_allow_partitioned_worlds_above_one_record() {
+        let sim = record_test_sim();
+        let mono = save_to_bytes(&sim).unwrap();
+        let record_bytes = save_records_to_bytes(&sim).unwrap();
+        let index = inspect_record_index(&record_bytes).unwrap();
+        let biggest = index
+            .records
+            .iter()
+            .map(|record| record.encoded_len)
+            .max()
+            .expect("records exist");
+        // The monolithic form exceeds one record's budget, but every
+        // individual record fits: partitioning must stay valid.
+        assert!(
+            mono.len() as u64 > biggest,
+            "fixture too small to separate per-record from aggregate budgets"
+        );
+        let limits = SaveLimits {
+            max_record_bytes: biggest,
+            ..SaveLimits::default()
+        };
+        let bytes = save_records_to_bytes_with_limits(&sim, limits).unwrap();
+        let loaded = load_from_bytes_with_limits(&bytes, limits).unwrap();
         assert_eq!(loaded.state_hash(), sim.state_hash());
+    }
+
+    #[test]
+    fn index_inspection_verifies_physical_file_length() {
+        let sim = record_test_sim();
+        let bytes = save_records_to_bytes(&sim).unwrap();
+        assert!(inspect_record_index(&bytes).is_ok());
+        assert!(inspect_record_index(&bytes[..bytes.len() - 10]).is_err());
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(inspect_record_index(&trailing).is_err());
     }
 
     #[test]

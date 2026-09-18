@@ -697,6 +697,18 @@ fn encode_snapshot_with_limits(
     Ok(bytes)
 }
 
+/// Walks the borrowed durable schema for collection-count violations without
+/// cloning. The indexed record container uses this as its capture preflight
+/// so aggregate byte budgets stay record-aware instead of running the
+/// monolithic whole-snapshot size pass.
+pub(in crate::simulation) fn check_borrowed_snapshot_collections(
+    sim: &Simulation,
+    limits: SaveLimits,
+) -> Result<(), SaveLoadError> {
+    let snapshot = SimulationSnapshotRef::from_simulation(sim);
+    crate::save_limits::check_collections(&snapshot, limits).map_err(SaveLoadError::from)
+}
+
 fn preflight_snapshot_with_limits(
     snapshot: &impl Serialize,
     limits: SaveLimits,
@@ -721,7 +733,11 @@ pub fn load_from_bytes_with_limits(
     bytes: &[u8],
     limits: SaveLimits,
 ) -> Result<Simulation, SaveLoadError> {
-    if bytes.len() as u64 > limits.max_simulation_bytes() {
+    // The complete artifact is bounded by the encoded budget. Each encoding
+    // enforces its own aggregate decoded bound while streaming, and
+    // `max_record_bytes` stays per-record so partitioned worlds larger than
+    // one record remain loadable.
+    if bytes.len() as u64 > limits.max_encoded_bytes {
         return Err(SaveLoadError::TooLarge);
     }
     load_from_reader_with_limits(&mut std::io::Cursor::new(bytes), limits)

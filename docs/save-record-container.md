@@ -35,7 +35,7 @@ record payloads (packed contiguously, manifest order)
 | 24 | 4 | record_format_version | `1` |
 | 28 | 8 | tick | Completed simulation tick of this generation |
 | 36 | 8 | world_seed | World identity of this generation |
-| 44 | 4 | record_count | Number of manifest entries |
+| 44 | 4 | record_count | Number of manifest entries (at most `MAX_RECORD_COUNT` = 32,768) |
 | 48 | 4 | index_len | Manifest size in bytes |
 | 52 | 32 | index_checksum | BLAKE3 of the manifest bytes |
 
@@ -84,8 +84,17 @@ terrain-file boundaries.
 | `chunk/<x>/<y>` | 1 | one `Chunk` (coordinate plus tiles) | partitioned terrain |
 
 All 14 global records are required. Chunk records carry their coordinates
-in both the key and the payload; a mismatch is rejected. Zero chunk records
-is valid (an empty world); every present chunk record is required.
+in both the key and the payload; a mismatch is rejected, and keys must be
+canonical (formatting the parsed coordinates reproduces the key), so aliases
+such as `chunk/01/2` cannot load under a key that selective access and
+re-saving would not reproduce. Zero chunk records is valid (an empty world);
+every present chunk record is required.
+
+Record count is structurally capped at 32,768 (14 globals plus one record
+per chunk). Supported worlds stay resident below 4,096 chunks and reach the
+format ceiling near 8,800, so the cap leaves wide headroom while keeping
+manifest, entry, and decode-slot vectors small even for hostile inputs whose
+payloads still fit the byte budgets.
 
 ### Deterministic ordering
 
@@ -124,32 +133,50 @@ codec must enforce its decompression budget (`decoded_len` against
 
 Decoding validates, in order: magic, container version, save version
 (through the same support table as the monolithic path), prototype format
-version, record/collection bounds, manifest presence, manifest checksum,
-entry framing, key charset, unknown flags, entry count, key uniqueness,
-deterministic order, contiguous packing (offsets must tile the data region
-exactly, which rejects overlaps, gaps, and trailing bytes with
-overflow-checked arithmetic), per-record length budgets, per-record
-checksums, codecs for records that must decode, schemas, unknown-required
-rejection, required-record presence, chunk coordinate references,
-header/core generation identity (tick and seed must agree, so all records
-resolve to one complete snapshot generation), prototype hash, durable-state
-validation, derived-state reconstruction, and final full validation. No
-partial world is ever simulated: the candidate is assembled only after every
-record verifies.
+version, record/collection bounds including the structural record-count cap,
+manifest presence, manifest checksum, entry framing, key charset, unknown
+flags, entry count, key uniqueness and deterministic order in one linear
+pass, contiguous packing (offsets must tile the data region exactly, which
+rejects overlaps, gaps, and trailing bytes with overflow-checked
+arithmetic), per-record length budgets, then per record in manifest order:
+bounded read, checksum, codec (for records this build decodes), schema,
+and immediate decode into its assembly slot with the payload dropped before
+the next record reads. Unknown-required records, missing required records,
+non-canonical chunk keys, and chunk coordinate mismatches abort; unknown
+optional records skip after bounds and checksum verification. Assembly then
+checks required-record presence, header/core generation identity (tick and
+seed must agree, so all records resolve to one complete snapshot
+generation), prototype hash, durable-state validation, derived-state
+reconstruction, and final full validation. No partial world is ever
+simulated, and encoded payloads never accumulate: retained decode memory is
+the manifest plus decoded state. Index inspection additionally verifies the
+physical file length, so missing or trailing payload bytes cannot inspect
+as a valid index.
 
-Truncation at any stage is a load error. The total decoded size and the
-complete file size stay within `SaveLimits`; oversized worlds fail with
-`TooLarge` before any unbounded allocation.
+Truncation at any stage is a load error. Aggregate budgets are
+record-aware: each record is bounded by `max_record_bytes` and the decoded
+total by `max_decoded_bytes`, while the complete artifact is bounded by
+`max_encoded_bytes`. `max_record_bytes` never applies to the whole
+container, so a world that partitions into valid records is not rejected
+because its monolithic form would exceed one record's budget. Oversized
+worlds fail with `TooLarge` before any unbounded allocation; the
+borrowed-schema preflight (collection counts plus the chunk-derived record
+count) fails before cloning.
 
 ## Transport and commit
 
-Record bytes are opaque payload bytes to the application container, which
-keeps its existing guarantees: streaming writes to a temporary file,
-`sync_all`, atomic installation preserving a rollback backup, and catalog
-validation before the world is replaced. A copied or exported record file
-loads without external references, so plain file copy is the portable
-export. Loading validates before mutating the active world, and failed work
-leaves the previous save intact.
+The application save pipeline writes record payloads: background snapshots
+encode through the two-pass record writer (peak encoding memory is one
+record payload plus the manifest, at the cost of encoding twice), and the
+container keeps its existing guarantees around those bytes — streaming
+writes to a temporary file, `sync_all`, atomic installation preserving a
+rollback backup, and catalog validation before the world is replaced.
+Record bytes remain opaque to the container framing: the outer magic,
+metadata, and size checks are unchanged, and the loader dispatches on the
+inner magic. A copied or exported record file loads without external
+references, so plain file copy is the portable export. Loading validates
+before mutating the active world, and failed work leaves the previous save
+intact.
 
 The loader dispatches on magic: `FACTSIM\0` decodes the monolithic snapshot
 (including the v57 migration path), `FACTREC\0` decodes the record
