@@ -1,12 +1,12 @@
-//! Record registry: stable keys, ownership, and key helpers.
+//! Record registry: stable key constants, framing budgets, and key helpers.
 //!
-//! The [`RECORD_REGISTRY`] literal below is the single source for keys,
-//! ownership, and requiredness. The operational handler table in
-//! [`super::groups`] borrows one descriptor per row and attaches the
-//! encode/measure/decode handlers, so dispatch and manifest flags resolve
-//! through these descriptors without copying them. Adding a record means
-//! adding one descriptor plus one handler row plus encode/decode helpers in
-//! the owning subsystem module — never editing scattered matches.
+//! Dispatch lives in [`super::groups`]: each subsystem module owns a
+//! `HANDLER` const pairing its stable key with its encode/measure/decode
+//! functions, and `RECORD_HANDLERS` assembles them by module path. Adding a
+//! record means adding one subsystem module with its `HANDLER` plus one line
+//! in that assembly — never editing scattered matches. Subsystem ownership
+//! is documented in the format specification (`docs/save-record-container.md`,
+//! record registry table).
 //!
 //! Terrain travels partitioned by world chunk (`chunk/<x>/<y>` records) while
 //! global and cross-chunk systems keep explicit global ownership with stable
@@ -52,118 +52,6 @@ pub(crate) const KEY_HEAT: &str = "heat";
 pub(crate) const KEY_ROBOTS: &str = "robots";
 pub(crate) const KEY_TRAINS: &str = "trains";
 pub(crate) const KEY_ENVIRONMENT: &str = "environment";
-
-/// One global record of a complete snapshot generation: its stable key, the
-/// subsystem that owns its bytes, whether a generation is complete without
-/// it, and what it carries.
-///
-/// This metadata is operational, not documentary: the handler table in
-/// [`super::groups`] borrows one descriptor per row, so the `required` flag
-/// below controls the manifest flags on the wire (see `record_required`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct RecordDescriptor {
-    pub key: &'static str,
-    pub owner: &'static str,
-    pub required: bool,
-    pub description: &'static str,
-}
-
-/// Global records that must all be present for one complete generation.
-///
-/// This literal table is the single source for keys, ownership, and
-/// requiredness. The operational handler table in [`super::groups`] borrows
-/// one descriptor per row and attaches the encode/measure/decode handlers,
-/// so key enumeration, dispatch, and the manifest `required` flags all
-/// resolve through these descriptors without copying them.
-///
-/// Order follows the format specification for readability; the manifest
-/// order on the wire is the sorted key order (see `validate_index_order`).
-pub(crate) const RECORD_REGISTRY: [RecordDescriptor; 14] = [
-    RecordDescriptor {
-        key: KEY_CORE,
-        owner: "simulation core",
-        required: true,
-        description: "tick, world seed, day/night phase, config, topology/chunk/walkability revisions",
-    },
-    RecordDescriptor {
-        key: KEY_PROTOTYPES,
-        owner: "global data identity",
-        required: true,
-        description: "prototype catalog",
-    },
-    RecordDescriptor {
-        key: KEY_CHART,
-        owner: "global",
-        required: true,
-        description: "chart state",
-    },
-    RecordDescriptor {
-        key: KEY_CHUNK_QUEUE,
-        owner: "global",
-        required: true,
-        description: "pending chunk-generation requests",
-    },
-    RecordDescriptor {
-        key: KEY_STATISTICS,
-        owner: "global",
-        required: true,
-        description: "item/fluid/power statistics, launches, deaths",
-    },
-    RecordDescriptor {
-        key: KEY_ENTITIES,
-        owner: "global entity ownership",
-        required: true,
-        description: "entity store",
-    },
-    RecordDescriptor {
-        key: KEY_CONSTRUCTION,
-        owner: "global",
-        required: true,
-        description: "construction state",
-    },
-    RecordDescriptor {
-        key: KEY_PLAYER,
-        owner: "global",
-        required: true,
-        description: "player, equipment, weapon, combat, inventory, corpses, mining, crafting, onboarding, research",
-    },
-    RecordDescriptor {
-        key: KEY_POWER,
-        owner: "global network ownership",
-        required: true,
-        description: "power summary, networks, entity statuses",
-    },
-    RecordDescriptor {
-        key: KEY_FLUIDS,
-        owner: "global network ownership",
-        required: true,
-        description: "fluid networks, invalidation flag",
-    },
-    RecordDescriptor {
-        key: KEY_HEAT,
-        owner: "global network ownership",
-        required: true,
-        description: "heat networks, invalidation flag",
-    },
-    RecordDescriptor {
-        key: KEY_ROBOTS,
-        owner: "cross-chunk ownership",
-        required: true,
-        description: "robot networks, logistic work, flights",
-    },
-    RecordDescriptor {
-        key: KEY_TRAINS,
-        owner: "cross-chunk ownership",
-        required: true,
-        description: "rolling stock, pending route searches with frontiers",
-    },
-    RecordDescriptor {
-        key: KEY_ENVIRONMENT,
-        owner: "cross-chunk ownership",
-        required: true,
-        description: "pollution, enemies, transport cache, navigation, targeting",
-    },
-];
 
 const _: () = assert!(
     RECORD_HEADER_SIZE == 84,
@@ -212,67 +100,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_lists_fourteen_required_globals() {
-        assert_eq!(RECORD_REGISTRY.len(), 14);
-        assert!(RECORD_REGISTRY.iter().all(|entry| entry.required));
-        for entry in &RECORD_REGISTRY {
-            assert!(
-                !entry.owner.is_empty(),
-                "record {:?} needs an owner",
-                entry.key
-            );
-            assert!(
-                !entry.description.is_empty(),
-                "record {:?} needs a description",
-                entry.key
-            );
-            validate_key_bytes(entry.key)
-                .unwrap_or_else(|_| panic!("registry key {:?} must be a valid key", entry.key));
-        }
-    }
-
-    #[test]
-    fn every_registry_row_has_exactly_one_handler() {
-        // Handler rows borrow registry entries by index, so only two
-        // failures are possible here: a wrong or duplicated index (caught by
-        // the coverage below) and a duplicated key (caught by the uniqueness
-        // check). Length and field equality would merely re-assert the
-        // borrow itself.
+    fn chunk_keys_never_collide_with_handler_keys() {
+        // Handler keys live in `super::groups`; chunk keys must stay
+        // disjoint from them so dispatch can never confuse the two families.
         let handlers = &super::super::groups::RECORD_HANDLERS;
-        let mut seen = vec![false; RECORD_REGISTRY.len()];
-        for handler in handlers.iter() {
-            let index = RECORD_REGISTRY
-                .iter()
-                .position(|entry| entry.key == handler.descriptor.key)
-                .expect("handler must reference a registry key");
-            assert!(
-                !seen[index],
-                "duplicate handler for {:?}",
-                handler.descriptor.key
-            );
-            seen[index] = true;
-        }
-        assert!(
-            seen.iter().all(|&seen| seen),
-            "every registry row needs exactly one handler"
-        );
-        let mut keys: Vec<&str> = RECORD_REGISTRY.iter().map(|entry| entry.key).collect();
-        let before = keys.len();
-        keys.sort_unstable();
-        keys.dedup();
-        assert_eq!(keys.len(), before, "registry keys must be unique");
-    }
-
-    #[test]
-    fn chunk_keys_never_collide_with_globals() {
-        let globals: Vec<&str> = RECORD_REGISTRY.iter().map(|entry| entry.key).collect();
         for coord in [
             ChunkCoord { x: 0, y: 0 },
             ChunkCoord { x: -1, y: 2 },
             ChunkCoord { x: 8800, y: -8800 },
         ] {
             let key = chunk_key(coord);
-            assert!(!globals.contains(&key.as_str()));
+            assert!(
+                handlers.iter().all(|handler| handler.key != key),
+                "chunk key {key:?} must not collide with a handler key"
+            );
             assert_eq!(parse_chunk_key(&key), Some(coord));
             // Canonical form round-trips: formatting the parsed coordinates
             // reproduces the key, so aliases cannot load under a wrong key.

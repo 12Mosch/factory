@@ -3,7 +3,8 @@
 use super::super::super::robot_ops::RobotLogisticWorkState;
 use super::super::super::*;
 use super::super::codec::*;
-use super::{BorrowedRecordFields, PartialSnapshot};
+use super::super::registry::KEY_ROBOTS;
+use super::{BorrowedRecordFields, PartialSnapshot, RecordHandler};
 
 pub(super) type RobotsTuple = (
     Vec<RobotNetworkSnapshot>,
@@ -48,3 +49,13 @@ pub(super) fn decode(
     partial.robots = Some(decode_group(key, payload, limits)?);
     Ok(())
 }
+
+/// This record's table row: the stable key travels with its own handlers,
+/// so no assembly site can pair a key with another subsystem's codecs.
+pub(super) const HANDLER: RecordHandler = RecordHandler {
+    key: KEY_ROBOTS,
+    required: true,
+    encode,
+    measure,
+    decode,
+};

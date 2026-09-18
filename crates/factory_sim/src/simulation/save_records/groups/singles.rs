@@ -7,7 +7,53 @@
 
 use super::super::super::*;
 use super::super::codec::*;
-use super::{BorrowedRecordFields, PartialSnapshot};
+use super::super::registry::{
+    KEY_CHART, KEY_CHUNK_QUEUE, KEY_CONSTRUCTION, KEY_ENTITIES, KEY_PROTOTYPES,
+};
+use super::{BorrowedRecordFields, PartialSnapshot, RecordHandler};
+
+/// One table row per single-field record below. Each key travels with its
+/// own handlers, so no assembly site can pair a key with another
+/// subsystem's codecs.
+pub(super) const PROTOTYPES: RecordHandler = RecordHandler {
+    key: KEY_PROTOTYPES,
+    required: true,
+    encode: encode_prototypes,
+    measure: measure_prototypes,
+    decode: decode_prototypes,
+};
+
+pub(super) const CHART: RecordHandler = RecordHandler {
+    key: KEY_CHART,
+    required: true,
+    encode: encode_chart,
+    measure: measure_chart,
+    decode: decode_chart,
+};
+
+pub(super) const CHUNK_QUEUE: RecordHandler = RecordHandler {
+    key: KEY_CHUNK_QUEUE,
+    required: true,
+    encode: encode_chunk_queue,
+    measure: measure_chunk_queue,
+    decode: decode_chunk_queue,
+};
+
+pub(super) const ENTITIES: RecordHandler = RecordHandler {
+    key: KEY_ENTITIES,
+    required: true,
+    encode: encode_entities,
+    measure: measure_entities,
+    decode: decode_entities,
+};
+
+pub(super) const CONSTRUCTION: RecordHandler = RecordHandler {
+    key: KEY_CONSTRUCTION,
+    required: true,
+    encode: encode_construction,
+    measure: measure_construction,
+    decode: decode_construction,
+};
 
 pub(super) fn encode_prototypes(
     fields: &BorrowedRecordFields<'_>,

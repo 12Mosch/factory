@@ -7,7 +7,34 @@
 
 use super::super::super::*;
 use super::super::codec::*;
-use super::{BorrowedRecordFields, PartialSnapshot};
+use super::super::registry::{KEY_FLUIDS, KEY_HEAT, KEY_POWER};
+use super::{BorrowedRecordFields, PartialSnapshot, RecordHandler};
+
+/// One table row per network below. Each key travels with its own handlers,
+/// so no assembly site can pair a key with another subsystem's codecs.
+pub(super) const POWER: RecordHandler = RecordHandler {
+    key: KEY_POWER,
+    required: true,
+    encode: encode_power,
+    measure: measure_power,
+    decode: decode_power,
+};
+
+pub(super) const FLUIDS: RecordHandler = RecordHandler {
+    key: KEY_FLUIDS,
+    required: true,
+    encode: encode_fluids,
+    measure: measure_fluids,
+    decode: decode_fluids,
+};
+
+pub(super) const HEAT: RecordHandler = RecordHandler {
+    key: KEY_HEAT,
+    required: true,
+    encode: encode_heat,
+    measure: measure_heat,
+    decode: decode_heat,
+};
 
 pub(super) type PowerTuple = (
     PowerSummary,

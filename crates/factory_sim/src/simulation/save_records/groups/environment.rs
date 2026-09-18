@@ -8,7 +8,8 @@
 
 use super::super::super::*;
 use super::super::codec::*;
-use super::{BorrowedRecordFields, PartialSnapshot};
+use super::super::registry::KEY_ENVIRONMENT;
+use super::{BorrowedRecordFields, PartialSnapshot, RecordHandler};
 
 pub(super) type EnvironmentTuple = (
     PollutionState,
@@ -60,3 +61,13 @@ pub(super) fn decode(
     partial.environment = Some(decode_group(key, payload, limits)?);
     Ok(())
 }
+
+/// This record's table row: the stable key travels with its own handlers,
+/// so no assembly site can pair a key with another subsystem's codecs.
+pub(super) const HANDLER: RecordHandler = RecordHandler {
+    key: KEY_ENVIRONMENT,
+    required: true,
+    encode,
+    measure,
+    decode,
+};

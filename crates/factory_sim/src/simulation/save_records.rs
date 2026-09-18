@@ -794,12 +794,9 @@ mod tests {
         let index = inspect_record_index(&bytes).expect("index inspects");
         assert!(!index.records.is_empty());
         for record in &index.records {
-            if let Some(descriptor) = super::registry::RECORD_REGISTRY
-                .iter()
-                .find(|descriptor| descriptor.key == record.key)
-            {
+            if let Some(handler) = super::groups::find_handler(&record.key) {
                 assert_eq!(
-                    record.required, descriptor.required,
+                    record.required, handler.required,
                     "wire flag must follow {:?}",
                     record.key
                 );

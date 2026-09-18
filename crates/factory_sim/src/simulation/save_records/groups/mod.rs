@@ -6,11 +6,10 @@
 //! same fields, so the group list and tuple order exist exactly once.
 //!
 //! Dispatch is centralized here: [`encode_record`], [`measure_record`], and
-//! [`decode_into_slot`] cover exactly the keys declared in
-//! [`super::registry::RECORD_REGISTRY`] (enforced by
-//! `registry_and_dispatch_agree`). Payload logic itself lives in the
-//! subsystem modules below — open `player.rs`, not this file, to change what
-//! the player record carries.
+//! [`decode_into_slot`] all resolve through [`find_handler`] over
+//! [`RECORD_HANDLERS`]. Payload logic itself lives in the subsystem modules
+//! below — open `player.rs`, not this file, to change what the player
+//! record carries.
 //!
 //! Groups encode as bincode tuples of borrowed fields in the documented
 //! order, so encoding never clones snapshot subsystems; the decoder
@@ -193,7 +192,7 @@ impl<'a> BorrowedRecordFields<'a> {
         keys.extend(
             RECORD_HANDLERS
                 .iter()
-                .map(|handler| handler.descriptor.key.to_string()),
+                .map(|handler| handler.key.to_string()),
         );
         keys.extend(self.chunks.keys().map(|coord| chunk_key(*coord)));
         keys
@@ -213,17 +212,23 @@ pub(super) fn measure_tuple(
         .map_err(SaveLoadError::from)
 }
 
-/// One operational record: a borrowed [`RecordDescriptor`] plus the subsystem
+/// One operational record: its stable key and requiredness plus the subsystem
 /// handlers that encode, measure, and decode it.
 ///
 /// [`RECORD_HANDLERS`] is the single dispatch source: [`encode_record`],
 /// [`measure_record`], and [`decode_into_slot`] all resolve through
-/// [`find_handler`], so adding a record means adding one descriptor, one row,
-/// and its subsystem helpers — never editing parallel matches. Chunk records
-/// are the only dynamic family and resolve through the world map instead.
+/// [`find_handler`]. Each row is a subsystem module's own `HANDLER` const, so
+/// a key always travels with its own codecs — the assembly below lists only
+/// module paths and holds no pairing information that could drift. Chunk
+/// records are the only dynamic family and resolve through the world map
+/// instead.
+///
+/// Subsystem ownership is documented in the format specification
+/// (`docs/save-record-container.md`, record registry table).
 #[derive(Clone, Copy)]
 pub(super) struct RecordHandler {
-    pub(super) descriptor: &'static RecordDescriptor,
+    pub(super) key: &'static str,
+    pub(super) required: bool,
     pub(super) encode: for<'a> fn(
         &'a BorrowedRecordFields<'a>,
         crate::SaveLimits,
@@ -235,98 +240,26 @@ pub(super) struct RecordHandler {
 }
 
 pub(super) const RECORD_HANDLERS: [RecordHandler; 14] = [
-    RecordHandler {
-        descriptor: &RECORD_REGISTRY[0],
-        encode: core::encode,
-        measure: core::measure,
-        decode: core::decode,
-    },
-    RecordHandler {
-        descriptor: &RECORD_REGISTRY[1],
-        encode: singles::encode_prototypes,
-        measure: singles::measure_prototypes,
-        decode: singles::decode_prototypes,
-    },
-    RecordHandler {
-        descriptor: &RECORD_REGISTRY[2],
-        encode: singles::encode_chart,
-        measure: singles::measure_chart,
-        decode: singles::decode_chart,
-    },
-    RecordHandler {
-        descriptor: &RECORD_REGISTRY[3],
-        encode: singles::encode_chunk_queue,
-        measure: singles::measure_chunk_queue,
-        decode: singles::decode_chunk_queue,
-    },
-    RecordHandler {
-        descriptor: &RECORD_REGISTRY[4],
-        encode: statistics::encode,
-        measure: statistics::measure,
-        decode: statistics::decode,
-    },
-    RecordHandler {
-        descriptor: &RECORD_REGISTRY[5],
-        encode: singles::encode_entities,
-        measure: singles::measure_entities,
-        decode: singles::decode_entities,
-    },
-    RecordHandler {
-        descriptor: &RECORD_REGISTRY[6],
-        encode: singles::encode_construction,
-        measure: singles::measure_construction,
-        decode: singles::decode_construction,
-    },
-    RecordHandler {
-        descriptor: &RECORD_REGISTRY[7],
-        encode: player::encode,
-        measure: player::measure,
-        decode: player::decode,
-    },
-    RecordHandler {
-        descriptor: &RECORD_REGISTRY[8],
-        encode: networks::encode_power,
-        measure: networks::measure_power,
-        decode: networks::decode_power,
-    },
-    RecordHandler {
-        descriptor: &RECORD_REGISTRY[9],
-        encode: networks::encode_fluids,
-        measure: networks::measure_fluids,
-        decode: networks::decode_fluids,
-    },
-    RecordHandler {
-        descriptor: &RECORD_REGISTRY[10],
-        encode: networks::encode_heat,
-        measure: networks::measure_heat,
-        decode: networks::decode_heat,
-    },
-    RecordHandler {
-        descriptor: &RECORD_REGISTRY[11],
-        encode: robots::encode,
-        measure: robots::measure,
-        decode: robots::decode,
-    },
-    RecordHandler {
-        descriptor: &RECORD_REGISTRY[12],
-        encode: trains::encode,
-        measure: trains::measure,
-        decode: trains::decode,
-    },
-    RecordHandler {
-        descriptor: &RECORD_REGISTRY[13],
-        encode: environment::encode,
-        measure: environment::measure,
-        decode: environment::decode,
-    },
+    core::HANDLER,
+    singles::PROTOTYPES,
+    singles::CHART,
+    singles::CHUNK_QUEUE,
+    statistics::HANDLER,
+    singles::ENTITIES,
+    singles::CONSTRUCTION,
+    player::HANDLER,
+    networks::POWER,
+    networks::FLUIDS,
+    networks::HEAT,
+    robots::HANDLER,
+    trains::HANDLER,
+    environment::HANDLER,
 ];
 
 /// Resolves a global key to its handler. A key with no row here is either a
 /// chunk record or unknown — there is no second mapping to drift.
 pub(super) fn find_handler(key: &str) -> Option<&'static RecordHandler> {
-    RECORD_HANDLERS
-        .iter()
-        .find(|handler| handler.descriptor.key == key)
+    RECORD_HANDLERS.iter().find(|handler| handler.key == key)
 }
 
 /// Reports the manifest `required` flag for `key`. Handler rows control the
@@ -335,7 +268,7 @@ pub(super) fn find_handler(key: &str) -> Option<&'static RecordHandler> {
 /// and chunks.
 pub(super) fn record_required(key: &str) -> bool {
     find_handler(key)
-        .map(|handler| handler.descriptor.required)
+        .map(|handler| handler.required)
         .unwrap_or(true)
 }
 
@@ -597,6 +530,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn handler_keys_are_unique_and_valid() {
+        // Dispatch resolves by key, so duplicates would shadow a record and
+        // invalid bytes would break the manifest. Both are table-authoring
+        // mistakes this test can actually catch.
+        let mut keys: Vec<&str> = RECORD_HANDLERS.iter().map(|handler| handler.key).collect();
+        let before = keys.len();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), before, "handler keys must be unique");
+        for handler in RECORD_HANDLERS {
+            validate_key_bytes(handler.key)
+                .unwrap_or_else(|_| panic!("handler key {:?} must be a valid key", handler.key));
+        }
+    }
+
+    #[test]
     fn every_handler_round_trips_through_its_decode_slot() {
         // Dispatch is a table lookup, so no stale arm can exist outside it:
         // this test drives every handler row through encode, measure, and
@@ -607,31 +556,27 @@ mod tests {
         let mut partial = PartialSnapshot::default();
         for handler in RECORD_HANDLERS {
             let payload = (handler.encode)(&fields, limits)
-                .unwrap_or_else(|_| panic!("handler {:?} must encode", handler.descriptor.key));
+                .unwrap_or_else(|_| panic!("handler {:?} must encode", handler.key));
             let size = (handler.measure)(&fields, limits)
-                .unwrap_or_else(|_| panic!("handler {:?} must measure", handler.descriptor.key));
+                .unwrap_or_else(|_| panic!("handler {:?} must measure", handler.key));
             assert_eq!(
                 size,
                 payload.len() as u64,
                 "measured and encoded sizes must agree for {:?}",
-                handler.descriptor.key
+                handler.key
             );
             let entry = ManifestEntry {
-                key: handler.descriptor.key.to_string(),
+                key: handler.key.to_string(),
                 schema_version: RECORD_SCHEMA_VERSION,
                 codec_id: RECORD_CODEC_IDENTITY,
-                required: handler.descriptor.required,
+                required: handler.required,
                 offset: 0,
                 encoded_len: payload.len() as u64,
                 decoded_len: payload.len() as u64,
                 checksum: checksum(&payload),
             };
-            decode_into_slot(&mut partial, &entry, &payload, limits).unwrap_or_else(|_| {
-                panic!(
-                    "handler descriptor {:?} must decode",
-                    handler.descriptor.key
-                )
-            });
+            decode_into_slot(&mut partial, &entry, &payload, limits)
+                .unwrap_or_else(|_| panic!("handler {:?} must decode", handler.key));
         }
         let header = RecordHeader {
             save_version: SAVE_VERSION,

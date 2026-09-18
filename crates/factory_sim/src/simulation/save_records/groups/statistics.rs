@@ -2,7 +2,8 @@
 
 use super::super::super::*;
 use super::super::codec::*;
-use super::{BorrowedRecordFields, PartialSnapshot};
+use super::super::registry::KEY_STATISTICS;
+use super::{BorrowedRecordFields, PartialSnapshot, RecordHandler};
 
 pub(super) type StatisticsTuple = (ItemStatistics, FluidStatistics, PowerStatistics, u64, u64);
 
@@ -47,3 +48,13 @@ pub(super) fn decode(
     partial.statistics = Some(decode_group(key, payload, limits)?);
     Ok(())
 }
+
+/// This record's table row: the stable key travels with its own handlers,
+/// so no assembly site can pair a key with another subsystem's codecs.
+pub(super) const HANDLER: RecordHandler = RecordHandler {
+    key: KEY_STATISTICS,
+    required: true,
+    encode,
+    measure,
+    decode,
+};

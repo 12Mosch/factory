@@ -7,7 +7,8 @@
 
 use super::super::super::*;
 use super::super::codec::*;
-use super::{BorrowedRecordFields, PartialSnapshot, measure_tuple};
+use super::super::registry::KEY_CORE;
+use super::{BorrowedRecordFields, PartialSnapshot, RecordHandler, measure_tuple};
 
 /// Wire order: tick, world seed, day/night phase, config,
 /// entity-topology revision, chunk revision, walkability revision.
@@ -66,3 +67,13 @@ pub(super) fn decode(
     partial.core = Some(decode_group(key, payload, limits)?);
     Ok(())
 }
+
+/// This record's table row: the stable key travels with its own handlers,
+/// so no assembly site can pair a key with another subsystem's codecs.
+pub(super) const HANDLER: RecordHandler = RecordHandler {
+    key: KEY_CORE,
+    required: true,
+    encode,
+    measure,
+    decode,
+};
