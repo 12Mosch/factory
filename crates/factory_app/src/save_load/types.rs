@@ -198,7 +198,6 @@ pub(crate) struct CatalogValidationRequest {
 #[derive(Debug)]
 pub(crate) struct CatalogValidationOutcome {
     pub(crate) path: PathBuf,
-    pub(crate) source_compatibility: SaveCompatibility,
     pub(crate) compatibility: SaveCompatibility,
     pub(crate) observed_metadata: Option<SaveFileMetadataFingerprint>,
     pub(crate) fingerprint: Option<SaveFileFingerprint>,

@@ -487,10 +487,32 @@ fn queue_catalog_validation(catalog: &mut SaveCatalog, request: CatalogValidatio
     {
         return;
     }
+    if catalog
+        .validation_queue
+        .iter()
+        .any(|queued| queued.path == request.path && queued.metadata == request.metadata)
+    {
+        return;
+    }
     catalog
         .validation_queue
         .retain(|queued| queued.path != request.path);
     catalog.validation_queue.push_back(request);
+}
+
+/// Recomputes lightweight header compatibility for the file currently on disk.
+/// Retries must use this instead of a stale outcome's classification: the path
+/// may have been replaced while the previous worker was running.
+fn current_header_compatibility(
+    path: &Path,
+    kind: &SaveKind,
+    metadata: &SaveFileMetadataFingerprint,
+) -> Option<SaveCompatibility> {
+    if metadata.len > SaveLimits::default().max_encoded_bytes {
+        return Some(SaveCompatibility::ExceedsCurrentLimits);
+    }
+    let current_hash = prototype_hash(&PrototypeCatalog::load_base().ok()?);
+    Some(inspect_file(path, kind, current_hash).compatibility)
 }
 
 fn start_catalog_validation_jobs(catalog: &mut SaveCatalog) {
@@ -561,21 +583,38 @@ fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) {
             }
         } else if outcome.attempt == 0
             && let Some(metadata) = current_metadata
-            && let Some(entry) = catalog
+            && let Some(entry_index) = catalog
                 .entries
                 .iter()
-                .find(|entry| entry.path == outcome.path)
-            && entry.compatibility == SaveCompatibility::ValidationPending
+                .position(|entry| entry.path == outcome.path)
+            && catalog.entries[entry_index].compatibility == SaveCompatibility::ValidationPending
         {
-            queue_catalog_validation(
-                catalog,
-                CatalogValidationRequest {
-                    path: outcome.path,
-                    compatibility: outcome.source_compatibility,
-                    metadata,
-                    attempt: 1,
-                },
-            );
+            let already_queued = catalog
+                .validation_queue
+                .iter()
+                .any(|queued| queued.path == outcome.path && queued.metadata == metadata);
+            if !already_queued
+                && let Some(fresh) = current_header_compatibility(
+                    &outcome.path,
+                    &catalog.entries[entry_index].metadata.kind,
+                    &metadata,
+                )
+            {
+                if fresh.can_load() {
+                    queue_catalog_validation(
+                        catalog,
+                        CatalogValidationRequest {
+                            path: outcome.path,
+                            compatibility: fresh,
+                            metadata,
+                            attempt: 1,
+                        },
+                    );
+                } else {
+                    catalog.entries[entry_index].compatibility = fresh;
+                    catalog.revision = catalog.revision.wrapping_add(1);
+                }
+            }
         }
     }
     start_catalog_validation_jobs(catalog);
@@ -621,7 +660,6 @@ fn validate_loadable_path(
         Err(_) => {
             return CatalogValidationOutcome {
                 path,
-                source_compatibility,
                 compatibility: SaveCompatibility::ValidationPending,
                 observed_metadata: None,
                 fingerprint: None,
@@ -633,7 +671,6 @@ fn validate_loadable_path(
     if metadata.len > SaveLimits::default().max_encoded_bytes {
         return CatalogValidationOutcome {
             path,
-            source_compatibility,
             compatibility: SaveCompatibility::ExceedsCurrentLimits,
             observed_metadata: Some(metadata),
             fingerprint: None,
@@ -645,7 +682,6 @@ fn validate_loadable_path(
         Err(ContainerError::TooLarge) => {
             return CatalogValidationOutcome {
                 path,
-                source_compatibility,
                 compatibility: SaveCompatibility::ExceedsCurrentLimits,
                 observed_metadata: Some(metadata),
                 fingerprint: None,
@@ -655,7 +691,6 @@ fn validate_loadable_path(
         Err(_) => {
             return CatalogValidationOutcome {
                 path,
-                source_compatibility,
                 compatibility: SaveCompatibility::ValidationPending,
                 observed_metadata: Some(metadata),
                 fingerprint: None,
@@ -682,7 +717,6 @@ fn validate_loadable_path(
     };
     CatalogValidationOutcome {
         path,
-        source_compatibility,
         compatibility,
         observed_metadata: Some(after_metadata),
         fingerprint: stable_fingerprint,
@@ -1030,6 +1064,190 @@ mod tests {
             classify_backup_result(vec![0], load_from_bytes(&[0])),
             RecoveryBackup::Corrupt
         ));
+    }
+
+    #[test]
+    fn stale_retry_preserves_queued_current_header_classification() {
+        use std::collections::VecDeque;
+
+        let dir = std::env::temp_dir().join(format!(
+            "factory-stale-retry-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let historical =
+            include_bytes!("../../../factory_sim/tests/fixtures/save-v57-sanitized.factsim");
+        fs::write(&path, historical).unwrap();
+        let mut open_a = fs::File::open(&path).unwrap();
+        let metadata_a = save_file_metadata_fingerprint(&open_a);
+        let fingerprint_a = save_file_fingerprint(&mut open_a, metadata_a.clone()).unwrap();
+        drop(open_a);
+
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        let metadata_b = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
+        assert_ne!(
+            metadata_a, metadata_b,
+            "replacement should change file identity for the test"
+        );
+        let current_hash =
+            factory_sim::prototype_hash(&factory_data::PrototypeCatalog::load_base().unwrap());
+        assert_eq!(
+            inspect_file(&path, &SaveKind::Quicksave, current_hash).compatibility,
+            SaveCompatibility::Compatible,
+            "replacement bytes should classify as current format"
+        );
+
+        let migratable = SaveCompatibility::MigratableSaveFormat {
+            found: factory_sim::OLDEST_SUPPORTED_SAVE_VERSION,
+            current: factory_sim::SAVE_VERSION,
+        };
+        let stale = CatalogValidationOutcome {
+            path: path.clone(),
+            compatibility: migratable.clone(),
+            observed_metadata: Some(metadata_a.clone()),
+            fingerprint: Some(fingerprint_a),
+            attempt: 0,
+        };
+        // Simulate the old worker finishing after the replacement + refresh.
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: crate::save_load::SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    crate::save_load::SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            validation_queue: VecDeque::from([CatalogValidationRequest {
+                path: path.clone(),
+                compatibility: SaveCompatibility::Compatible,
+                metadata: metadata_b.clone(),
+                attempt: 0,
+            }]),
+            validation_jobs: vec![CatalogValidationJob {
+                path: path.clone(),
+                metadata: metadata_a,
+                handle: thread::spawn(|| stale),
+            }],
+        };
+
+        drain_validation_jobs(&mut catalog);
+
+        assert_eq!(catalog.validation_jobs.len(), 0);
+        assert!(catalog.validation_queue.is_empty());
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::Compatible,
+            "stale v57 retry must not publish Migratable for the replaced v58 file"
+        );
+        assert_eq!(
+            catalog
+                .validation_cache
+                .get(&path)
+                .map(|cached| cached.compatibility.clone()),
+            Some(SaveCompatibility::Compatible)
+        );
+        assert_eq!(
+            catalog.validation_cache[&path].fingerprint.metadata,
+            metadata_b
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stale_retry_recomputes_current_header_without_queued_request() {
+        let dir = std::env::temp_dir().join(format!(
+            "factory-stale-retry-fresh-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let historical =
+            include_bytes!("../../../factory_sim/tests/fixtures/save-v57-sanitized.factsim");
+        fs::write(&path, historical).unwrap();
+        let mut open_a = fs::File::open(&path).unwrap();
+        let metadata_a = save_file_metadata_fingerprint(&open_a);
+        let fingerprint_a = save_file_fingerprint(&mut open_a, metadata_a.clone()).unwrap();
+        drop(open_a);
+
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        let metadata_b = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
+
+        let migratable = SaveCompatibility::MigratableSaveFormat {
+            found: factory_sim::OLDEST_SUPPORTED_SAVE_VERSION,
+            current: factory_sim::SAVE_VERSION,
+        };
+        let stale = CatalogValidationOutcome {
+            path: path.clone(),
+            compatibility: migratable,
+            observed_metadata: Some(metadata_a.clone()),
+            fingerprint: Some(fingerprint_a),
+            attempt: 0,
+        };
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: crate::save_load::SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    crate::save_load::SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: vec![CatalogValidationJob {
+                path: path.clone(),
+                metadata: metadata_a,
+                handle: thread::spawn(|| stale),
+            }],
+        };
+
+        drain_validation_jobs(&mut catalog);
+
+        assert_eq!(catalog.validation_jobs.len(), 0);
+        assert!(catalog.validation_queue.is_empty());
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::Compatible,
+            "retry after replacement must use the current header, not the stale source"
+        );
+        assert_eq!(
+            catalog.validation_cache[&path].fingerprint.metadata,
+            metadata_b
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn drain_validation_jobs(catalog: &mut SaveCatalog) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !catalog.validation_jobs.is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "validation job did not finish"
+            );
+            poll_catalog_validation_jobs_inner(catalog);
+            if !catalog.validation_jobs.is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
     }
 
     #[test]
