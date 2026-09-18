@@ -1,11 +1,12 @@
 //! Record registry: stable keys, ownership, and key helpers.
 //!
-//! The operational source of truth is the handler table in [`super::groups`]:
-//! one row per global record carrying its key, ownership, requiredness, and
-//! encode/measure/decode handlers. [`RECORD_REGISTRY`] projects that table
-//! into plain metadata for tools and documentation. Adding a record means
-//! adding one handler row plus encode/decode helpers in the owning subsystem
-//! module — never editing scattered matches.
+//! The [`RECORD_REGISTRY`] literal below is the single source for keys,
+//! ownership, and requiredness. The operational handler table in
+//! [`super::groups`] borrows one descriptor per row and attaches the
+//! encode/measure/decode handlers, so dispatch and manifest flags resolve
+//! through these descriptors without copying them. Adding a record means
+//! adding one descriptor plus one handler row plus encode/decode helpers in
+//! the owning subsystem module — never editing scattered matches.
 //!
 //! Terrain travels partitioned by world chunk (`chunk/<x>/<y>` records) while
 //! global and cross-chunk systems keep explicit global ownership with stable
@@ -56,45 +57,113 @@ pub(crate) const KEY_ENVIRONMENT: &str = "environment";
 /// subsystem that owns its bytes, whether a generation is complete without
 /// it, and what it carries.
 ///
-/// This is a metadata view, not a second mapping: [`RECORD_REGISTRY`] is
-/// projected from the operational [`super::groups::RECORD_HANDLERS`] table,
-/// which additionally carries each record's encode/measure/decode handlers.
-/// Key enumeration, dispatch, and the manifest `required` flags all resolve
-/// through the handler table, so this view cannot drift from wire behavior.
+/// This metadata is operational, not documentary: the handler table in
+/// [`super::groups`] borrows one descriptor per row, so the `required` flag
+/// below controls the manifest flags on the wire (see `record_required`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RecordDescriptor {
+pub(crate) struct RecordDescriptor {
     pub key: &'static str,
     pub owner: &'static str,
     pub required: bool,
     pub description: &'static str,
 }
 
-/// Global records that must all be present for one complete generation,
-/// projected from the operational handler table (see [`RecordDescriptor`]).
+/// Global records that must all be present for one complete generation.
 ///
-/// Order follows the handler table, which follows the format specification
-/// for readability; the manifest order on the wire is the sorted key order
-/// (see `validate_index_order`).
-pub const RECORD_REGISTRY: [RecordDescriptor; super::groups::RECORD_HANDLERS.len()] = {
-    let mut registry = [RecordDescriptor {
-        key: "",
-        owner: "",
-        required: false,
-        description: "",
-    }; super::groups::RECORD_HANDLERS.len()];
-    let mut index = 0;
-    while index < super::groups::RECORD_HANDLERS.len() {
-        let handler = &super::groups::RECORD_HANDLERS[index];
-        registry[index] = RecordDescriptor {
-            key: handler.key,
-            owner: handler.owner,
-            required: handler.required,
-            description: handler.description,
-        };
-        index += 1;
-    }
-    registry
-};
+/// This literal table is the single source for keys, ownership, and
+/// requiredness. The operational handler table in [`super::groups`] borrows
+/// one descriptor per row and attaches the encode/measure/decode handlers,
+/// so key enumeration, dispatch, and the manifest `required` flags all
+/// resolve through these descriptors without copying them.
+///
+/// Order follows the format specification for readability; the manifest
+/// order on the wire is the sorted key order (see `validate_index_order`).
+pub(crate) const RECORD_REGISTRY: [RecordDescriptor; 14] = [
+    RecordDescriptor {
+        key: KEY_CORE,
+        owner: "simulation core",
+        required: true,
+        description: "tick, world seed, day/night phase, config, topology/chunk/walkability revisions",
+    },
+    RecordDescriptor {
+        key: KEY_PROTOTYPES,
+        owner: "global data identity",
+        required: true,
+        description: "prototype catalog",
+    },
+    RecordDescriptor {
+        key: KEY_CHART,
+        owner: "global",
+        required: true,
+        description: "chart state",
+    },
+    RecordDescriptor {
+        key: KEY_CHUNK_QUEUE,
+        owner: "global",
+        required: true,
+        description: "pending chunk-generation requests",
+    },
+    RecordDescriptor {
+        key: KEY_STATISTICS,
+        owner: "global",
+        required: true,
+        description: "item/fluid/power statistics, launches, deaths",
+    },
+    RecordDescriptor {
+        key: KEY_ENTITIES,
+        owner: "global entity ownership",
+        required: true,
+        description: "entity store",
+    },
+    RecordDescriptor {
+        key: KEY_CONSTRUCTION,
+        owner: "global",
+        required: true,
+        description: "construction state",
+    },
+    RecordDescriptor {
+        key: KEY_PLAYER,
+        owner: "global",
+        required: true,
+        description: "player, equipment, weapon, combat, inventory, corpses, mining, crafting, onboarding, research",
+    },
+    RecordDescriptor {
+        key: KEY_POWER,
+        owner: "global network ownership",
+        required: true,
+        description: "power summary, networks, entity statuses",
+    },
+    RecordDescriptor {
+        key: KEY_FLUIDS,
+        owner: "global network ownership",
+        required: true,
+        description: "fluid networks, invalidation flag",
+    },
+    RecordDescriptor {
+        key: KEY_HEAT,
+        owner: "global network ownership",
+        required: true,
+        description: "heat networks, invalidation flag",
+    },
+    RecordDescriptor {
+        key: KEY_ROBOTS,
+        owner: "cross-chunk ownership",
+        required: true,
+        description: "robot networks, logistic work, flights",
+    },
+    RecordDescriptor {
+        key: KEY_TRAINS,
+        owner: "cross-chunk ownership",
+        required: true,
+        description: "rolling stock, pending route searches with frontiers",
+    },
+    RecordDescriptor {
+        key: KEY_ENVIRONMENT,
+        owner: "cross-chunk ownership",
+        required: true,
+        description: "pollution, enemies, transport cache, navigation, targeting",
+    },
+];
 
 const _: () = assert!(
     RECORD_HEADER_SIZE == 84,
@@ -163,27 +232,35 @@ mod tests {
     }
 
     #[test]
-    fn registry_mirrors_the_operational_handler_table() {
-        // The registry is projected from the handler table, so this pins the
-        // projection instead of comparing the table against itself: same
-        // length, same keys in the same order, unique, and metadata intact.
+    fn every_registry_row_has_exactly_one_handler() {
+        // Handler rows borrow registry entries by index, so only two
+        // failures are possible here: a wrong or duplicated index (caught by
+        // the coverage below) and a duplicated key (caught by the uniqueness
+        // check). Length and field equality would merely re-assert the
+        // borrow itself.
         let handlers = &super::super::groups::RECORD_HANDLERS;
-        assert_eq!(
-            RECORD_REGISTRY.len(),
-            handlers.len(),
-            "registry must cover every handler row"
+        let mut seen = vec![false; RECORD_REGISTRY.len()];
+        for handler in handlers.iter() {
+            let index = RECORD_REGISTRY
+                .iter()
+                .position(|entry| entry.key == handler.descriptor.key)
+                .expect("handler must reference a registry key");
+            assert!(
+                !seen[index],
+                "duplicate handler for {:?}",
+                handler.descriptor.key
+            );
+            seen[index] = true;
+        }
+        assert!(
+            seen.iter().all(|&seen| seen),
+            "every registry row needs exactly one handler"
         );
         let mut keys: Vec<&str> = RECORD_REGISTRY.iter().map(|entry| entry.key).collect();
         let before = keys.len();
         keys.sort_unstable();
         keys.dedup();
         assert_eq!(keys.len(), before, "registry keys must be unique");
-        for (descriptor, handler) in RECORD_REGISTRY.iter().zip(handlers.iter()) {
-            assert_eq!(descriptor.key, handler.key);
-            assert_eq!(descriptor.owner, handler.owner);
-            assert_eq!(descriptor.required, handler.required);
-            assert_eq!(descriptor.description, handler.description);
-        }
     }
 
     #[test]

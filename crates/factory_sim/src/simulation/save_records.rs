@@ -52,7 +52,7 @@ use groups::{
 };
 pub use registry::{
     MAX_RECORD_COUNT, RECORD_CODEC_IDENTITY, RECORD_FORMAT_VERSION, RECORD_HEADER_SIZE,
-    RECORD_MAGIC, RECORD_REGISTRY, RecordDescriptor,
+    RECORD_MAGIC,
 };
 pub(crate) use registry::{RECORD_SCHEMA_VERSION, record_error};
 #[cfg(test)]
