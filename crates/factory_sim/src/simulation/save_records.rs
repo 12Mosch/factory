@@ -510,107 +510,344 @@ fn checksum(bytes: &[u8]) -> [u8; 32] {
     *blake3::hash(bytes).as_bytes()
 }
 
-/// Lists every record key for one snapshot generation: the 14 global keys
-/// plus one key per world chunk. Chunks become one record per world chunk;
-/// all other durable state keeps explicit global ownership.
-fn all_group_keys(state: &SimulationSnapshotOwned) -> Vec<String> {
-    let mut keys = Vec::with_capacity(REQUIRED_GLOBAL_KEYS.len() + state.chunks.len());
-    keys.extend(REQUIRED_GLOBAL_KEYS.iter().map(|key| key.to_string()));
-    keys.extend(state.chunks.keys().map(|coord| chunk_key(*coord)));
-    keys
+/// Borrowed view of one generation's durable state.
+///
+/// Construct from the live simulation for pre-capture size checks or from a
+/// captured snapshot for encoding; both roots expose the same fields, so the
+/// group list and tuple order exist exactly once. Tuples serialize
+/// field-by-field in declaration order, matching the tuple aliases above, so
+/// neither sizing nor encoding clones a subsystem.
+struct BorrowedRecordFields<'a> {
+    tick: u64,
+    world_seed: u64,
+    day_night_cycle: &'a Option<DayNightCycleState>,
+    config: &'a SimulationConfig,
+    entity_topology_revision: u64,
+    world_chunk_revision: u64,
+    world_walkability_revision: u64,
+    prototypes: &'a PrototypeCatalog,
+    chart: &'a ChartState,
+    chunk_generation_queue: &'a ChunkGenerationQueue,
+    item_statistics: &'a ItemStatistics,
+    fluid_statistics: &'a FluidStatistics,
+    power_statistics: &'a PowerStatistics,
+    rockets_launched: u64,
+    player_deaths: u64,
+    entities: &'a EntityStore,
+    construction: &'a ConstructionState,
+    player: &'a PlayerState,
+    player_equipment: &'a PlayerEquipmentState,
+    player_weapon: &'a PlayerWeaponState,
+    delayed_combat: &'a DelayedCombatState,
+    player_inventory: &'a Inventory,
+    corpses: &'a BTreeMap<u64, PlayerCorpse>,
+    manual_mining_progress: &'a Option<ManualMiningProgress>,
+    crafting_queue: &'a CraftingQueue,
+    onboarding_progress: &'a OnboardingProgress,
+    research: &'a ResearchState,
+    power_summary: &'a PowerSummary,
+    power_networks: &'a Vec<PowerNetworkSnapshot>,
+    entity_power_statuses: &'a DenseEntityMap<EntityPowerStatus>,
+    fluid_networks: &'a Vec<FluidNetworkSnapshot>,
+    fluid_topology_dirty: bool,
+    heat_networks: &'a Vec<HeatNetworkSnapshot>,
+    heat_topology_dirty: bool,
+    robot_networks: &'a Vec<RobotNetworkSnapshot>,
+    robot_logistic_work: &'a RobotLogisticWorkState,
+    robot_flights: &'a RobotFlightSubsystem,
+    rolling_stock: &'a RollingStockSubsystem,
+    pending_train_route_searches: &'a BTreeMap<TrainId, rolling_stock_ops::PendingTrainRouteSearch>,
+    pollution: &'a PollutionState,
+    enemies: &'a EnemySubsystem,
+    transport: &'a TransportLaneCache,
+    enemy_navigation: &'a enemy::EnemyNavigation,
+    attack_targets: &'a enemy::AttackTargetCache,
+    chunks: &'a BTreeMap<ChunkCoord, Chunk>,
 }
 
-/// Encodes one record payload directly from borrowed snapshot state.
-///
-/// Tuples serialize field-by-field in declaration order, matching the tuple
-/// aliases above, so no snapshot subsystem is cloned to encode.
+/// Applies one bincode operation to the borrowed tuple for `key`, so sizing
+/// and encoding share a single group list and tuple order.
+macro_rules! with_group_value {
+    ($fields:ident, $key:ident, $limits:ident, |$value:ident| $operation:expr) => {{
+        match $key {
+            KEY_CORE => {
+                let $value = &(
+                    $fields.tick,
+                    $fields.world_seed,
+                    $fields.day_night_cycle,
+                    $fields.config,
+                    $fields.entity_topology_revision,
+                    $fields.world_chunk_revision,
+                    $fields.world_walkability_revision,
+                );
+                $operation
+            }
+            KEY_PROTOTYPES => {
+                let $value = $fields.prototypes;
+                $operation
+            }
+            KEY_CHART => {
+                let $value = $fields.chart;
+                $operation
+            }
+            KEY_CHUNK_QUEUE => {
+                let $value = $fields.chunk_generation_queue;
+                $operation
+            }
+            KEY_STATISTICS => {
+                let $value = &(
+                    $fields.item_statistics,
+                    $fields.fluid_statistics,
+                    $fields.power_statistics,
+                    $fields.rockets_launched,
+                    $fields.player_deaths,
+                );
+                $operation
+            }
+            KEY_ENTITIES => {
+                let $value = $fields.entities;
+                $operation
+            }
+            KEY_CONSTRUCTION => {
+                let $value = $fields.construction;
+                $operation
+            }
+            KEY_PLAYER => {
+                let $value = &(
+                    $fields.player,
+                    $fields.player_equipment,
+                    $fields.player_weapon,
+                    $fields.delayed_combat,
+                    $fields.player_inventory,
+                    $fields.corpses,
+                    $fields.manual_mining_progress,
+                    $fields.crafting_queue,
+                    $fields.onboarding_progress,
+                    $fields.research,
+                );
+                $operation
+            }
+            KEY_POWER => {
+                let $value = &(
+                    $fields.power_summary,
+                    $fields.power_networks,
+                    $fields.entity_power_statuses,
+                );
+                $operation
+            }
+            KEY_FLUIDS => {
+                let $value = &($fields.fluid_networks, $fields.fluid_topology_dirty);
+                $operation
+            }
+            KEY_HEAT => {
+                let $value = &($fields.heat_networks, $fields.heat_topology_dirty);
+                $operation
+            }
+            KEY_ROBOTS => {
+                let $value = &(
+                    $fields.robot_networks,
+                    $fields.robot_logistic_work,
+                    $fields.robot_flights,
+                );
+                $operation
+            }
+            KEY_TRAINS => {
+                let $value = &($fields.rolling_stock, $fields.pending_train_route_searches);
+                $operation
+            }
+            KEY_ENVIRONMENT => {
+                let $value = &(
+                    $fields.pollution,
+                    $fields.enemies,
+                    $fields.transport,
+                    $fields.enemy_navigation,
+                    $fields.attack_targets,
+                );
+                $operation
+            }
+            _ => match parse_chunk_key($key).and_then(|coord| $fields.chunks.get(&coord)) {
+                Some(chunk) => {
+                    let $value = chunk;
+                    $operation
+                }
+                None => Err(record_error(format!(
+                    "record codec has no payload for key {:?}",
+                    $key
+                ))),
+            },
+        }
+    }};
+}
+impl<'a> BorrowedRecordFields<'a> {
+    fn from_simulation(sim: &'a Simulation) -> Self {
+        Self {
+            tick: sim.tick,
+            world_seed: sim.world.seed,
+            day_night_cycle: &sim.day_night_cycle,
+            config: &sim.config,
+            entity_topology_revision: sim.entity_topology_revision,
+            world_chunk_revision: sim.world.chunk_revision,
+            world_walkability_revision: sim.world.walkability_revision,
+            prototypes: &sim.world.prototypes,
+            chart: &sim.chart,
+            chunk_generation_queue: &sim.chunk_generation_queue,
+            item_statistics: &sim.statistics.items,
+            fluid_statistics: &sim.statistics.fluids,
+            power_statistics: &sim.statistics.power,
+            rockets_launched: sim.statistics.rockets_launched,
+            player_deaths: sim.statistics.player_deaths,
+            entities: &sim.entities,
+            construction: &sim.construction,
+            player: &sim.player,
+            player_equipment: &sim.player_equipment,
+            player_weapon: &sim.player_weapon,
+            delayed_combat: &sim.delayed_combat,
+            player_inventory: &sim.player_inventory,
+            corpses: &sim.corpses,
+            manual_mining_progress: &sim.manual_mining_progress,
+            crafting_queue: &sim.crafting_queue,
+            onboarding_progress: &sim.onboarding_progress,
+            research: &sim.research,
+            power_summary: &sim.power.summary,
+            power_networks: &sim.power.networks,
+            entity_power_statuses: &sim.power.entity_statuses,
+            fluid_networks: &sim.fluids.networks,
+            fluid_topology_dirty: sim.fluids.topology_dirty,
+            heat_networks: &sim.heat.networks,
+            heat_topology_dirty: sim.heat.topology_dirty,
+            robot_networks: &sim.robots.networks,
+            robot_logistic_work: &sim.robots.logistic_work,
+            robot_flights: &sim.robot_flights,
+            rolling_stock: &sim.rolling_stock,
+            pending_train_route_searches: &sim.train_routing.pending,
+            pollution: &sim.pollution,
+            enemies: &sim.enemies,
+            transport: &sim.transport,
+            enemy_navigation: &sim.enemy_navigation,
+            attack_targets: &sim.attack_targets,
+            chunks: &sim.world.chunks,
+        }
+    }
+
+    fn from_snapshot(state: &'a SimulationSnapshotOwned) -> Self {
+        Self {
+            tick: state.tick,
+            world_seed: state.world_seed,
+            day_night_cycle: &state.day_night_cycle,
+            config: &state.config,
+            entity_topology_revision: state.entity_topology_revision,
+            world_chunk_revision: state.world_chunk_revision,
+            world_walkability_revision: state.world_walkability_revision,
+            prototypes: &state.prototypes,
+            chart: &state.chart,
+            chunk_generation_queue: &state.chunk_generation_queue,
+            item_statistics: &state.item_statistics,
+            fluid_statistics: &state.fluid_statistics,
+            power_statistics: &state.power_statistics,
+            rockets_launched: state.rockets_launched,
+            player_deaths: state.player_deaths,
+            entities: &state.entities,
+            construction: &state.construction,
+            player: &state.player,
+            player_equipment: &state.player_equipment,
+            player_weapon: &state.player_weapon,
+            delayed_combat: &state.delayed_combat,
+            player_inventory: &state.player_inventory,
+            corpses: &state.corpses,
+            manual_mining_progress: &state.manual_mining_progress,
+            crafting_queue: &state.crafting_queue,
+            onboarding_progress: &state.onboarding_progress,
+            research: &state.research,
+            power_summary: &state.power_summary,
+            power_networks: &state.power_networks,
+            entity_power_statuses: &state.entity_power_statuses,
+            fluid_networks: &state.fluid_networks,
+            fluid_topology_dirty: state.fluid_topology_dirty,
+            heat_networks: &state.heat_networks,
+            heat_topology_dirty: state.heat_topology_dirty,
+            robot_networks: &state.robot_networks,
+            robot_logistic_work: &state.robot_logistic_work,
+            robot_flights: &state.robot_flights,
+            rolling_stock: &state.rolling_stock,
+            pending_train_route_searches: &state.pending_train_route_searches,
+            pollution: &state.pollution,
+            enemies: &state.enemies,
+            transport: &state.transport,
+            enemy_navigation: &state.enemy_navigation,
+            attack_targets: &state.attack_targets,
+            chunks: &state.chunks,
+        }
+    }
+
+    /// Lists every record key: the 14 global keys plus one per world chunk.
+    fn keys(&self) -> Vec<String> {
+        let mut keys = Vec::with_capacity(REQUIRED_GLOBAL_KEYS.len() + self.chunks.len());
+        keys.extend(REQUIRED_GLOBAL_KEYS.iter().map(|key| key.to_string()));
+        keys.extend(self.chunks.keys().map(|coord| chunk_key(*coord)));
+        keys
+    }
+
+    fn encode(&self, key: &str, limits: crate::SaveLimits) -> Result<Vec<u8>, SaveLoadError> {
+        with_group_value!(self, key, limits, |value| encode_group(value, limits))
+    }
+
+    /// Measures one record's encoded size without allocating its bytes.
+    fn encoded_size(&self, key: &str, limits: crate::SaveLimits) -> Result<u64, SaveLoadError> {
+        with_group_value!(self, key, limits, |value| {
+            let bound = limits.max_record_bytes.min(limits.max_decoded_bytes);
+            bincode::DefaultOptions::new()
+                .with_fixint_encoding()
+                .with_limit(bound)
+                .serialized_size(value)
+                .map_err(SaveLoadError::from)
+        })
+    }
+}
+
+/// Bounds every planned record's encoded size from borrowed state, before
+/// any cloning: per-record, aggregate decoded, and framed artifact totals.
+/// An oversized world fails here, while the simulation read lock can be
+/// released without duplicating the world first.
+fn preflight_record_sizes(
+    fields: &BorrowedRecordFields<'_>,
+    limits: crate::SaveLimits,
+) -> Result<(), SaveLoadError> {
+    let keys = fields.keys();
+    if keys.len() > MAX_RECORD_COUNT as usize
+        || u64::try_from(keys.len()).unwrap_or(u64::MAX) > limits.max_collection_entries
+    {
+        return Err(SaveLoadError::TooLarge);
+    }
+    let mut decoded_total = 0u64;
+    for key in &keys {
+        let size = fields.encoded_size(key, limits)?;
+        decoded_total = decoded_total
+            .checked_add(size)
+            .ok_or(SaveLoadError::TooLarge)?;
+    }
+    if decoded_total > limits.max_decoded_bytes {
+        return Err(SaveLoadError::TooLarge);
+    }
+    // Entry framing is 72 bytes plus the key, so the complete artifact total
+    // is known without encoding anything.
+    let manifest_len: u64 = keys.iter().map(|key| 72 + key.len() as u64).sum();
+    let total = (RECORD_HEADER_SIZE as u64)
+        .checked_add(manifest_len)
+        .and_then(|framing| framing.checked_add(decoded_total))
+        .ok_or(SaveLoadError::TooLarge)?;
+    if total > limits.max_encoded_bytes {
+        return Err(SaveLoadError::TooLarge);
+    }
+    Ok(())
+}
+
+/// Encodes one record payload from a captured snapshot.
 fn encode_group_by_key(
     state: &SimulationSnapshotOwned,
     key: &str,
     limits: crate::SaveLimits,
 ) -> Result<Vec<u8>, SaveLoadError> {
-    match key {
-        KEY_CORE => encode_group(
-            &(
-                state.tick,
-                state.world_seed,
-                &state.day_night_cycle,
-                &state.config,
-                state.entity_topology_revision,
-                state.world_chunk_revision,
-                state.world_walkability_revision,
-            ),
-            limits,
-        ),
-        KEY_PROTOTYPES => encode_group(&state.prototypes, limits),
-        KEY_CHART => encode_group(&state.chart, limits),
-        KEY_CHUNK_QUEUE => encode_group(&state.chunk_generation_queue, limits),
-        KEY_STATISTICS => encode_group(
-            &(
-                &state.item_statistics,
-                &state.fluid_statistics,
-                &state.power_statistics,
-                state.rockets_launched,
-                state.player_deaths,
-            ),
-            limits,
-        ),
-        KEY_ENTITIES => encode_group(&state.entities, limits),
-        KEY_CONSTRUCTION => encode_group(&state.construction, limits),
-        KEY_PLAYER => encode_group(
-            &(
-                &state.player,
-                &state.player_equipment,
-                &state.player_weapon,
-                &state.delayed_combat,
-                &state.player_inventory,
-                &state.corpses,
-                &state.manual_mining_progress,
-                &state.crafting_queue,
-                &state.onboarding_progress,
-                &state.research,
-            ),
-            limits,
-        ),
-        KEY_POWER => encode_group(
-            &(
-                &state.power_summary,
-                &state.power_networks,
-                &state.entity_power_statuses,
-            ),
-            limits,
-        ),
-        KEY_FLUIDS => encode_group(&(&state.fluid_networks, state.fluid_topology_dirty), limits),
-        KEY_HEAT => encode_group(&(&state.heat_networks, state.heat_topology_dirty), limits),
-        KEY_ROBOTS => encode_group(
-            &(
-                &state.robot_networks,
-                &state.robot_logistic_work,
-                &state.robot_flights,
-            ),
-            limits,
-        ),
-        KEY_TRAINS => encode_group(
-            &(&state.rolling_stock, &state.pending_train_route_searches),
-            limits,
-        ),
-        KEY_ENVIRONMENT => encode_group(
-            &(
-                &state.pollution,
-                &state.enemies,
-                &state.transport,
-                &state.enemy_navigation,
-                &state.attack_targets,
-            ),
-            limits,
-        ),
-        _ => match parse_chunk_key(key).and_then(|coord| state.chunks.get(&coord)) {
-            Some(chunk) => encode_group(chunk, limits),
-            None => Err(record_error(format!(
-                "record encoder has no payload for key {key:?}"
-            ))),
-        },
-    }
+    BorrowedRecordFields::from_snapshot(state).encode(key, limits)
 }
 
 /// Serializes a captured immutable snapshot as an indexed record container.
@@ -638,7 +875,8 @@ pub fn save_snapshot_records_to_writer_with_limits(
 ) -> Result<(), SaveLoadError> {
     let state = snapshot.snapshot_state();
     let prototype_hash_value = prototype_hash(&state.prototypes);
-    let keys = all_group_keys(state);
+    let fields = BorrowedRecordFields::from_snapshot(state);
+    let keys = fields.keys();
     if keys.len() > MAX_RECORD_COUNT as usize
         || u64::try_from(keys.len()).unwrap_or(u64::MAX) > limits.max_collection_entries
     {
@@ -807,14 +1045,7 @@ pub fn try_capture_record_snapshot_with_limits(
     limits: crate::SaveLimits,
 ) -> Result<SimulationSaveSnapshot, SaveLoadError> {
     super::save::check_borrowed_snapshot_collections(sim, limits)?;
-    if sim.world.chunks.len() + REQUIRED_GLOBAL_KEYS.len() > MAX_RECORD_COUNT as usize {
-        return Err(SaveLoadError::TooLarge);
-    }
-    if u64::try_from(sim.world.chunks.len() + REQUIRED_GLOBAL_KEYS.len()).unwrap_or(u64::MAX)
-        > limits.max_collection_entries
-    {
-        return Err(SaveLoadError::TooLarge);
-    }
+    preflight_record_sizes(&BorrowedRecordFields::from_simulation(sim), limits)?;
     Ok(capture_save_snapshot_in_generation(sim, world_generation))
 }
 
@@ -1336,6 +1567,66 @@ pub fn extract_record_bytes_with_limits(
     Ok(payload.to_vec())
 }
 
+/// Extracts one record payload from a stream without retaining the file.
+///
+/// Only the header, manifest, and the target payload are read: records after
+/// the target are never touched, and no trailing-length check runs, so tools
+/// can range-read one indexed record without holding the whole save. The
+/// manifest and the payload checksum are still fully verified.
+pub fn extract_record_from_reader(
+    reader: &mut impl Read,
+    key: &str,
+) -> Result<Vec<u8>, SaveLoadError> {
+    extract_record_from_reader_with_limits(reader, key, crate::SaveLimits::default())
+}
+
+/// Extracts one record payload from a stream with explicit limits.
+pub fn extract_record_from_reader_with_limits(
+    reader: &mut impl Read,
+    key: &str,
+    limits: crate::SaveLimits,
+) -> Result<Vec<u8>, SaveLoadError> {
+    let header_bytes = read_exact_limited(reader, RECORD_HEADER_SIZE as u64, "record header")?;
+    let header = parse_header(&header_bytes)?;
+    validate_header(&header, limits)?;
+    let manifest_bytes = read_exact_limited(reader, u64::from(header.index_len), "record index")?;
+    if checksum(&manifest_bytes) != header.index_checksum {
+        return Err(record_error("record index checksum mismatch"));
+    }
+    let entries = parse_entries(&manifest_bytes, header.record_count, limits)?;
+    validate_index_order(&entries)?;
+    let data_start = (RECORD_HEADER_SIZE as u64)
+        .checked_add(u64::from(header.index_len))
+        .ok_or_else(|| record_error("record offsets overflow"))?;
+    validate_index_layout(&entries, data_start, limits)?;
+    let entry = entries
+        .iter()
+        .find(|entry| entry.key == key)
+        .ok_or_else(|| record_error(format!("record container has no record {key:?}")))?;
+    // Discard every byte before the target; records are packed contiguously
+    // in manifest order, so this never skips backwards.
+    let mut skip = entry
+        .offset
+        .checked_sub(data_start)
+        .ok_or_else(|| record_error("record offsets overflow"))?;
+    let mut discard = [0; 8192];
+    while skip > 0 {
+        let count = usize::try_from(skip.min(discard.len() as u64))
+            .expect("discard length is bounded by the buffer length");
+        match reader.read(&mut discard[..count]) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(io_save_error(error)),
+            Ok(0) => return Err(record_error(format!("record {key:?} is truncated"))),
+            Ok(read) => skip -= read as u64,
+        }
+    }
+    let payload = read_exact_limited(reader, entry.encoded_len, &format!("record {key:?}"))?;
+    if checksum(&payload) != entry.checksum {
+        return Err(record_error(format!("record {key:?} checksum mismatch")));
+    }
+    Ok(payload)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1626,6 +1917,31 @@ mod tests {
     }
 
     #[test]
+    fn streaming_extract_reads_one_record_without_full_file() {
+        let sim = record_test_sim();
+        let bytes = save_records_to_bytes(&sim).unwrap();
+        // Full-file equivalence with the slice API.
+        let via_reader =
+            extract_record_from_reader(&mut &bytes[..], "core").expect("core extracts");
+        assert_eq!(via_reader, extract_record_bytes(&bytes, "core").unwrap());
+        // A file truncated right after the target record still yields it:
+        // selective tools never retain the whole save.
+        let (_, parsed) = parse_test_file(&bytes);
+        let (entry, _) = parsed
+            .iter()
+            .find(|(entry, _)| entry.key == "core")
+            .expect("core exists");
+        let end = entry.offset as usize + entry.encoded_len as usize;
+        let partial = &bytes[..end];
+        assert!(load_from_bytes(partial).is_err());
+        let got = extract_record_from_reader(&mut &partial[..], "core").expect("prefix extracts");
+        assert_eq!(got, via_reader);
+        assert!(extract_record_from_reader(&mut &bytes[..], "no-such-record").is_err());
+        let mut empty = &[][..];
+        assert!(extract_record_from_reader(&mut empty, "core").is_err());
+    }
+
+    #[test]
     fn index_inspection_verifies_physical_file_length() {
         let sim = record_test_sim();
         let bytes = save_records_to_bytes(&sim).unwrap();
@@ -1843,6 +2159,23 @@ mod tests {
             .collect();
         let rebuilt = rebuild_test_file(&header, records, true);
         assert!(load_from_bytes(&rebuilt).is_err());
+    }
+
+    #[test]
+    fn record_capture_enforces_byte_budgets() {
+        let sim = record_test_sim();
+        let tight = SaveLimits {
+            max_record_bytes: 1,
+            ..SaveLimits::default()
+        };
+        assert!(matches!(
+            try_capture_record_snapshot_with_limits(&sim, 0, tight),
+            Err(SaveLoadError::TooLarge)
+        ));
+        let snapshot = try_capture_record_snapshot_with_limits(&sim, 4, SaveLimits::default())
+            .expect("adequate budgets capture");
+        assert_eq!(snapshot.identity().world_generation, 4);
+        assert_eq!(snapshot.tick_count(), sim.tick_count());
     }
 
     #[test]

@@ -1074,7 +1074,8 @@ pub use self::save::{
 pub use self::save_records::{
     MAX_RECORD_COUNT, RECORD_CODEC_IDENTITY, RECORD_FORMAT_VERSION, RECORD_HEADER_SIZE,
     RECORD_MAGIC, RecordIndex, RecordSummary, extract_record_bytes,
-    extract_record_bytes_with_limits, inspect_record_index, inspect_record_index_with_limits,
+    extract_record_bytes_with_limits, extract_record_from_reader,
+    extract_record_from_reader_with_limits, inspect_record_index, inspect_record_index_with_limits,
     save_records_to_bytes, save_records_to_bytes_with_limits, save_records_to_writer,
     save_records_to_writer_with_limits, save_snapshot_records_to_bytes,
     save_snapshot_records_to_bytes_with_limits, save_snapshot_records_to_writer,

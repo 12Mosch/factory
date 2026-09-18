@@ -167,22 +167,29 @@ count) fails before cloning.
 
 The application save pipeline writes record payloads end to end.
 Background jobs capture with the record-aware entry point
-(`try_capture_record_snapshot`), whose borrowed preflight checks collection
-counts and the chunk-derived record count without cloning and never runs
-the monolithic size pass, then encode through the two-pass record writer
-(peak encoding memory is one record payload plus the manifest, at the cost
-of encoding twice). The container keeps its existing guarantees around
-those bytes — streaming writes to a temporary file, `sync_all`, atomic
-installation preserving a rollback backup, and catalog validation before
-the world is replaced. The payload allowance is the artifact budget minus
-the outer container overhead, so the record header and manifest framing
-cannot push a within-budget generation over the edge; the writer is scoped
-to that allowance and its pre-write total check guarantees fit before any
-byte reaches the file. The outer magic and metadata framing are unchanged,
-and the loader dispatches on the inner magic. A copied or exported record
-file loads without external references, so plain file copy is the portable
-export. Loading validates before mutating the active world, and failed work
-leaves the previous save intact.
+(`try_capture_record_snapshot`): a borrowed collection walk plus a
+per-record serialized-size preflight over borrowed tuples bounds every
+record, the decoded total, and the framed artifact total before anything
+is cloned, and the monolithic size pass never runs — so the simulation
+read lock can be released without duplicating an unsaveable world first.
+Encoding then runs through the two-pass record writer (peak encoding memory
+is one record payload plus the manifest, at the cost of encoding twice).
+The container keeps its existing guarantees around those bytes — streaming
+writes to a temporary file, `sync_all`, atomic installation preserving a
+rollback backup, and catalog validation before the world is replaced. The
+payload allowance is the artifact budget minus the outer container
+overhead, so the record header and manifest framing cannot push a
+within-budget generation over the edge; the writer is scoped to that
+allowance and its pre-write total check guarantees fit before any byte
+reaches the file. Loading applies the same format-aware rule: the inner
+magic is peeked after the metadata, record payloads are allowed up to the
+artifact budget while monolithic payloads keep the legacy allowance, and
+the record decoder still enforces aggregate decoded and per-record limits —
+so a committed near-limit save always reopens. The outer magic and metadata
+framing are unchanged. A copied or exported record file loads without
+external references, so plain file copy is the portable export. Loading
+validates before mutating the active world, and failed work leaves the
+previous save intact.
 
 The loader dispatches on magic: `FACTSIM\0` decodes the monolithic snapshot
 (including the v57 migration path), `FACTREC\0` decodes the record
@@ -197,8 +204,11 @@ that rule applies to record payloads unchanged.
 
 `inspect_record_index` validates the header and manifest and lists every
 record without decoding payloads. `extract_record_bytes` verifies one
-record's checksum and returns its payload. Both enable chunk- or
-record-granular tools without simulating a partial world.
+record's checksum and returns its payload from a complete file, while
+`extract_record_from_reader` streams only the header, manifest, and target
+payload — records after the target are never touched — so tools can
+range-read one indexed record without retaining the whole save. All three
+enable chunk- or record-granular tools without simulating a partial world.
 
 ## Incremental reuse gate (deferred)
 

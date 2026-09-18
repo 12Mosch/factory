@@ -1,6 +1,6 @@
 use super::{SaveId, SaveKind, SaveMetadata};
 use factory_sim::{
-    SAVE_HEADER_SIZE, SaveLimits, SaveLoadError, Simulation, SimulationSaveSnapshot,
+    RECORD_MAGIC, SAVE_HEADER_SIZE, SaveLimits, SaveLoadError, Simulation, SimulationSaveSnapshot,
     load_from_reader_with_limits, save_snapshot_records_to_writer_with_limits,
 };
 use std::io::{self, BufReader, BufWriter, Read, Write};
@@ -125,13 +125,35 @@ fn encode_container_with_limits(
     Ok(bytes)
 }
 
+/// Payload allowance for an inner simulation payload: record containers
+/// carry header and manifest framing inside the payload, so they are bounded
+/// by the artifact budget, while monolithic payloads keep the legacy
+/// allowance. Unknown inner magics stay conservative.
+fn simulation_payload_allowance(
+    inner_magic: &[u8],
+    payload_offset: u64,
+    limits: SaveLimits,
+) -> u64 {
+    if inner_magic.starts_with(&RECORD_MAGIC) {
+        limits.max_encoded_bytes.saturating_sub(payload_offset)
+    } else {
+        limits
+            .max_simulation_bytes()
+            .min(limits.max_encoded_bytes.saturating_sub(payload_offset))
+    }
+}
+
 /// Decodes container metadata and returns a borrowed simulation payload.
 pub fn decode_container(bytes: &[u8]) -> Result<(SaveMetadata, &[u8]), ContainerError> {
     let payload_offset = container_payload_offset(bytes)?;
     check_size(bytes.len() as u64, SaveLimits::default().max_encoded_bytes)?;
     check_size(
         (bytes.len() - payload_offset) as u64,
-        SaveLimits::default().max_simulation_bytes(),
+        simulation_payload_allowance(
+            bytes.get(payload_offset..).unwrap_or(&[]),
+            payload_offset as u64,
+            SaveLimits::default(),
+        ),
     )?;
     let metadata = ron::de::from_bytes(&bytes[PREFIX_SIZE..payload_offset])
         .map_err(|error| ContainerError::MetadataEncoding(error.to_string()))?;
@@ -250,10 +272,12 @@ pub(crate) fn load_simulation_from_reader(
     if copied != metadata_len as u64 {
         return Err(ContainerError::Truncated);
     }
-    let maximum = limits
-        .max_simulation_bytes()
-        .min(limits.max_encoded_bytes - overhead);
-    let mut payload = reader.take(maximum.saturating_add(1));
+    // Peek the inner magic before choosing the payload allowance: record
+    // payloads may use framing up to the artifact budget.
+    let mut inner_magic = [0; 8];
+    read_inspection_bytes(reader, &mut inner_magic)?;
+    let maximum = simulation_payload_allowance(&inner_magic, overhead, limits);
+    let mut payload = io::Cursor::new(inner_magic).chain(reader.take(maximum.saturating_add(1)));
     let simulation_limits = SaveLimits {
         max_encoded_bytes: maximum,
         ..limits
@@ -412,7 +436,14 @@ fn write_save_bytes_locked(
         check_size(bytes.len() as u64, limits.max_encoded_bytes)?;
         if bytes.starts_with(&CONTAINER_MAGIC) {
             let offset = container_payload_offset_with_limits(bytes, limits)?;
-            check_size((bytes.len() - offset) as u64, limits.max_simulation_bytes())?;
+            check_size(
+                (bytes.len() - offset) as u64,
+                simulation_payload_allowance(
+                    bytes.get(offset..).unwrap_or(&[]),
+                    offset as u64,
+                    limits,
+                ),
+            )?;
         } else {
             check_size(bytes.len() as u64, limits.max_simulation_bytes())?;
         }
@@ -955,8 +986,8 @@ pub(crate) fn fallback_metadata(
 mod tests {
     use super::*;
     use factory_sim::{
-        RECORD_MAGIC, Simulation, load_from_bytes, save_snapshot_records_to_bytes, save_to_bytes,
-        try_capture_save_snapshot,
+        Simulation, inspect_record_index, load_from_bytes, save_snapshot_records_to_bytes,
+        save_to_bytes, try_capture_save_snapshot,
     };
 
     struct FailingReader(io::ErrorKind);
@@ -1093,6 +1124,37 @@ mod tests {
         assert_eq!(duplicate.tick_count(), original.tick_count());
         assert_eq!(duplicate.state_hash(), original.state_hash());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn record_payload_loads_under_partitioned_allowance() {
+        let mut simulation = Simulation::new_test_world(82);
+        for _ in 0..12 {
+            simulation.tick();
+        }
+        let snapshot = try_capture_save_snapshot(&simulation, 11).unwrap();
+        let payload = save_snapshot_records_to_bytes(&snapshot).unwrap();
+        let bytes = encode_container(&metadata("Partitioned"), &payload).unwrap();
+        let offset = container_payload_offset(&bytes).unwrap();
+        let index = inspect_record_index(&payload).unwrap();
+        let biggest = index
+            .records
+            .iter()
+            .map(|record| record.encoded_len)
+            .max()
+            .expect("records exist");
+        let decoded_total: u64 = index.records.iter().map(|record| record.decoded_len).sum();
+        let limits = SaveLimits {
+            max_encoded_bytes: bytes.len() as u64,
+            max_decoded_bytes: decoded_total,
+            max_record_bytes: biggest,
+            ..SaveLimits::default()
+        };
+        // The legacy monolithic allowance cannot hold the framed payload,
+        // while the partitioned allowance can.
+        assert!((bytes.len() - offset) as u64 > limits.max_simulation_bytes());
+        let loaded = load_simulation_from_reader(&mut io::Cursor::new(&bytes), limits).unwrap();
+        assert_eq!(loaded.state_hash(), simulation.state_hash());
     }
 
     #[test]
