@@ -14,7 +14,9 @@ pub struct SaveLimits {
     pub max_decoded_bytes: u64,
     /// Maximum entries in any variable-length collection (bytes for strings).
     pub max_collection_entries: u64,
-    /// The current format has one snapshot record and no compression.
+    /// Maximum bytes for one record. The monolithic snapshot counts as a
+    /// single record; the indexed record container enforces this per record
+    /// and has no compression.
     pub max_record_bytes: u64,
     pub max_metadata_bytes: usize,
 }

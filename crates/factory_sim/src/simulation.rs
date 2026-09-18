@@ -1027,6 +1027,7 @@ mod robot_ops;
 mod robot_state;
 pub mod rolling_stock_ops;
 mod save;
+pub mod save_records;
 mod scripted;
 mod statistics_ops;
 mod statistics_state;
@@ -1069,6 +1070,17 @@ pub use self::save::{
     save_snapshot_to_writer_with_limits, save_to_bytes, save_to_bytes_with_limits, save_to_writer,
     save_to_writer_with_limits, save_version_support, try_capture_save_snapshot,
     try_capture_save_snapshot_with_limits,
+};
+pub use self::save_records::{
+    MAX_RECORD_COUNT, RECORD_CODEC_IDENTITY, RECORD_FORMAT_VERSION, RECORD_HEADER_SIZE,
+    RECORD_MAGIC, RecordIndex, RecordSummary, extract_record_bytes,
+    extract_record_bytes_with_limits, extract_record_from_reader,
+    extract_record_from_reader_with_limits, inspect_record_index, inspect_record_index_with_limits,
+    save_records_to_bytes, save_records_to_bytes_with_limits, save_records_to_writer,
+    save_records_to_writer_with_limits, save_snapshot_records_to_bytes,
+    save_snapshot_records_to_bytes_with_limits, save_snapshot_records_to_writer,
+    save_snapshot_records_to_writer_with_limits, try_capture_record_snapshot,
+    try_capture_record_snapshot_with_limits,
 };
 pub use self::scripted::{
     scripted_inputs_for_chemical_science_factory, scripted_inputs_for_red_science_factory,

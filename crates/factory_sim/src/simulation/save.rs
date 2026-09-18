@@ -266,8 +266,8 @@ macro_rules! capture_snapshot_field {
 macro_rules! define_snapshot {
     ($sim:ident; $($field:ident: $ty:ty => $source:expr $(; $capture:ident)?),* $(,)?) => {
         #[derive(Clone, Deserialize, Serialize)]
-        struct SimulationSnapshotOwned {
-            $($field: $ty,)*
+        pub(in crate::simulation) struct SimulationSnapshotOwned {
+            $(pub(in crate::simulation) $field: $ty,)*
         }
 
         #[derive(Serialize)]
@@ -509,6 +509,11 @@ pub struct SimulationSaveSnapshot {
 }
 
 impl SimulationSaveSnapshot {
+    /// Returns the borrowed durable state for record-container encoding.
+    pub(in crate::simulation) fn snapshot_state(&self) -> &SimulationSnapshotOwned {
+        &self.state
+    }
+
     /// Returns the completed simulation tick represented by this snapshot.
     pub fn tick_count(&self) -> u64 {
         self.identity.tick
@@ -534,7 +539,7 @@ pub fn capture_save_snapshot(sim: &Simulation) -> SimulationSaveSnapshot {
     capture_save_snapshot_in_generation(sim, 0)
 }
 
-fn capture_save_snapshot_in_generation(
+pub(in crate::simulation) fn capture_save_snapshot_in_generation(
     sim: &Simulation,
     world_generation: u64,
 ) -> SimulationSaveSnapshot {
@@ -692,6 +697,18 @@ fn encode_snapshot_with_limits(
     Ok(bytes)
 }
 
+/// Walks the borrowed durable schema for collection-count violations without
+/// cloning. The indexed record container uses this as its capture preflight
+/// so aggregate byte budgets stay record-aware instead of running the
+/// monolithic whole-snapshot size pass.
+pub(in crate::simulation) fn check_borrowed_snapshot_collections(
+    sim: &Simulation,
+    limits: SaveLimits,
+) -> Result<(), SaveLoadError> {
+    let snapshot = SimulationSnapshotRef::from_simulation(sim);
+    crate::save_limits::check_collections(&snapshot, limits).map_err(SaveLoadError::from)
+}
+
 fn preflight_snapshot_with_limits(
     snapshot: &impl Serialize,
     limits: SaveLimits,
@@ -716,7 +733,11 @@ pub fn load_from_bytes_with_limits(
     bytes: &[u8],
     limits: SaveLimits,
 ) -> Result<Simulation, SaveLoadError> {
-    if bytes.len() as u64 > limits.max_simulation_bytes() {
+    // The complete artifact is bounded by the encoded budget. Each encoding
+    // enforces its own aggregate decoded bound while streaming, and
+    // `max_record_bytes` stays per-record so partitioned worlds larger than
+    // one record remain loadable.
+    if bytes.len() as u64 > limits.max_encoded_bytes {
         return Err(SaveLoadError::TooLarge);
     }
     load_from_reader_with_limits(&mut std::io::Cursor::new(bytes), limits)
@@ -736,7 +757,15 @@ pub fn load_from_reader_with_limits(
     if limits.max_encoded_bytes < SAVE_HEADER_SIZE as u64 {
         return Err(SaveLoadError::TooLarge);
     }
-    let header = read_header_from(reader)?;
+    let mut prefix = [0; SAVE_HEADER_SIZE];
+    reader.read_exact(&mut prefix).map_err(io_save_error)?;
+    // The record container shares the first 24 header bytes (magic, save
+    // version, prototype format version, prototype hash) so version
+    // classification works identically for both encodings.
+    if prefix[..8] == super::save_records::RECORD_MAGIC {
+        return super::save_records::load_after_prefix(&prefix, reader, limits);
+    }
+    let (header, _) = read_header(&prefix)?;
     validate_header(header)?;
 
     let (snapshot, payload_bytes) =
@@ -873,12 +902,6 @@ fn validate_header(header: SaveHeader) -> Result<(), SaveLoadError> {
     Ok(())
 }
 
-fn read_header_from(reader: &mut impl Read) -> Result<SaveHeader, SaveLoadError> {
-    let mut bytes = [0; SAVE_HEADER_SIZE];
-    reader.read_exact(&mut bytes).map_err(io_save_error)?;
-    read_header(&bytes).map(|(header, _)| header)
-}
-
 fn io_save_error(error: std::io::Error) -> SaveLoadError {
     SaveLoadError::Codec(bincode::ErrorKind::Io(error).into())
 }
@@ -905,9 +928,12 @@ fn read_header(bytes: &[u8]) -> Result<(SaveHeader, &[u8]), SaveLoadError> {
 
 /// Inspects only the fixed simulation header. Version mismatches are returned
 /// to the caller so catalogs can explain compatibility without deserializing.
+///
+/// The monolithic snapshot and the indexed record container share the first
+/// 24 header bytes, so both encodings classify identically here.
 pub fn inspect_save_header(bytes: &[u8]) -> Result<SaveHeaderInfo, SaveLoadError> {
     let (header, _) = read_header(bytes)?;
-    if header.magic != SAVE_MAGIC {
+    if header.magic != SAVE_MAGIC && header.magic != super::save_records::RECORD_MAGIC {
         return Err(SaveLoadError::InvalidMagic {
             found: header.magic,
         });
@@ -938,7 +964,7 @@ pub fn prototype_hash(catalog: &PrototypeCatalog) -> u64 {
 
 impl SimulationSnapshotOwned {
     /// Validates durable input, reconstructs derived indexes, and returns a live world.
-    fn into_simulation(self) -> Result<Simulation, SaveLoadError> {
+    pub(in crate::simulation) fn into_simulation(self) -> Result<Simulation, SaveLoadError> {
         // Validate the catalog and chunk shape before even constructing the
         // world generator or deriving terrain absorption from saved tile ids.
         validation::validate_catalog(&self.prototypes)
