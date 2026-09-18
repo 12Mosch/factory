@@ -162,6 +162,9 @@ pub struct SaveCatalog {
     pub(crate) validation_cache: BTreeMap<PathBuf, CachedSaveValidation>,
     pub(crate) validation_queue: VecDeque<CatalogValidationRequest>,
     pub(crate) validation_jobs: Vec<CatalogValidationJob>,
+    /// Earliest wall-clock time (see `now_unix_ms`) at which entries stuck
+    /// at `ValidationPending` with no scheduled validation are re-observed.
+    pub(crate) next_pending_rescan_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

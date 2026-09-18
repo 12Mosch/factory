@@ -25,11 +25,15 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_CATALOG_VALIDATION_JOBS: usize = 1;
-/// Upper bound for validation attempts per refresh cycle, including the
-/// initial attempt. Transient failures (brief locks, mid-sync replacement)
-/// are retried; anything still unstable afterwards waits for the next
-/// refresh instead of spinning the background worker.
-const MAX_CATALOG_VALIDATION_ATTEMPTS: u8 = 3;
+/// Number of retries after the initial validation attempt. Attempts are
+/// numbered from zero, so attempt values `0..=MAX_CATALOG_VALIDATION_RETRIES`
+/// occur per refresh cycle. Transient failures (brief locks, mid-sync
+/// replacement) are retried; anything still unstable afterwards waits for
+/// the next refresh or pending rescan instead of spinning the worker.
+const MAX_CATALOG_VALIDATION_RETRIES: u8 = 3;
+/// How often entries stuck at `ValidationPending` with no queued or running
+/// validation are re-observed.
+const PENDING_RESCAN_INTERVAL_MS: u64 = 2_000;
 
 /// Replaces the in-memory catalog after a lightweight scan, then queues bounded
 /// background payload validation for cache misses.
@@ -469,7 +473,15 @@ fn prepare_entry_validation(
         return;
     }
     let Ok(mut file) = fs::File::open(&entry.path) else {
+        // The file is momentarily unreadable. Publish the pending state
+        // together with a blind retry so recovered access is observed
+        // without waiting for an unrelated refresh.
         entry.compatibility = SaveCompatibility::ValidationPending;
+        requests.push(blind_retry_request(
+            entry.path.clone(),
+            entry.metadata.kind.clone(),
+            0,
+        ));
         return;
     };
     let metadata = save_file_metadata_fingerprint(&file);
@@ -524,6 +536,23 @@ fn queue_catalog_validation(catalog: &mut SaveCatalog, request: CatalogValidatio
         .validation_queue
         .retain(|queued| queued.path != request.path);
     catalog.validation_queue.push_back(request);
+}
+
+/// Builds a validation request for a file that could not be opened for
+/// fingerprinting. The worker classifies from its own handle on arrival, so
+/// the placeholder compatibility and identity below are never published.
+fn blind_retry_request(path: PathBuf, kind: SaveKind, attempt: u8) -> CatalogValidationRequest {
+    CatalogValidationRequest {
+        path,
+        kind,
+        compatibility: SaveCompatibility::ValidationPending,
+        metadata: SaveFileMetadataFingerprint {
+            len: 0,
+            modified: None,
+            identity: None,
+        },
+        attempt,
+    }
 }
 
 /// Opens the file currently on disk and returns its identity together with the
@@ -615,7 +644,7 @@ fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) {
                 entry.compatibility = outcome.compatibility;
                 catalog.revision = catalog.revision.wrapping_add(1);
             }
-        } else if outcome.attempt < MAX_CATALOG_VALIDATION_ATTEMPTS
+        } else if outcome.attempt < MAX_CATALOG_VALIDATION_RETRIES
             && let Some(entry_index) = catalog
                 .entries
                 .iter()
@@ -646,27 +675,79 @@ fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) {
                 }
             } else {
                 // The file is momentarily unreadable (brief lock, mid-sync
-                // replacement). Queue a bounded blind retry: the worker
-                // classifies from its own handle, so the placeholder below
-                // is never published.
+                // replacement). Queue a bounded blind retry.
                 queue_catalog_validation(
                     catalog,
-                    CatalogValidationRequest {
-                        path: outcome.path,
-                        kind,
-                        compatibility: SaveCompatibility::ValidationPending,
-                        metadata: SaveFileMetadataFingerprint {
-                            len: 0,
-                            modified: None,
-                            identity: None,
-                        },
-                        attempt: next_attempt,
-                    },
+                    blind_retry_request(outcome.path, kind, next_attempt),
                 );
+            }
+        } else if outcome.attempt >= MAX_CATALOG_VALIDATION_RETRIES
+            && !catalog
+                .validation_queue
+                .iter()
+                .any(|queued| queued.path == outcome.path)
+            && !catalog
+                .validation_jobs
+                .iter()
+                .any(|job| job.path == outcome.path)
+            && let Some(entry) = catalog
+                .entries
+                .iter_mut()
+                .find(|entry| entry.path == outcome.path)
+            && entry.compatibility == SaveCompatibility::ValidationPending
+        {
+            // Retries are exhausted: reconcile the display with the file
+            // currently on disk instead of leaving a stale pending row.
+            // Loadable candidates stay pending for the periodic rescan.
+            let kind = entry.metadata.kind.clone();
+            if let Some((_, fresh)) = inspect_current_file(&outcome.path, &kind)
+                && !fresh.can_load()
+            {
+                entry.compatibility = fresh;
+                catalog.revision = catalog.revision.wrapping_add(1);
             }
         }
     }
+    rescan_stale_pending(catalog);
     start_catalog_validation_jobs(catalog);
+}
+
+/// Re-observes entries stuck at `ValidationPending` with no queued or
+/// running validation, at most every `PENDING_RESCAN_INTERVAL_MS`. This
+/// covers attempt exhaustion and refresh-time open failures, so recovered
+/// access is picked up without waiting for an unrelated catalog refresh.
+/// Each rescan performs a single observation per entry; a still-failing
+/// entry simply waits for the next interval.
+fn rescan_stale_pending(catalog: &mut SaveCatalog) {
+    let now = now_unix_ms();
+    if now < catalog.next_pending_rescan_ms {
+        return;
+    }
+    catalog.next_pending_rescan_ms = now.saturating_add(PENDING_RESCAN_INTERVAL_MS);
+    let stale: Vec<(PathBuf, SaveKind)> = catalog
+        .entries
+        .iter()
+        .filter(|entry| entry.compatibility == SaveCompatibility::ValidationPending)
+        .filter(|entry| {
+            !catalog
+                .validation_queue
+                .iter()
+                .any(|queued| queued.path == entry.path)
+                && !catalog
+                    .validation_jobs
+                    .iter()
+                    .any(|job| job.path == entry.path)
+        })
+        .map(|entry| (entry.path.clone(), entry.metadata.kind.clone()))
+        .collect();
+    for (path, kind) in stale {
+        // Observe once: a still-unreadable file fails without chaining, and
+        // the next interval tries again.
+        queue_catalog_validation(
+            catalog,
+            blind_retry_request(path, kind, MAX_CATALOG_VALIDATION_RETRIES),
+        );
+    }
 }
 
 /// Fully validates a loadable payload synchronously for explicit callers such
@@ -747,9 +828,16 @@ fn validate_loadable_path(
         };
     }
     // The path may have been replaced after the request was created. Only a
-    // classification derived from this handle may be published for it.
+    // classification derived from this handle may be published for it. A
+    // carried `ValidationPending` is a blind-retry placeholder, never a
+    // classification, so it is always re-derived.
     let source_compatibility = match expected {
-        Some(expected) if expected == metadata => source_compatibility,
+        Some(expected)
+            if expected == metadata
+                && source_compatibility != SaveCompatibility::ValidationPending =>
+        {
+            source_compatibility
+        }
         _ => match PrototypeCatalog::load_base()
             .ok()
             .map(|catalog| prototype_hash(&catalog))
@@ -1255,6 +1343,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            next_pending_rescan_ms: u64::MAX,
             validation_queue: VecDeque::from([CatalogValidationRequest {
                 path: path.clone(),
                 kind: SaveKind::Quicksave,
@@ -1341,6 +1430,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            next_pending_rescan_ms: u64::MAX,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -1503,6 +1593,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            next_pending_rescan_ms: u64::MAX,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -1560,6 +1651,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            next_pending_rescan_ms: u64::MAX,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -1614,7 +1706,7 @@ mod tests {
             compatibility: SaveCompatibility::ValidationPending,
             observed_metadata: None,
             fingerprint: None,
-            attempt: MAX_CATALOG_VALIDATION_ATTEMPTS,
+            attempt: MAX_CATALOG_VALIDATION_RETRIES,
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -1632,6 +1724,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            next_pending_rescan_ms: u64::MAX,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -1652,6 +1745,97 @@ mod tests {
             catalog.entries[0].compatibility,
             SaveCompatibility::ValidationPending
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn prepare_open_failure_queues_blind_retry() {
+        let dir = std::env::temp_dir().join(format!(
+            "factory-prepare-blind-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        // The file is momentarily unreadable: no bytes were ever observed.
+        let path = dir.join("quicksave.factsim");
+        let mut entry = SaveEntry {
+            id: SaveId::new("quicksave"),
+            metadata: fallback_metadata(
+                SaveId::new("quicksave"),
+                SaveKind::Quicksave,
+                "Quicksave".into(),
+                0,
+            ),
+            compatibility: SaveCompatibility::Compatible,
+            metadata_available: true,
+            path: path.clone(),
+            inspected: None,
+        };
+        let current_hash =
+            factory_sim::prototype_hash(&factory_data::PrototypeCatalog::load_base().unwrap());
+
+        let cache = BTreeMap::new();
+        let mut requests = Vec::new();
+        prepare_entry_validation(&mut entry, current_hash, &cache, &mut requests);
+
+        assert_eq!(entry.compatibility, SaveCompatibility::ValidationPending);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].attempt, 0);
+        assert_eq!(
+            requests[0].compatibility,
+            SaveCompatibility::ValidationPending
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn exhausted_pending_entry_is_rescanned() {
+        let dir = std::env::temp_dir().join(format!(
+            "factory-exhausted-rescan-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+
+        // Retries are exhausted and no validation is scheduled, but the file
+        // is valid: the periodic rescan must observe and publish it.
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+                inspected: None,
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            next_pending_rescan_ms: 0,
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: Vec::new(),
+        };
+
+        // The drain helper only polls while jobs exist; prime one poll so
+        // the rescan (which is what schedules work here) can run.
+        poll_catalog_validation_jobs_inner(&mut catalog);
+        drain_validation_jobs(&mut catalog);
+
+        assert_eq!(catalog.validation_jobs.len(), 0);
+        assert!(catalog.validation_queue.is_empty());
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::Compatible
+        );
+        assert!(catalog.next_pending_rescan_ms > 0);
         fs::remove_dir_all(dir).unwrap();
     }
 
