@@ -213,7 +213,7 @@ pub(crate) fn load_simulation(path: &Path) -> Result<Simulation, ContainerError>
     load_simulation_from_reader(&mut BufReader::new(file), SaveLimits::default())
 }
 
-fn load_simulation_from_reader(
+pub(crate) fn load_simulation_from_reader(
     reader: &mut impl Read,
     limits: SaveLimits,
 ) -> Result<Simulation, ContainerError> {

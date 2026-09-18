@@ -1,8 +1,8 @@
 use super::compatibility::classify_header;
 use super::container::{
     CONTAINER_VERSION, ContainerError, SaveArtifactKind, discard_save_artifact, fallback_metadata,
-    inspect_container, load_simulation, parse_save_artifact, promote_backup,
-    retired_save_artifact_primary, with_save_artifact_lock,
+    inspect_container, load_simulation, load_simulation_from_reader, parse_save_artifact,
+    promote_backup, retired_save_artifact_primary, with_save_artifact_lock,
 };
 use super::{
     CachedMigrationValidation, SaveCatalog, SaveCompatibility, SaveEntry, SaveFileFingerprint,
@@ -11,11 +11,12 @@ use super::{
 use bevy::log::warn;
 use factory_data::PrototypeCatalog;
 use factory_sim::{
-    SAVE_HEADER_SIZE, SaveLoadError, inspect_save_header, load_from_bytes, prototype_hash,
+    SAVE_HEADER_SIZE, SaveLimits, SaveLoadError, inspect_save_header, load_from_bytes,
+    prototype_hash,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, BufReader, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -446,21 +447,45 @@ fn validate_migratable_file(
     header_compatibility: SaveCompatibility,
     cache: &mut BTreeMap<PathBuf, CachedMigrationValidation>,
 ) -> SaveCompatibility {
-    let fingerprint = save_file_fingerprint(path).ok();
-    if let Some(fingerprint) = &fingerprint
-        && let Some(cached) = cache.get(path)
-        && cached.fingerprint == *fingerprint
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return header_compatibility,
+    };
+    let fingerprint = match save_file_fingerprint(&mut file) {
+        Ok(fingerprint) => fingerprint,
+        Err(ContainerError::TooLarge) => {
+            cache.remove(path);
+            return SaveCompatibility::ExceedsCurrentLimits;
+        }
+        Err(_) => return header_compatibility,
+    };
+    if let Some(cached) = cache.get(path)
+        && cached.fingerprint == fingerprint
     {
         return cached.compatibility.clone();
     }
 
-    let (compatibility, cacheable) = match load_simulation(path) {
+    let load_result = match file.rewind() {
+        Ok(()) => {
+            load_simulation_from_reader(&mut BufReader::new(&mut file), SaveLimits::default())
+        }
+        Err(error) => Err(ContainerError::Io(error)),
+    };
+    let (compatibility, cacheable) = match load_result {
         Ok(_) => (header_compatibility, true),
         Err(ContainerError::TooLarge) => (SaveCompatibility::ExceedsCurrentLimits, true),
         Err(ContainerError::Io(_)) => (header_compatibility, false),
         Err(_) => (SaveCompatibility::CorruptOrTruncated, true),
     };
-    if cacheable && let Some(fingerprint) = fingerprint {
+    let stable_fingerprint = match save_file_fingerprint(&mut file) {
+        Ok(after_validation) => after_validation == fingerprint,
+        Err(ContainerError::TooLarge) => {
+            cache.remove(path);
+            return SaveCompatibility::ExceedsCurrentLimits;
+        }
+        Err(_) => false,
+    };
+    if cacheable && stable_fingerprint {
         cache.insert(
             path.to_path_buf(),
             CachedMigrationValidation {
@@ -475,13 +500,23 @@ fn validate_migratable_file(
 /// Identifies the bytes that were considered by migration validation. The
 /// metadata fields retain a cheap diagnostic identity while the digest closes
 /// the same-length, preserved-timestamp replacement hole.
-fn save_file_fingerprint(path: &Path) -> io::Result<SaveFileFingerprint> {
-    let mut file = fs::File::open(path)?;
+fn save_file_fingerprint(file: &mut fs::File) -> Result<SaveFileFingerprint, ContainerError> {
+    file.rewind()?;
     let metadata = file.metadata()?;
+    let maximum = SaveLimits::default().max_encoded_bytes;
+    if metadata.len() > maximum {
+        return Err(ContainerError::TooLarge);
+    }
     let mut hasher = blake3::Hasher::new();
-    io::copy(&mut file, &mut hasher)?;
+    let copied = io::copy(
+        &mut Read::by_ref(file).take(maximum.saturating_add(1)),
+        &mut hasher,
+    )?;
+    if copied > maximum {
+        return Err(ContainerError::TooLarge);
+    }
     Ok(SaveFileFingerprint {
-        len: metadata.len(),
+        len: copied,
         modified: metadata.modified().ok(),
         content_digest: *hasher.finalize().as_bytes(),
     })
@@ -606,7 +641,8 @@ mod tests {
         let historical =
             include_bytes!("../../../factory_sim/tests/fixtures/save-v57-sanitized.factsim");
         fs::write(&path, historical).unwrap();
-        let current_fingerprint = save_file_fingerprint(&path).unwrap();
+        let mut file = fs::File::open(&path).unwrap();
+        let current_fingerprint = save_file_fingerprint(&mut file).unwrap();
         let mut stale_fingerprint = current_fingerprint.clone();
         stale_fingerprint.content_digest[0] ^= 0xff;
         let mut cache = BTreeMap::from([(
@@ -627,6 +663,33 @@ mod tests {
         assert_eq!(compatibility, header_compatibility);
         assert_eq!(cache[&path].fingerprint, current_fingerprint);
         assert_eq!(cache[&path].compatibility, header_compatibility);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn oversized_migration_candidate_is_rejected_before_hashing() {
+        let path = std::env::temp_dir().join(format!(
+            "factory-oversized-migration-{}-{}.factsim",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        let historical =
+            include_bytes!("../../../factory_sim/tests/fixtures/save-v57-sanitized.factsim");
+        fs::write(&path, historical).unwrap();
+        let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_len(SaveLimits::default().max_encoded_bytes + 1)
+            .unwrap();
+        drop(file);
+        let mut cache = BTreeMap::new();
+        let header_compatibility = SaveCompatibility::MigratableSaveFormat {
+            found: factory_sim::OLDEST_SUPPORTED_SAVE_VERSION,
+            current: factory_sim::SAVE_VERSION,
+        };
+
+        let compatibility = validate_migratable_file(&path, header_compatibility, &mut cache);
+
+        assert_eq!(compatibility, SaveCompatibility::ExceedsCurrentLimits);
+        assert!(cache.is_empty());
         fs::remove_file(path).unwrap();
     }
 
