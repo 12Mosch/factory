@@ -61,6 +61,8 @@ wall-follow progress. They remain rejected by the version dispatcher. The
 supported window, migration guarantees, breaking-change rules, and pinned-build
 recovery procedure are maintained in
 [`docs/save-compatibility.md`](../../../../docs/save-compatibility.md).
+The current promise is specifically v57-to-v58 with matching prototype format
+and data identity; the checked-in v57 fixture guards compatible nested layouts.
 
 The headless `save::assert_save_continuation` helper compares borrowed and detached
 save encodings, command results and state hashes at **every** subsequent tick.

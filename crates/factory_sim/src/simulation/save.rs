@@ -131,10 +131,27 @@ const _: () = assert!(
     "a new save version requires a schema, migration step, or compatibility-boundary decision"
 );
 
-/// Whether a historical save format has an explicit migration path in this build.
-pub const fn is_save_version_migratable(version: u32) -> bool {
-    version >= OLDEST_SUPPORTED_SAVE_VERSION && version < SAVE_VERSION
+/// Header-level support declared by the same explicit table used by decoding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveVersionSupport {
+    UnsupportedOld,
+    Migratable,
+    Current,
+    Newer,
 }
+
+pub const fn save_version_support(version: u32) -> SaveVersionSupport {
+    match version {
+        57 => SaveVersionSupport::Migratable,
+        58 => SaveVersionSupport::Current,
+        0..57 => SaveVersionSupport::UnsupportedOld,
+        _ => SaveVersionSupport::Newer,
+    }
+}
+const _: () = assert!(matches!(
+    save_version_support(SAVE_VERSION),
+    SaveVersionSupport::Current
+));
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -247,77 +264,28 @@ macro_rules! capture_snapshot_field {
 }
 
 macro_rules! define_snapshot {
-    (
-        $sim:ident;
-        common_before { $($before_field:ident: $before_ty:ty => $before_source:expr $(; $before_capture:ident)?),* $(,)? }
-        since_v58 { $($new_field:ident: $new_ty:ty => $new_source:expr $(; $new_capture:ident)?),* $(,)? }
-        common_after { $($after_field:ident: $after_ty:ty => $after_source:expr $(; $after_capture:ident)?),* $(,)? }
-    ) => {
+    ($sim:ident; $($field:ident: $ty:ty => $source:expr $(; $capture:ident)?),* $(,)?) => {
         #[derive(Clone, Deserialize, Serialize)]
         struct SimulationSnapshotOwned {
-            $($before_field: $before_ty,)*
-            $($new_field: $new_ty,)*
-            $($after_field: $after_ty,)*
+            $($field: $ty,)*
         }
 
         #[derive(Serialize)]
         struct SimulationSnapshotRef<'a> {
-            $($before_field: &'a $before_ty,)*
-            $($new_field: &'a $new_ty,)*
-            $($after_field: &'a $after_ty,)*
-        }
-
-        /// Exact v57 wire layout. Later fields must never be added here: each
-        /// supported source version gets an immutable schema and migration step.
-        #[derive(Deserialize, Serialize)]
-        struct SimulationSnapshotV57 {
-            $($before_field: $before_ty,)*
-            $($after_field: $after_ty,)*
+            $($field: &'a $ty,)*
         }
 
         impl<'a> SimulationSnapshotRef<'a> {
             /// Borrows the complete ordered durable-state registry for encoding.
             fn from_simulation($sim: &'a Simulation) -> Self {
-                Self {
-                    $($before_field: &$before_source,)*
-                    $($new_field: &$new_source,)*
-                    $($after_field: &$after_source,)*
-                }
+                Self { $($field: &$source,)* }
             }
         }
 
         impl SimulationSnapshotOwned {
             /// Clones the complete ordered durable-state registry for detached encoding.
             fn from_simulation($sim: &Simulation) -> Self {
-                Self {
-                    $($before_field: capture_snapshot_field!($before_ty, $before_source $(, $before_capture)?),)*
-                    $($new_field: capture_snapshot_field!($new_ty, $new_source $(, $new_capture)?),)*
-                    $($after_field: capture_snapshot_field!($after_ty, $after_source $(, $after_capture)?),)*
-                }
-            }
-        }
-
-        impl From<SimulationSnapshotV57> for SimulationSnapshotOwned {
-            fn from(snapshot: SimulationSnapshotV57) -> Self {
-                let SimulationSnapshotV57 {
-                    $($before_field,)*
-                    $($after_field,)*
-                } = snapshot;
-                Self {
-                    $($before_field,)*
-                    $($new_field: <$new_ty>::default(),)*
-                    $($after_field,)*
-                }
-            }
-        }
-
-        #[cfg(test)]
-        impl SimulationSnapshotV57 {
-            fn from_simulation($sim: &Simulation) -> Self {
-                Self {
-                    $($before_field: capture_snapshot_field!($before_ty, $before_source $(, $before_capture)?),)*
-                    $($after_field: capture_snapshot_field!($after_ty, $after_source $(, $after_capture)?),)*
-                }
+                Self { $($field: capture_snapshot_field!($ty, $source $(, $capture)?),)* }
             }
         }
     };
@@ -325,7 +293,6 @@ macro_rules! define_snapshot {
 
 define_snapshot! {
     sim;
-    common_before {
     tick: u64 => sim.tick,
     day_night_cycle: Option<DayNightCycleState> => sim.day_night_cycle,
     world_seed: u64 => sim.world.seed,
@@ -361,11 +328,7 @@ define_snapshot! {
     robot_logistic_work: RobotLogisticWorkState => sim.robots.logistic_work,
     robot_flights: RobotFlightSubsystem => sim.robot_flights,
     rolling_stock: RollingStockSubsystem => sim.rolling_stock,
-    }
-    since_v58 {
     pending_train_route_searches: BTreeMap<TrainId, rolling_stock_ops::PendingTrainRouteSearch> => sim.train_routing.pending,
-    }
-    common_after {
     pollution: PollutionState => sim.pollution,
     enemies: EnemySubsystem => sim.enemies,
     config: SimulationConfig => sim.config,
@@ -375,6 +338,162 @@ define_snapshot! {
     transport: TransportLaneCache => sim.transport; clone_for_save,
     enemy_navigation: enemy::EnemyNavigation => sim.enemy_navigation; clone_for_save,
     attack_targets: enemy::AttackTargetCache => sim.attack_targets; clone_for_save,
+}
+
+/// Frozen top-level v57 wire layout.
+///
+/// Nested types are intentionally the runtime types that v57 used. The checked-in
+/// fixture guards their continued compatibility; changing one requires either a
+/// historical adapter or an explicit compatibility-boundary decision.
+#[derive(Deserialize, Serialize)]
+struct SimulationSnapshotV57 {
+    tick: u64,
+    day_night_cycle: Option<DayNightCycleState>,
+    world_seed: u64,
+    prototypes: PrototypeCatalog,
+    chunks: BTreeMap<ChunkCoord, Chunk>,
+    chunk_generation_queue: ChunkGenerationQueue,
+    chart: ChartState,
+    item_statistics: ItemStatistics,
+    fluid_statistics: FluidStatistics,
+    power_statistics: PowerStatistics,
+    rockets_launched: u64,
+    player_deaths: u64,
+    entities: EntityStore,
+    construction: ConstructionState,
+    player: PlayerState,
+    player_equipment: PlayerEquipmentState,
+    player_weapon: PlayerWeaponState,
+    delayed_combat: DelayedCombatState,
+    player_inventory: Inventory,
+    corpses: BTreeMap<u64, PlayerCorpse>,
+    manual_mining_progress: Option<ManualMiningProgress>,
+    crafting_queue: CraftingQueue,
+    onboarding_progress: OnboardingProgress,
+    research: ResearchState,
+    power_summary: PowerSummary,
+    power_networks: Vec<PowerNetworkSnapshot>,
+    entity_power_statuses: DenseEntityMap<EntityPowerStatus>,
+    fluid_networks: Vec<FluidNetworkSnapshot>,
+    fluid_topology_dirty: bool,
+    heat_networks: Vec<HeatNetworkSnapshot>,
+    heat_topology_dirty: bool,
+    robot_networks: Vec<RobotNetworkSnapshot>,
+    robot_logistic_work: RobotLogisticWorkState,
+    robot_flights: RobotFlightSubsystem,
+    rolling_stock: RollingStockSubsystem,
+    pollution: PollutionState,
+    enemies: EnemySubsystem,
+    config: SimulationConfig,
+    entity_topology_revision: u64,
+    world_chunk_revision: u64,
+    world_walkability_revision: u64,
+    transport: TransportLaneCache,
+    enemy_navigation: enemy::EnemyNavigation,
+    attack_targets: enemy::AttackTargetCache,
+}
+
+impl From<SimulationSnapshotV57> for SimulationSnapshotOwned {
+    fn from(snapshot: SimulationSnapshotV57) -> Self {
+        Self {
+            tick: snapshot.tick,
+            day_night_cycle: snapshot.day_night_cycle,
+            world_seed: snapshot.world_seed,
+            prototypes: snapshot.prototypes,
+            chunks: snapshot.chunks,
+            chunk_generation_queue: snapshot.chunk_generation_queue,
+            chart: snapshot.chart,
+            item_statistics: snapshot.item_statistics,
+            fluid_statistics: snapshot.fluid_statistics,
+            power_statistics: snapshot.power_statistics,
+            rockets_launched: snapshot.rockets_launched,
+            player_deaths: snapshot.player_deaths,
+            entities: snapshot.entities,
+            construction: snapshot.construction,
+            player: snapshot.player,
+            player_equipment: snapshot.player_equipment,
+            player_weapon: snapshot.player_weapon,
+            delayed_combat: snapshot.delayed_combat,
+            player_inventory: snapshot.player_inventory,
+            corpses: snapshot.corpses,
+            manual_mining_progress: snapshot.manual_mining_progress,
+            crafting_queue: snapshot.crafting_queue,
+            onboarding_progress: snapshot.onboarding_progress,
+            research: snapshot.research,
+            power_summary: snapshot.power_summary,
+            power_networks: snapshot.power_networks,
+            entity_power_statuses: snapshot.entity_power_statuses,
+            fluid_networks: snapshot.fluid_networks,
+            fluid_topology_dirty: snapshot.fluid_topology_dirty,
+            heat_networks: snapshot.heat_networks,
+            heat_topology_dirty: snapshot.heat_topology_dirty,
+            robot_networks: snapshot.robot_networks,
+            robot_logistic_work: snapshot.robot_logistic_work,
+            robot_flights: snapshot.robot_flights,
+            rolling_stock: snapshot.rolling_stock,
+            pending_train_route_searches: BTreeMap::new(),
+            pollution: snapshot.pollution,
+            enemies: snapshot.enemies,
+            config: snapshot.config,
+            entity_topology_revision: snapshot.entity_topology_revision,
+            world_chunk_revision: snapshot.world_chunk_revision,
+            world_walkability_revision: snapshot.world_walkability_revision,
+            transport: snapshot.transport,
+            enemy_navigation: snapshot.enemy_navigation,
+            attack_targets: snapshot.attack_targets,
+        }
+    }
+}
+
+#[cfg(test)]
+impl SimulationSnapshotV57 {
+    fn from_simulation(sim: &Simulation) -> Self {
+        Self {
+            tick: sim.tick,
+            day_night_cycle: sim.day_night_cycle,
+            world_seed: sim.world.seed,
+            prototypes: sim.world.prototypes.clone(),
+            chunks: sim.world.chunks.clone(),
+            chunk_generation_queue: sim.chunk_generation_queue.clone(),
+            chart: sim.chart.clone(),
+            item_statistics: sim.statistics.items.clone(),
+            fluid_statistics: sim.statistics.fluids.clone(),
+            power_statistics: sim.statistics.power.clone(),
+            rockets_launched: sim.statistics.rockets_launched,
+            player_deaths: sim.statistics.player_deaths,
+            entities: sim.entities.clone(),
+            construction: sim.construction.clone(),
+            player: sim.player,
+            player_equipment: sim.player_equipment.clone(),
+            player_weapon: sim.player_weapon,
+            delayed_combat: sim.delayed_combat.clone(),
+            player_inventory: sim.player_inventory.clone(),
+            corpses: sim.corpses.clone(),
+            manual_mining_progress: sim.manual_mining_progress,
+            crafting_queue: sim.crafting_queue.clone(),
+            onboarding_progress: sim.onboarding_progress,
+            research: sim.research.clone(),
+            power_summary: sim.power.summary,
+            power_networks: sim.power.networks.clone(),
+            entity_power_statuses: sim.power.entity_statuses.clone(),
+            fluid_networks: sim.fluids.networks.clone(),
+            fluid_topology_dirty: sim.fluids.topology_dirty,
+            heat_networks: sim.heat.networks.clone(),
+            heat_topology_dirty: sim.heat.topology_dirty,
+            robot_networks: sim.robots.networks.clone(),
+            robot_logistic_work: sim.robots.logistic_work.clone(),
+            robot_flights: sim.robot_flights.clone(),
+            rolling_stock: sim.rolling_stock.clone(),
+            pollution: sim.pollution.clone(),
+            enemies: sim.enemies.clone(),
+            config: sim.config,
+            entity_topology_revision: sim.entity_topology_revision,
+            world_chunk_revision: sim.world.chunk_revision,
+            world_walkability_revision: sim.world.walkability_revision,
+            transport: sim.transport.clone_for_save(),
+            enemy_navigation: sim.enemy_navigation.clone_for_save(),
+            attack_targets: sim.attack_targets.clone_for_save(),
+        }
     }
 }
 
@@ -633,20 +752,25 @@ fn decode_and_migrate_snapshot(
     reader: &mut impl Read,
     limits: SaveLimits,
 ) -> Result<(SimulationSnapshotOwned, u64), SaveLoadError> {
-    match version {
-        57 => {
-            let (snapshot, bytes): (SimulationSnapshotV57, u64) =
-                crate::save_limits::deserialize_from(reader, limits)
-                    .map_err(SaveLoadError::from)?;
-            Ok((migrate_v57_to_v58(snapshot), bytes))
-        }
-        CURRENT_SNAPSHOT_LAYOUT_VERSION => {
+    match save_version_support(version) {
+        SaveVersionSupport::Migratable => match version {
+            57 => {
+                let (snapshot, bytes): (SimulationSnapshotV57, u64) =
+                    crate::save_limits::deserialize_from(reader, limits)
+                        .map_err(SaveLoadError::from)?;
+                Ok((migrate_v57_to_v58(snapshot), bytes))
+            }
+            _ => unreachable!("the support table lists every migratable schema"),
+        },
+        SaveVersionSupport::Current => {
             crate::save_limits::deserialize_from(reader, limits).map_err(SaveLoadError::from)
         }
-        _ => Err(SaveLoadError::UnsupportedSaveVersion {
-            found: version,
-            supported: SAVE_VERSION,
-        }),
+        SaveVersionSupport::UnsupportedOld | SaveVersionSupport::Newer => {
+            Err(SaveLoadError::UnsupportedSaveVersion {
+                found: version,
+                supported: SAVE_VERSION,
+            })
+        }
     }
 }
 
@@ -731,7 +855,10 @@ fn validate_header(header: SaveHeader) -> Result<(), SaveLoadError> {
             found: header.magic,
         });
     }
-    if header.save_version < OLDEST_SUPPORTED_SAVE_VERSION || header.save_version > SAVE_VERSION {
+    if matches!(
+        save_version_support(header.save_version),
+        SaveVersionSupport::UnsupportedOld | SaveVersionSupport::Newer
+    ) {
         return Err(SaveLoadError::UnsupportedSaveVersion {
             found: header.save_version,
             supported: SAVE_VERSION,
@@ -1046,10 +1173,39 @@ mod tests {
     struct FailingIo;
 
     fn sanitized_v57_fixture_simulation() -> Simulation {
-        let mut simulation = Simulation::new_test_world(241);
-        for _ in 0..64 {
+        let (mut simulation, rails) =
+            crate::simulation::tests::rolling_stock::world_with_rail_run(24);
+        for _ in 1..64 {
             simulation.tick();
         }
+        let stock_id = crate::simulation::tests::rolling_stock::place_stock(
+            &mut simulation,
+            &rails,
+            8,
+            "locomotive",
+        )
+        .expect("the sanitized locomotive fits on its rail run");
+        let train_id = simulation
+            .rolling_stock_piece(stock_id)
+            .expect("the sanitized locomotive was placed")
+            .train;
+        simulation
+            .set_train_destination(train_id, rails[20])
+            .expect("the sanitized train accepts its destination");
+        let standing = simulation
+            .rolling_stock_piece(stock_id)
+            .expect("the sanitized locomotive remains placed")
+            .position;
+        let train = simulation
+            .rolling_stock
+            .trains
+            .get_mut(&train_id)
+            .expect("the sanitized train exists");
+        train.route = None;
+        train.route_search_exhausted_at = Some(standing);
+        simulation
+            .validate_state()
+            .expect("the historical exhausted-search marker is valid without a frontier");
         simulation
     }
 
@@ -1085,6 +1241,21 @@ mod tests {
         let mut migrated = load_from_bytes(bytes).unwrap();
         migrated.validate_state().unwrap();
         assert_eq!(migrated.state_hash(), expected.state_hash(), "at migration");
+        assert!(migrated.train_routing.pending.is_empty());
+        let train_id = *migrated
+            .rolling_stock
+            .trains
+            .keys()
+            .next()
+            .expect("the historical fixture has one train");
+        assert!(
+            migrated
+                .train(train_id)
+                .expect("the migrated train exists")
+                .route_search_exhausted_at
+                .is_some(),
+            "the v57 exhaustion marker is preserved"
+        );
 
         for relative_tick in 0..32 {
             expected.tick();
@@ -1096,16 +1267,17 @@ mod tests {
             );
             migrated.validate_state().unwrap();
         }
+        let train = migrated.train(train_id).expect("the migrated train exists");
+        assert!(
+            train.route.is_some(),
+            "v58 restarted the frontier-less search"
+        );
+        assert_eq!(train.route_search_exhausted_at, None);
     }
 
     #[test]
-    fn v57_malformed_payload_and_unknown_future_version_are_rejected_before_install() {
+    fn unknown_future_version_is_rejected_before_payload_decode() {
         let fixture = include_bytes!("../../tests/fixtures/save-v57-sanitized.factsim");
-        assert!(matches!(
-            load_from_bytes(&fixture[..fixture.len() - 1]),
-            Err(SaveLoadError::Codec(_))
-        ));
-
         let mut future_header = fixture[..SAVE_HEADER_SIZE].to_vec();
         future_header[8..12].copy_from_slice(&(SAVE_VERSION + 1).to_le_bytes());
         assert!(matches!(

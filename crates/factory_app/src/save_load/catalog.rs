@@ -5,15 +5,15 @@ use super::container::{
     retired_save_artifact_primary, with_save_artifact_lock,
 };
 use super::{
-    SaveCatalog, SaveCompatibility, SaveEntry, SaveId, SaveKind, SaveLoadConfig, SaveMetadata,
-    local_datetime_from_unix_ms,
+    CachedMigrationValidation, SaveCatalog, SaveCompatibility, SaveEntry, SaveFileFingerprint,
+    SaveId, SaveKind, SaveLoadConfig, SaveMetadata, local_datetime_from_unix_ms,
 };
 use bevy::log::warn;
 use factory_data::PrototypeCatalog;
 use factory_sim::{
     SAVE_HEADER_SIZE, SaveLoadError, inspect_save_header, load_from_bytes, prototype_hash,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -21,14 +21,22 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Replaces the in-memory catalog with a freshly recovered and inspected scan.
 pub fn refresh_catalog(config: &SaveLoadConfig, catalog: &mut SaveCatalog) -> Result<(), String> {
-    let entries = scan_catalog(config)?;
+    let entries = scan_catalog_with_cache(config, &mut catalog.migration_validation)?;
     catalog.replace(entries);
     Ok(())
 }
 
 /// Recovers interrupted saves and returns all recognized canonical entries.
 pub fn scan_catalog(config: &SaveLoadConfig) -> Result<Vec<SaveEntry>, String> {
+    scan_catalog_with_cache(config, &mut BTreeMap::new())
+}
+
+fn scan_catalog_with_cache(
+    config: &SaveLoadConfig,
+    migration_validation: &mut BTreeMap<PathBuf, CachedMigrationValidation>,
+) -> Result<Vec<SaveEntry>, String> {
     if !config.root_dir.exists() {
+        migration_validation.clear();
         return Ok(Vec::new());
     }
     let current_hash = prototype_hash(
@@ -55,7 +63,14 @@ pub fn scan_catalog(config: &SaveLoadConfig) -> Result<Vec<SaveEntry>, String> {
         else {
             continue;
         };
-        entries.push(inspect_entry(path, id, kind, fallback_name, current_hash));
+        entries.push(inspect_entry(
+            path,
+            id,
+            kind,
+            fallback_name,
+            current_hash,
+            migration_validation,
+        ));
     }
     entries.sort_by(|left, right| {
         group_order(&left.metadata.kind)
@@ -71,6 +86,11 @@ pub fn scan_catalog(config: &SaveLoadConfig) -> Result<Vec<SaveEntry>, String> {
                     .cmp(&autosave_generation(&right.metadata.kind))
             })
     });
+    let present = entries
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect::<BTreeSet<_>>();
+    migration_validation.retain(|path, _| present.contains(path));
     Ok(entries)
 }
 
@@ -381,10 +401,18 @@ fn inspect_entry(
     kind: SaveKind,
     fallback_name: String,
     current_hash: u64,
+    migration_validation: &mut BTreeMap<PathBuf, CachedMigrationValidation>,
 ) -> SaveEntry {
     let timestamp = file_timestamp_ms(&path);
     let fallback = || fallback_metadata(id.clone(), kind.clone(), fallback_name.clone(), timestamp);
-    let inspection = inspect_file(&path, &kind, current_hash);
+    let mut inspection = inspect_file(&path, &kind, current_hash);
+    if matches!(
+        inspection.compatibility,
+        SaveCompatibility::MigratableSaveFormat { .. }
+    ) {
+        inspection.compatibility =
+            validate_migratable_file(&path, inspection.compatibility, migration_validation);
+    }
     let metadata = inspection
         .metadata
         .filter(|metadata| metadata.id == id && metadata.kind == kind);
@@ -406,6 +434,43 @@ fn inspect_entry(
         metadata_available,
         path,
     }
+}
+
+/// Fully validates historical payloads once per stable file identity so the UI
+/// never advertises malformed data as migratable without re-decoding large,
+/// unchanged saves on every catalog refresh.
+fn validate_migratable_file(
+    path: &Path,
+    header_compatibility: SaveCompatibility,
+    cache: &mut BTreeMap<PathBuf, CachedMigrationValidation>,
+) -> SaveCompatibility {
+    let fingerprint = fs::metadata(path).ok().map(|metadata| SaveFileFingerprint {
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+    });
+    if let Some(fingerprint) = &fingerprint
+        && let Some(cached) = cache.get(path)
+        && cached.fingerprint == *fingerprint
+    {
+        return cached.compatibility.clone();
+    }
+
+    let (compatibility, cacheable) = match load_simulation(path) {
+        Ok(_) => (header_compatibility, true),
+        Err(ContainerError::TooLarge) => (SaveCompatibility::ExceedsCurrentLimits, true),
+        Err(ContainerError::Io(_)) => (header_compatibility, false),
+        Err(_) => (SaveCompatibility::CorruptOrTruncated, true),
+    };
+    if cacheable && let Some(fingerprint) = fingerprint {
+        cache.insert(
+            path.to_path_buf(),
+            CachedMigrationValidation {
+                fingerprint,
+                compatibility: compatibility.clone(),
+            },
+        );
+    }
+    compatibility
 }
 
 /// Performs the shared lightweight container/header classification used by

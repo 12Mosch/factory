@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -72,6 +74,7 @@ pub enum SaveCompatibility {
     PrototypeFormatNewer { found: u32, supported: u32 },
     PrototypeHashMismatch,
     UnsupportedContainerVersion { found: u32, supported: u32 },
+    ExceedsCurrentLimits,
     CorruptOrTruncated,
     NotFactorySave,
 }
@@ -103,6 +106,9 @@ impl SaveCompatibility {
             Self::UnsupportedContainerVersion { found, supported } => format!(
                 "Container version {found} is unsupported; this build supports version {supported}."
             ),
+            Self::ExceedsCurrentLimits => {
+                "The save exceeds this build's size or collection limits.".into()
+            }
             Self::CorruptOrTruncated => "The save file is incomplete or invalid.".into(),
             Self::NotFactorySave => "This file is not a Factory save.".into(),
         })
@@ -117,6 +123,7 @@ impl SaveCompatibility {
             Self::SaveFormatNewer { .. } | Self::PrototypeFormatNewer { .. } => "Newer format",
             Self::PrototypeHashMismatch => "Different data",
             Self::UnsupportedContainerVersion { .. } => "Unsupported container",
+            Self::ExceedsCurrentLimits => "Exceeds limits",
             Self::CorruptOrTruncated => "Invalid file",
             Self::NotFactorySave => "Not a Factory save",
         }
@@ -142,6 +149,19 @@ impl SaveEntry {
 pub struct SaveCatalog {
     entries: Vec<SaveEntry>,
     pub revision: u64,
+    pub(crate) migration_validation: BTreeMap<PathBuf, CachedMigrationValidation>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SaveFileFingerprint {
+    pub(crate) len: u64,
+    pub(crate) modified: Option<SystemTime>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CachedMigrationValidation {
+    pub(crate) fingerprint: SaveFileFingerprint,
+    pub(crate) compatibility: SaveCompatibility,
 }
 
 impl SaveCatalog {

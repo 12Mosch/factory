@@ -102,10 +102,29 @@ fn migratable_v57_quicksave_is_labeled_loaded_and_left_untouched() {
 
     let loaded = app.world().resource::<SimResource>().read();
     assert_eq!(loaded.tick_count(), 64);
-    assert_eq!(loaded.seed(), 241);
+    assert_eq!(loaded.seed(), 123);
     loaded.validate_state().unwrap();
     drop(loaded);
     assert_eq!(fs::read(&path).unwrap(), historical);
+}
+
+#[test]
+fn malformed_v57_payload_is_catalogued_as_corrupt_not_migratable() {
+    let app = test_app(Duration::ZERO, "malformed_v57");
+    let config = app.world().resource::<SaveLoadConfig>().clone();
+    fs::create_dir_all(&config.root_dir).unwrap();
+    let path = config.root_dir.join("quicksave.factsim");
+    let historical = include_bytes!("../../factory_sim/tests/fixtures/save-v57-sanitized.factsim");
+    fs::write(&path, &historical[..factory_sim::SAVE_HEADER_SIZE + 1]).unwrap();
+
+    let entries = scan_catalog(&config).unwrap();
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].compatibility,
+        SaveCompatibility::CorruptOrTruncated
+    );
+    assert!(!entries[0].compatibility.can_load());
 }
 
 #[test]

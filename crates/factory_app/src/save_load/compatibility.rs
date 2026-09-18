@@ -1,24 +1,30 @@
 use super::SaveCompatibility;
 use factory_sim::{
     OLDEST_SUPPORTED_SAVE_VERSION, PROTOTYPE_FORMAT_VERSION, SAVE_VERSION, SaveHeaderInfo,
-    is_save_version_migratable,
+    SaveVersionSupport, save_version_support,
 };
 
 pub(crate) fn classify_header(
     header: SaveHeaderInfo,
     current_prototype_hash: u64,
 ) -> SaveCompatibility {
-    if header.save_version < OLDEST_SUPPORTED_SAVE_VERSION {
-        SaveCompatibility::SaveFormatOlder {
-            found: header.save_version,
-            supported: OLDEST_SUPPORTED_SAVE_VERSION,
+    let supported_version = match save_version_support(header.save_version) {
+        SaveVersionSupport::UnsupportedOld => {
+            return SaveCompatibility::SaveFormatOlder {
+                found: header.save_version,
+                supported: OLDEST_SUPPORTED_SAVE_VERSION,
+            };
         }
-    } else if header.save_version > SAVE_VERSION {
-        SaveCompatibility::SaveFormatNewer {
-            found: header.save_version,
-            supported: SAVE_VERSION,
+        SaveVersionSupport::Newer => {
+            return SaveCompatibility::SaveFormatNewer {
+                found: header.save_version,
+                supported: SAVE_VERSION,
+            };
         }
-    } else if header.prototype_format_version < PROTOTYPE_FORMAT_VERSION {
+        support => support,
+    };
+
+    if header.prototype_format_version < PROTOTYPE_FORMAT_VERSION {
         SaveCompatibility::PrototypeFormatOlder {
             found: header.prototype_format_version,
             supported: PROTOTYPE_FORMAT_VERSION,
@@ -30,13 +36,17 @@ pub(crate) fn classify_header(
         }
     } else if header.prototype_hash != current_prototype_hash {
         SaveCompatibility::PrototypeHashMismatch
-    } else if is_save_version_migratable(header.save_version) {
-        SaveCompatibility::MigratableSaveFormat {
-            found: header.save_version,
-            current: SAVE_VERSION,
-        }
     } else {
-        SaveCompatibility::Compatible
+        match supported_version {
+            SaveVersionSupport::Migratable => SaveCompatibility::MigratableSaveFormat {
+                found: header.save_version,
+                current: SAVE_VERSION,
+            },
+            SaveVersionSupport::Current => SaveCompatibility::Compatible,
+            SaveVersionSupport::UnsupportedOld | SaveVersionSupport::Newer => {
+                unreachable!("unsupported versions returned before prototype classification")
+            }
+        }
     }
 }
 

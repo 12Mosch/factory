@@ -20,17 +20,24 @@ wall-follow progress. Reconstructing those values would silently change a runnin
 world, so the project deliberately starts the supported migration chain at v57
 rather than pretending those formats can be restored faithfully.
 
-The baseline is not a rolling “previous version only” promise. New formats must
-keep the chain from v57 forward unless a breaking boundary is explicitly chosen,
-documented here, surfaced in the UI, and covered by boundary tests.
+This is an explicit v57-to-v58 compatibility window, not a claim that arbitrary
+future runtime or prototype layouts can decode v57 bytes. Save-format support,
+prototype-format support, and prototype-data identity must all match. Each future
+format must deliberately list its supported sources and either preserve the
+necessary nested wire layouts or make a breaking-boundary decision documented
+here and covered by UI and boundary tests.
 
 ## Migration guarantees
 
-Migration is dispatched by the version in the fixed save header. Each supported
-source version has its own immutable wire schema and an explicit step to the next
-version. The resulting current snapshot is subjected to the same prototype-hash,
-durable-state, rebuilt-cache, and full simulation invariant validation as a native
-v58 save before it can replace the live simulation.
+Migration is dispatched by the version in the fixed save header. The explicit
+support table used by the catalog is also used by the decoder, so the UI cannot
+infer a migration from a numeric range. V57 has a frozen top-level field layout;
+its checked-in fixture guards compatibility of the nested v57 runtime types. A
+future incompatible nested-type or prototype change therefore requires a
+historical adapter or an explicit boundary decision. The resulting current
+snapshot is subjected to the same prototype-hash, durable-state, rebuilt-cache,
+and full simulation invariant validation as a native v58 save before it can
+replace the live simulation.
 
 The v57-to-v58 step preserves every v57 field unchanged. V58 introduced durable
 frontiers for unfinished train route searches; v57 contains no such frontier, so
@@ -44,8 +51,10 @@ validated by the write path, flushed, and atomically promoted.
 
 The sanitized fixture
 `crates/factory_sim/tests/fixtures/save-v57-sanitized.factsim` is the canonical v57
-source. Tests require it to migrate, pass full validation, and remain in lockstep
-with the equivalent simulation after continuing. Unknown future versions,
+source. It includes a train whose v57 route search was exhausted without a saved
+frontier. Tests require it to migrate, restart that search safely, pass full
+validation, and remain in lockstep with the equivalent simulation after
+continuing. Unknown future versions,
 unsupported old versions, truncated data, trailing data, and malformed payloads
 remain errors.
 
