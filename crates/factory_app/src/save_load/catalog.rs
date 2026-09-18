@@ -25,6 +25,11 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_CATALOG_VALIDATION_JOBS: usize = 1;
+/// Upper bound for validation attempts per refresh cycle, including the
+/// initial attempt. Transient failures (brief locks, mid-sync replacement)
+/// are retried; anything still unstable afterwards waits for the next
+/// refresh instead of spinning the background worker.
+const MAX_CATALOG_VALIDATION_ATTEMPTS: u8 = 3;
 
 /// Replaces the in-memory catalog after a lightweight scan, then queues bounded
 /// background payload validation for cache misses.
@@ -610,36 +615,54 @@ fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) {
                 entry.compatibility = outcome.compatibility;
                 catalog.revision = catalog.revision.wrapping_add(1);
             }
-        } else if outcome.attempt == 0
+        } else if outcome.attempt < MAX_CATALOG_VALIDATION_ATTEMPTS
             && let Some(entry_index) = catalog
                 .entries
                 .iter()
                 .position(|entry| entry.path == outcome.path)
             && catalog.entries[entry_index].compatibility == SaveCompatibility::ValidationPending
+            && !catalog
+                .validation_queue
+                .iter()
+                .any(|queued| queued.path == outcome.path)
         {
             let kind = catalog.entries[entry_index].metadata.kind.clone();
+            let next_attempt = outcome.attempt + 1;
             if let Some((metadata, fresh)) = inspect_current_file(&outcome.path, &kind) {
-                let already_queued = catalog
-                    .validation_queue
-                    .iter()
-                    .any(|queued| queued.path == outcome.path && queued.metadata == metadata);
-                if !already_queued {
-                    if fresh.can_load() {
-                        queue_catalog_validation(
-                            catalog,
-                            CatalogValidationRequest {
-                                path: outcome.path,
-                                kind,
-                                compatibility: fresh,
-                                metadata,
-                                attempt: 1,
-                            },
-                        );
-                    } else {
-                        catalog.entries[entry_index].compatibility = fresh;
-                        catalog.revision = catalog.revision.wrapping_add(1);
-                    }
+                if fresh.can_load() {
+                    queue_catalog_validation(
+                        catalog,
+                        CatalogValidationRequest {
+                            path: outcome.path,
+                            kind,
+                            compatibility: fresh,
+                            metadata,
+                            attempt: next_attempt,
+                        },
+                    );
+                } else {
+                    catalog.entries[entry_index].compatibility = fresh;
+                    catalog.revision = catalog.revision.wrapping_add(1);
                 }
+            } else {
+                // The file is momentarily unreadable (brief lock, mid-sync
+                // replacement). Queue a bounded blind retry: the worker
+                // classifies from its own handle, so the placeholder below
+                // is never published.
+                queue_catalog_validation(
+                    catalog,
+                    CatalogValidationRequest {
+                        path: outcome.path,
+                        kind,
+                        compatibility: SaveCompatibility::ValidationPending,
+                        metadata: SaveFileMetadataFingerprint {
+                            len: 0,
+                            modified: None,
+                            identity: None,
+                        },
+                        attempt: next_attempt,
+                    },
+                );
             }
         }
     }
@@ -1438,6 +1461,197 @@ mod tests {
             0,
         );
         assert_eq!(outcome.compatibility, SaveCompatibility::Compatible);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn second_transient_failure_schedules_bounded_retry() {
+        let dir = std::env::temp_dir().join(format!(
+            "factory-transient-retry-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        let metadata = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
+
+        // The first validation and its retry both hit transient I/O
+        // failures. Loading must not stay disabled.
+        let transient = CatalogValidationOutcome {
+            path: path.clone(),
+            compatibility: SaveCompatibility::ValidationPending,
+            observed_metadata: Some(metadata),
+            fingerprint: None,
+            attempt: 1,
+        };
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+                inspected: None,
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: vec![CatalogValidationJob {
+                path: path.clone(),
+                metadata: save_file_metadata_fingerprint(&fs::File::open(&path).unwrap()),
+                handle: thread::spawn(|| transient),
+            }],
+        };
+
+        drain_validation_jobs(&mut catalog);
+
+        assert_eq!(catalog.validation_jobs.len(), 0);
+        assert!(catalog.validation_queue.is_empty());
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::Compatible
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unreadable_file_schedules_bounded_blind_retry() {
+        let dir = std::env::temp_dir().join(format!(
+            "factory-blind-retry-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        let metadata_before = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
+        fs::remove_file(&path).unwrap();
+
+        let transient = CatalogValidationOutcome {
+            path: path.clone(),
+            compatibility: SaveCompatibility::ValidationPending,
+            observed_metadata: Some(metadata_before.clone()),
+            fingerprint: None,
+            attempt: 0,
+        };
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+                inspected: None,
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: vec![CatalogValidationJob {
+                path: path.clone(),
+                metadata: metadata_before,
+                handle: thread::spawn(|| transient),
+            }],
+        };
+
+        // Wait until the blind retry is in flight: it carries a placeholder
+        // identity because the file could not be opened for fingerprinting.
+        let placeholder = SaveFileMetadataFingerprint {
+            len: 0,
+            modified: None,
+            identity: None,
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while catalog.validation_jobs.len() != 1
+            || catalog.validation_jobs[0].metadata != placeholder
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "blind retry was not scheduled"
+            );
+            poll_catalog_validation_jobs_inner(&mut catalog);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        // The file reappears while the blind retry is outstanding. Either the
+        // running retry or its bounded successor must observe and publish it.
+        fs::write(&path, &current).unwrap();
+        drain_validation_jobs(&mut catalog);
+
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::Compatible
+        );
+        assert!(catalog.validation_cache[&path].fingerprint.metadata.len > 0);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn retries_stop_at_attempt_bound() {
+        let dir = std::env::temp_dir().join(format!(
+            "factory-retry-bound-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let transient = CatalogValidationOutcome {
+            path: path.clone(),
+            compatibility: SaveCompatibility::ValidationPending,
+            observed_metadata: None,
+            fingerprint: None,
+            attempt: MAX_CATALOG_VALIDATION_ATTEMPTS,
+        };
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+                inspected: None,
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: vec![CatalogValidationJob {
+                path: path.clone(),
+                metadata: SaveFileMetadataFingerprint {
+                    len: 0,
+                    modified: None,
+                    identity: None,
+                },
+                handle: thread::spawn(|| transient),
+            }],
+        };
+
+        drain_validation_jobs(&mut catalog);
+
+        assert_eq!(catalog.validation_jobs.len(), 0);
+        assert!(catalog.validation_queue.is_empty());
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::ValidationPending
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
