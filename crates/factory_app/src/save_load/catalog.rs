@@ -26,11 +26,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_CATALOG_VALIDATION_JOBS: usize = 1;
 /// Number of retries after the initial validation attempt. Attempts are
-/// numbered from zero, so attempt values `0..=MAX_CATALOG_VALIDATION_RETRIES`
-/// occur per refresh cycle. Transient failures (brief locks, mid-sync
-/// replacement) are retried; anything still unstable afterwards waits for
-/// the next refresh or pending rescan instead of spinning the worker.
-const MAX_CATALOG_VALIDATION_RETRIES: u8 = 3;
+/// numbered from zero and only attempts below this bound schedule a retry,
+/// so at most three validations (attempts 0, 1, 2) run per refresh cycle.
+/// Transient failures (brief locks, mid-sync replacement) are retried;
+/// anything still unstable afterwards waits for the next refresh or pending
+/// rescan instead of spinning the worker.
+const MAX_CATALOG_VALIDATION_RETRIES: u8 = 2;
 /// How often entries stuck at `ValidationPending` with no queued or running
 /// validation are re-observed.
 const PENDING_RESCAN_INTERVAL_MS: u64 = 2_000;
@@ -1701,10 +1702,17 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("quicksave.factsim");
+        // The file is valid and present, but the attempt budget is spent:
+        // no further validation may be scheduled by the chain. The periodic
+        // rescan (disabled here) owns any later observation.
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        let metadata = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
         let transient = CatalogValidationOutcome {
             path: path.clone(),
             compatibility: SaveCompatibility::ValidationPending,
-            observed_metadata: None,
+            observed_metadata: Some(metadata),
             fingerprint: None,
             attempt: MAX_CATALOG_VALIDATION_RETRIES,
         };
