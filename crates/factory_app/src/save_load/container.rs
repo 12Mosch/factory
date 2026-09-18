@@ -171,9 +171,16 @@ fn container_payload_offset_with_limits(
 
 /// Reads only the container metadata and simulation header needed by the catalog.
 pub(crate) fn inspect_container(path: &Path) -> Result<InspectedContainer, ContainerError> {
-    let mut file = fs::File::open(path)?;
+    inspect_container_from_reader(&mut fs::File::open(path)?)
+}
+
+/// Reads container metadata and simulation header from an already-open handle
+/// so callers can bind the classification to that file instance.
+pub(crate) fn inspect_container_from_reader(
+    reader: &mut impl Read,
+) -> Result<InspectedContainer, ContainerError> {
     let mut prefix = [0; PREFIX_SIZE];
-    read_inspection_bytes(&mut file, &mut prefix)?;
+    read_inspection_bytes(&mut *reader, &mut prefix)?;
     if prefix[..8] != CONTAINER_MAGIC {
         return Err(ContainerError::InvalidContainerMagic);
     }
@@ -183,10 +190,10 @@ pub(crate) fn inspect_container(path: &Path) -> Result<InspectedContainer, Conta
         return Err(ContainerError::MetadataTooLarge(metadata_len));
     }
     let mut metadata_bytes = vec![0; metadata_len];
-    read_inspection_bytes(&mut file, &mut metadata_bytes)?;
+    read_inspection_bytes(&mut *reader, &mut metadata_bytes)?;
     let metadata = ron::de::from_bytes(&metadata_bytes).ok();
     let mut simulation_header = vec![0; SAVE_HEADER_SIZE];
-    read_inspection_bytes(&mut file, &mut simulation_header)?;
+    read_inspection_bytes(&mut *reader, &mut simulation_header)?;
     Ok(InspectedContainer {
         version,
         metadata,

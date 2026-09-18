@@ -633,6 +633,7 @@ mod tests {
             compatibility: SaveCompatibility::Compatible,
             metadata_available: true,
             path: PathBuf::from(format!("autosave-{generation}.factsim")),
+            inspected: None,
         }
     }
 }

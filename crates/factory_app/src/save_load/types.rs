@@ -143,6 +143,10 @@ pub struct SaveEntry {
     pub compatibility: SaveCompatibility,
     pub metadata_available: bool,
     pub(crate) path: PathBuf,
+    /// Identity of the file instance whose bytes produced `compatibility`.
+    /// Validation must re-derive the classification when the path no longer
+    /// resolves to this instance.
+    pub(crate) inspected: Option<SaveFileMetadataFingerprint>,
 }
 
 impl SaveEntry {
@@ -190,6 +194,7 @@ pub(crate) struct CachedSaveValidation {
 #[derive(Clone, Debug)]
 pub(crate) struct CatalogValidationRequest {
     pub(crate) path: PathBuf,
+    pub(crate) kind: SaveKind,
     pub(crate) compatibility: SaveCompatibility,
     pub(crate) metadata: SaveFileMetadataFingerprint,
     pub(crate) attempt: u8,
