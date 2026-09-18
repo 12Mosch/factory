@@ -88,6 +88,7 @@ fn migratable_v57_quicksave_is_labeled_loaded_and_left_untouched() {
     fs::write(&path, historical).unwrap();
 
     app.update();
+    drain_catalog_validations(&mut app);
     let entry = &app.world().resource::<SaveCatalog>().entries()[0];
     assert!(matches!(
         entry.compatibility,
@@ -1232,6 +1233,7 @@ fn refresh_manager(app: &mut App) {
         .resource_mut::<SaveLoadWindowState>()
         .refresh_on_open = true;
     app.update();
+    drain_catalog_validations(app);
 }
 
 fn press_entry(app: &mut App, id: &factory_app::save_load::SaveId, action: SaveEntryAction) {
@@ -1288,9 +1290,28 @@ fn drain_save_jobs(app: &mut App) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if app.world().resource::<PendingSaveJobs>().is_empty() {
+            drain_catalog_validations(app);
             return;
         }
         assert!(Instant::now() < deadline, "save jobs did not drain");
+        app.update();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn drain_catalog_validations(app: &mut App) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app
+        .world()
+        .resource::<SaveCatalog>()
+        .entries()
+        .iter()
+        .any(|entry| entry.compatibility == SaveCompatibility::ValidationPending)
+    {
+        assert!(
+            Instant::now() < deadline,
+            "catalog validation jobs did not drain"
+        );
         app.update();
         std::thread::sleep(Duration::from_millis(1));
     }

@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
+use std::thread::JoinHandle;
 use std::time::SystemTime;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -68,6 +69,7 @@ impl SaveMetadata {
 pub enum SaveCompatibility {
     Compatible,
     MigratableSaveFormat { found: u32, current: u32 },
+    ValidationPending,
     SaveFormatOlder { found: u32, supported: u32 },
     SaveFormatNewer { found: u32, supported: u32 },
     PrototypeFormatOlder { found: u32, supported: u32 },
@@ -90,6 +92,9 @@ impl SaveCompatibility {
             Self::MigratableSaveFormat { found, current } => format!(
                 "Save format {found} will be migrated to {current} when loaded. The source file remains unchanged until you explicitly save."
             ),
+            Self::ValidationPending => {
+                "The save payload is being checked before loading is enabled.".into()
+            }
             Self::SaveFormatOlder { found, supported } => format!(
                 "Save format {found} predates the oldest supported migration source ({supported}). Open it with a build that supports that format, then re-save it before updating."
             ),
@@ -118,6 +123,7 @@ impl SaveCompatibility {
         match self {
             Self::Compatible => "Compatible",
             Self::MigratableSaveFormat { .. } => "Migratable",
+            Self::ValidationPending => "Checking...",
             Self::SaveFormatOlder { .. } => "Unsupported old format",
             Self::PrototypeFormatOlder { .. } => "Older prototype format",
             Self::SaveFormatNewer { .. } | Self::PrototypeFormatNewer { .. } => "Newer format",
@@ -145,11 +151,13 @@ impl SaveEntry {
     }
 }
 
-#[derive(Resource, Clone, Debug, Default)]
+#[derive(Resource, Debug, Default)]
 pub struct SaveCatalog {
-    entries: Vec<SaveEntry>,
+    pub(crate) entries: Vec<SaveEntry>,
     pub revision: u64,
     pub(crate) validation_cache: BTreeMap<PathBuf, CachedSaveValidation>,
+    pub(crate) validation_queue: VecDeque<CatalogValidationRequest>,
+    pub(crate) validation_jobs: Vec<CatalogValidationJob>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -179,6 +187,31 @@ pub(crate) struct CachedSaveValidation {
     pub(crate) compatibility: SaveCompatibility,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct CatalogValidationRequest {
+    pub(crate) path: PathBuf,
+    pub(crate) compatibility: SaveCompatibility,
+    pub(crate) metadata: SaveFileMetadataFingerprint,
+    pub(crate) attempt: u8,
+}
+
+#[derive(Debug)]
+pub(crate) struct CatalogValidationOutcome {
+    pub(crate) path: PathBuf,
+    pub(crate) source_compatibility: SaveCompatibility,
+    pub(crate) compatibility: SaveCompatibility,
+    pub(crate) observed_metadata: Option<SaveFileMetadataFingerprint>,
+    pub(crate) fingerprint: Option<SaveFileFingerprint>,
+    pub(crate) attempt: u8,
+}
+
+#[derive(Debug)]
+pub(crate) struct CatalogValidationJob {
+    pub(crate) path: PathBuf,
+    pub(crate) metadata: SaveFileMetadataFingerprint,
+    pub(crate) handle: JoinHandle<CatalogValidationOutcome>,
+}
+
 impl SaveCatalog {
     pub fn entries(&self) -> &[SaveEntry] {
         &self.entries
@@ -196,6 +229,7 @@ impl SaveCatalog {
     pub(crate) fn invalidate_validation(&mut self, id: &SaveId) {
         if let Some(path) = self.get(id).map(|entry| entry.path.clone()) {
             self.validation_cache.remove(&path);
+            self.validation_queue.retain(|request| request.path != path);
         }
     }
 
@@ -205,6 +239,14 @@ impl SaveCatalog {
             entry.metadata.kind == SaveKind::Named
                 && entry.metadata.display_name.to_lowercase() == normalized
         })
+    }
+}
+
+impl Drop for SaveCatalog {
+    fn drop(&mut self) {
+        for job in self.validation_jobs.drain(..) {
+            let _ = job.handle.join();
+        }
     }
 }
 

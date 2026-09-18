@@ -5,11 +5,13 @@ use super::container::{
     promote_backup, retired_save_artifact_primary, with_save_artifact_lock,
 };
 use super::{
-    CachedSaveValidation, SaveCatalog, SaveCompatibility, SaveEntry, SaveFileFingerprint,
-    SaveFileIdentity, SaveFileMetadataFingerprint, SaveId, SaveKind, SaveLoadConfig, SaveMetadata,
+    CachedSaveValidation, CatalogValidationJob, CatalogValidationOutcome, CatalogValidationRequest,
+    SaveCatalog, SaveCompatibility, SaveEntry, SaveFileFingerprint, SaveFileIdentity,
+    SaveFileMetadataFingerprint, SaveId, SaveKind, SaveLoadConfig, SaveMetadata,
     local_datetime_from_unix_ms,
 };
 use bevy::log::warn;
+use bevy::prelude::ResMut;
 use factory_data::PrototypeCatalog;
 use factory_sim::{
     SAVE_HEADER_SIZE, SaveLimits, SaveLoadError, inspect_save_header, load_from_bytes,
@@ -19,26 +21,53 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, BufReader, Read, Seek};
 use std::path::{Path, PathBuf};
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Replaces the in-memory catalog with a freshly recovered and inspected scan.
+const MAX_CATALOG_VALIDATION_JOBS: usize = 1;
+
+/// Replaces the in-memory catalog after a lightweight scan, then queues bounded
+/// background payload validation for cache misses.
 pub fn refresh_catalog(config: &SaveLoadConfig, catalog: &mut SaveCatalog) -> Result<(), String> {
-    let entries = scan_catalog_with_cache(config, &mut catalog.validation_cache)?;
+    poll_catalog_validation_jobs_inner(catalog);
+    let mut entries = scan_catalog_unvalidated(config)?;
+    let present = entries
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect::<BTreeSet<_>>();
+    catalog
+        .validation_cache
+        .retain(|path, _| present.contains(path));
+    catalog
+        .validation_queue
+        .retain(|request| present.contains(&request.path));
+    let mut requests = Vec::new();
+    for entry in &mut entries {
+        prepare_entry_validation(entry, &catalog.validation_cache, &mut requests);
+    }
     catalog.replace(entries);
+    for request in requests {
+        queue_catalog_validation(catalog, request);
+    }
+    start_catalog_validation_jobs(catalog);
     Ok(())
 }
 
 /// Recovers interrupted saves and returns all recognized canonical entries.
 pub fn scan_catalog(config: &SaveLoadConfig) -> Result<Vec<SaveEntry>, String> {
-    scan_catalog_with_cache(config, &mut BTreeMap::new())
+    let mut entries = scan_catalog_unvalidated(config)?;
+    let mut cache = BTreeMap::new();
+    for entry in &mut entries {
+        if entry.compatibility.can_load() {
+            entry.compatibility =
+                validate_loadable_file(&entry.path, entry.compatibility.clone(), &mut cache);
+        }
+    }
+    Ok(entries)
 }
 
-fn scan_catalog_with_cache(
-    config: &SaveLoadConfig,
-    validation_cache: &mut BTreeMap<PathBuf, CachedSaveValidation>,
-) -> Result<Vec<SaveEntry>, String> {
+fn scan_catalog_unvalidated(config: &SaveLoadConfig) -> Result<Vec<SaveEntry>, String> {
     if !config.root_dir.exists() {
-        validation_cache.clear();
         return Ok(Vec::new());
     }
     let current_hash = prototype_hash(
@@ -65,14 +94,7 @@ fn scan_catalog_with_cache(
         else {
             continue;
         };
-        entries.push(inspect_entry(
-            path,
-            id,
-            kind,
-            fallback_name,
-            current_hash,
-            validation_cache,
-        ));
+        entries.push(inspect_entry(path, id, kind, fallback_name, current_hash));
     }
     entries.sort_by(|left, right| {
         group_order(&left.metadata.kind)
@@ -88,11 +110,6 @@ fn scan_catalog_with_cache(
                     .cmp(&autosave_generation(&right.metadata.kind))
             })
     });
-    let present = entries
-        .iter()
-        .map(|entry| entry.path.clone())
-        .collect::<BTreeSet<_>>();
-    validation_cache.retain(|path, _| present.contains(path));
     Ok(entries)
 }
 
@@ -403,15 +420,10 @@ fn inspect_entry(
     kind: SaveKind,
     fallback_name: String,
     current_hash: u64,
-    validation_cache: &mut BTreeMap<PathBuf, CachedSaveValidation>,
 ) -> SaveEntry {
     let timestamp = file_timestamp_ms(&path);
     let fallback = || fallback_metadata(id.clone(), kind.clone(), fallback_name.clone(), timestamp);
-    let mut inspection = inspect_file(&path, &kind, current_hash);
-    if inspection.compatibility.can_load() {
-        inspection.compatibility =
-            validate_loadable_file(&path, inspection.compatibility, validation_cache);
-    }
+    let inspection = inspect_file(&path, &kind, current_hash);
     let metadata = inspection
         .metadata
         .filter(|metadata| metadata.id == id && metadata.kind == kind);
@@ -435,37 +447,221 @@ fn inspect_entry(
     }
 }
 
-/// Fully validates loadable payloads once per stable file identity so the UI
-/// never advertises malformed data as compatible. File identity and change
-/// time make unchanged cache hits O(1), while a bounded content digest guards
-/// validation misses and detects in-place mutation during decoding.
+fn prepare_entry_validation(
+    entry: &mut SaveEntry,
+    cache: &BTreeMap<PathBuf, CachedSaveValidation>,
+    requests: &mut Vec<CatalogValidationRequest>,
+) {
+    if !entry.compatibility.can_load() {
+        return;
+    }
+    let source_compatibility = entry.compatibility.clone();
+    let Ok(file) = fs::File::open(&entry.path) else {
+        entry.compatibility = SaveCompatibility::ValidationPending;
+        return;
+    };
+    let metadata = save_file_metadata_fingerprint(&file);
+    if metadata.len > SaveLimits::default().max_encoded_bytes {
+        entry.compatibility = SaveCompatibility::ExceedsCurrentLimits;
+    } else if metadata.identity.is_some()
+        && let Some(cached) = cache.get(&entry.path)
+        && cached.fingerprint.metadata == metadata
+    {
+        entry.compatibility = cached.compatibility.clone();
+    } else {
+        entry.compatibility = SaveCompatibility::ValidationPending;
+        requests.push(CatalogValidationRequest {
+            path: entry.path.clone(),
+            compatibility: source_compatibility,
+            metadata,
+            attempt: 0,
+        });
+    }
+}
+
+fn queue_catalog_validation(catalog: &mut SaveCatalog, request: CatalogValidationRequest) {
+    if catalog
+        .validation_jobs
+        .iter()
+        .any(|job| job.path == request.path && job.metadata == request.metadata)
+    {
+        return;
+    }
+    catalog
+        .validation_queue
+        .retain(|queued| queued.path != request.path);
+    catalog.validation_queue.push_back(request);
+}
+
+fn start_catalog_validation_jobs(catalog: &mut SaveCatalog) {
+    while catalog.validation_jobs.len() < MAX_CATALOG_VALIDATION_JOBS {
+        let Some(request) = catalog.validation_queue.pop_front() else {
+            break;
+        };
+        let path = request.path.clone();
+        let metadata = request.metadata.clone();
+        let handle = thread::spawn(move || {
+            validate_loadable_path(request.path, request.compatibility, request.attempt)
+        });
+        catalog.validation_jobs.push(CatalogValidationJob {
+            path,
+            metadata,
+            handle,
+        });
+    }
+}
+
+pub(crate) fn poll_catalog_validation_jobs(mut catalog: ResMut<SaveCatalog>) {
+    poll_catalog_validation_jobs_inner(&mut catalog);
+}
+
+fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) {
+    let mut index = 0;
+    while index < catalog.validation_jobs.len() {
+        if !catalog.validation_jobs[index].handle.is_finished() {
+            index += 1;
+            continue;
+        }
+        let job = catalog.validation_jobs.swap_remove(index);
+        let outcome = match job.handle.join() {
+            Ok(outcome) => outcome,
+            Err(_) => continue,
+        };
+        let current_metadata = fs::File::open(&outcome.path)
+            .ok()
+            .map(|file| save_file_metadata_fingerprint(&file));
+        let still_current = match (&outcome.fingerprint, &outcome.observed_metadata) {
+            (Some(fingerprint), _) => current_metadata.as_ref() == Some(&fingerprint.metadata),
+            (None, Some(observed))
+                if outcome.compatibility == SaveCompatibility::ExceedsCurrentLimits =>
+            {
+                current_metadata.as_ref() == Some(observed)
+            }
+            (None, None) => false,
+            (None, Some(_)) => false,
+        };
+        if still_current && outcome.compatibility != SaveCompatibility::ValidationPending {
+            if let Some(fingerprint) = outcome.fingerprint {
+                catalog.validation_cache.insert(
+                    outcome.path.clone(),
+                    CachedSaveValidation {
+                        fingerprint,
+                        compatibility: outcome.compatibility.clone(),
+                    },
+                );
+            }
+            if let Some(entry) = catalog
+                .entries
+                .iter_mut()
+                .find(|entry| entry.path == outcome.path)
+                && entry.compatibility == SaveCompatibility::ValidationPending
+            {
+                entry.compatibility = outcome.compatibility;
+                catalog.revision = catalog.revision.wrapping_add(1);
+            }
+        } else if outcome.attempt == 0
+            && let Some(metadata) = current_metadata
+            && let Some(entry) = catalog
+                .entries
+                .iter()
+                .find(|entry| entry.path == outcome.path)
+            && entry.compatibility == SaveCompatibility::ValidationPending
+        {
+            queue_catalog_validation(
+                catalog,
+                CatalogValidationRequest {
+                    path: outcome.path,
+                    compatibility: outcome.source_compatibility,
+                    metadata,
+                    attempt: 1,
+                },
+            );
+        }
+    }
+    start_catalog_validation_jobs(catalog);
+}
+
+/// Fully validates a loadable payload synchronously for explicit callers such
+/// as recovery tests. Interactive catalog refreshes use the background path.
 fn validate_loadable_file(
     path: &Path,
     header_compatibility: SaveCompatibility,
     cache: &mut BTreeMap<PathBuf, CachedSaveValidation>,
 ) -> SaveCompatibility {
-    let mut file = match fs::File::open(path) {
-        Ok(file) => file,
-        Err(_) => return header_compatibility,
-    };
-    let metadata_fingerprint = save_file_metadata_fingerprint(&file);
-    if metadata_fingerprint.len > SaveLimits::default().max_encoded_bytes {
-        cache.remove(path);
-        return SaveCompatibility::ExceedsCurrentLimits;
-    }
-    if metadata_fingerprint.identity.is_some()
+    let metadata = fs::File::open(path)
+        .ok()
+        .map(|file| save_file_metadata_fingerprint(&file));
+    if let Some(metadata) = &metadata
+        && metadata.identity.is_some()
         && let Some(cached) = cache.get(path)
-        && cached.fingerprint.metadata == metadata_fingerprint
+        && cached.fingerprint.metadata == *metadata
     {
         return cached.compatibility.clone();
     }
-    let fingerprint = match save_file_fingerprint(&mut file, metadata_fingerprint) {
+    let outcome = validate_loadable_path(path.to_path_buf(), header_compatibility, 0);
+    if let Some(fingerprint) = outcome.fingerprint {
+        cache.insert(
+            path.to_path_buf(),
+            CachedSaveValidation {
+                fingerprint,
+                compatibility: outcome.compatibility.clone(),
+            },
+        );
+    }
+    outcome.compatibility
+}
+
+fn validate_loadable_path(
+    path: PathBuf,
+    source_compatibility: SaveCompatibility,
+    attempt: u8,
+) -> CatalogValidationOutcome {
+    let mut file = match fs::File::open(&path) {
+        Ok(file) => file,
+        Err(_) => {
+            return CatalogValidationOutcome {
+                path,
+                source_compatibility,
+                compatibility: SaveCompatibility::ValidationPending,
+                observed_metadata: None,
+                fingerprint: None,
+                attempt,
+            };
+        }
+    };
+    let metadata = save_file_metadata_fingerprint(&file);
+    if metadata.len > SaveLimits::default().max_encoded_bytes {
+        return CatalogValidationOutcome {
+            path,
+            source_compatibility,
+            compatibility: SaveCompatibility::ExceedsCurrentLimits,
+            observed_metadata: Some(metadata),
+            fingerprint: None,
+            attempt,
+        };
+    }
+    let fingerprint = match save_file_fingerprint(&mut file, metadata.clone()) {
         Ok(fingerprint) => fingerprint,
         Err(ContainerError::TooLarge) => {
-            cache.remove(path);
-            return SaveCompatibility::ExceedsCurrentLimits;
+            return CatalogValidationOutcome {
+                path,
+                source_compatibility,
+                compatibility: SaveCompatibility::ExceedsCurrentLimits,
+                observed_metadata: Some(metadata),
+                fingerprint: None,
+                attempt,
+            };
         }
-        Err(_) => return header_compatibility,
+        Err(_) => {
+            return CatalogValidationOutcome {
+                path,
+                source_compatibility,
+                compatibility: SaveCompatibility::ValidationPending,
+                observed_metadata: Some(metadata),
+                fingerprint: None,
+                attempt,
+            };
+        }
     };
     let load_result = match file.rewind() {
         Ok(()) => {
@@ -473,31 +669,25 @@ fn validate_loadable_file(
         }
         Err(error) => Err(ContainerError::Io(error)),
     };
-    let (compatibility, cacheable) = match load_result {
-        Ok(_) => (header_compatibility, true),
-        Err(ContainerError::TooLarge) => (SaveCompatibility::ExceedsCurrentLimits, true),
-        Err(ContainerError::Io(_)) => (header_compatibility, false),
-        Err(_) => (SaveCompatibility::CorruptOrTruncated, true),
+    let compatibility = match load_result {
+        Ok(_) => source_compatibility.clone(),
+        Err(ContainerError::TooLarge) => SaveCompatibility::ExceedsCurrentLimits,
+        Err(ContainerError::Io(_)) => SaveCompatibility::ValidationPending,
+        Err(_) => SaveCompatibility::CorruptOrTruncated,
     };
     let after_metadata = save_file_metadata_fingerprint(&file);
-    let stable_fingerprint = match save_file_fingerprint(&mut file, after_metadata) {
-        Ok(after_validation) => after_validation == fingerprint,
-        Err(ContainerError::TooLarge) => {
-            cache.remove(path);
-            return SaveCompatibility::ExceedsCurrentLimits;
-        }
-        Err(_) => false,
+    let stable_fingerprint = match save_file_fingerprint(&mut file, after_metadata.clone()) {
+        Ok(after_validation) if after_validation == fingerprint => Some(fingerprint),
+        _ => None,
     };
-    if cacheable && stable_fingerprint && fingerprint.metadata.identity.is_some() {
-        cache.insert(
-            path.to_path_buf(),
-            CachedSaveValidation {
-                fingerprint,
-                compatibility: compatibility.clone(),
-            },
-        );
+    CatalogValidationOutcome {
+        path,
+        source_compatibility,
+        compatibility,
+        observed_metadata: Some(after_metadata),
+        fingerprint: stable_fingerprint,
+        attempt,
     }
-    compatibility
 }
 
 /// Identifies the exact bytes considered by payload validation.
@@ -706,6 +896,39 @@ pub(crate) fn now_unix_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cold_refresh_defers_payload_validation_to_a_bounded_worker() {
+        let root = std::env::temp_dir().join(format!(
+            "factory-background-validation-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("quicksave.factsim"),
+            include_bytes!("../../../factory_sim/tests/fixtures/save-v57-sanitized.factsim"),
+        )
+        .unwrap();
+        let config = SaveLoadConfig {
+            root_dir: root.clone(),
+            autosave_interval_ticks: 300,
+            autosave_slot_count: 5,
+        };
+        let mut catalog = SaveCatalog::default();
+
+        refresh_catalog(&config, &mut catalog).unwrap();
+
+        assert_eq!(catalog.entries.len(), 1);
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::ValidationPending
+        );
+        assert_eq!(catalog.validation_jobs.len(), 1);
+        assert!(catalog.validation_queue.is_empty());
+        drop(catalog);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn stable_file_identity_invalidates_same_size_timestamp_cache_entry() {

@@ -4,8 +4,8 @@ use super::{AppSet, InGameSet};
 use crate::save_load::{
     AutosaveState, PendingSaveConfirmation, PendingSaveJobs, PresentationReloadToken, SaveCatalog,
     SaveLoadConfig, SaveLoadMetrics, SaveLoadStatus, SaveLoadWindowState,
-    handle_save_load_shortcuts, initialize_save_state, poll_save_jobs,
-    refresh_catalog_on_manager_open, run_autosave,
+    handle_save_load_shortcuts, initialize_save_state, poll_catalog_validation_jobs,
+    poll_save_jobs, refresh_catalog_on_manager_open, run_autosave,
 };
 use crate::ui::save_load::{
     SaveCreateRequested, handle_copy_world_seed_button, handle_save_load_buttons,
@@ -36,6 +36,7 @@ impl Plugin for SaveLoadPlugin {
                     // Surface completed results before admitting this frame's
                     // requests, so a finished target is immediately reusable.
                     poll_save_jobs,
+                    poll_catalog_validation_jobs,
                     handle_save_load_shortcuts.in_set(InGameSet),
                     sync_save_name_from_state.in_set(InGameSet),
                     handle_save_load_buttons.in_set(AppSet::UiInteraction),

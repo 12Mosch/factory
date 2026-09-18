@@ -2503,7 +2503,6 @@ dependencies = [
  "chrono",
  "factory_data",
  "factory_sim",
- "libc",
  "ron",
  "serde",
  "windows-sys 0.61.2",

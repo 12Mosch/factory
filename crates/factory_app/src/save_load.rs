@@ -5,6 +5,7 @@ mod jobs;
 mod timestamp;
 mod types;
 
+pub(crate) use catalog::poll_catalog_validation_jobs;
 pub use catalog::{refresh_catalog, scan_catalog};
 pub(crate) use container::write_save_bytes;
 pub use container::{
