@@ -1,7 +1,7 @@
 use super::{SaveId, SaveKind, SaveMetadata};
 use factory_sim::{
     SAVE_HEADER_SIZE, SaveLimits, SaveLoadError, Simulation, SimulationSaveSnapshot,
-    load_from_reader_with_limits, save_snapshot_records_to_writer,
+    load_from_reader_with_limits, save_snapshot_records_to_writer_with_limits,
 };
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -371,9 +371,16 @@ fn write_save_snapshot_locked(
         .map_err(|_| ContainerError::MetadataTooLarge(metadata_bytes.len()))?;
     let overhead = PREFIX_SIZE as u64 + metadata_bytes.len() as u64;
     check_size(overhead, limits.max_encoded_bytes)?;
-    let payload_maximum = limits
-        .max_simulation_bytes()
-        .min(limits.max_encoded_bytes - overhead);
+    // The record header and manifest are framing inside the payload, so the
+    // payload allowance is the artifact budget minus the outer container
+    // overhead — not the legacy monolithic allowance.
+    let payload_maximum = limits.max_encoded_bytes - overhead;
+    // Scope the writer to the payload allowance so its pre-write total check
+    // guarantees the records fit before any byte reaches the file.
+    let record_limits = SaveLimits {
+        max_encoded_bytes: payload_maximum,
+        ..limits
+    };
 
     write_temporary_and_commit(path, |writer| {
         writer.write_all(&CONTAINER_MAGIC)?;
@@ -383,7 +390,7 @@ fn write_save_snapshot_locked(
         let encode_start = Instant::now();
         let simulation_bytes = {
             let mut payload = LimitedWriter::new(writer, payload_maximum);
-            save_snapshot_records_to_writer(snapshot, &mut payload)
+            save_snapshot_records_to_writer_with_limits(snapshot, &mut payload, record_limits)
                 .map_err(map_simulation_error)?;
             payload.written
         };
@@ -1085,6 +1092,46 @@ mod tests {
         assert_eq!(duplicate.state_hash(), simulation.state_hash());
         assert_eq!(duplicate.tick_count(), original.tick_count());
         assert_eq!(duplicate.state_hash(), original.state_hash());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn record_framing_matches_container_allowance_exactly() {
+        let mut simulation = Simulation::new_test_world(81);
+        for _ in 0..12 {
+            simulation.tick();
+        }
+        let snapshot = try_capture_save_snapshot(&simulation, 9).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "factory-container-framing-{}-{}",
+            std::process::id(),
+            SAVE_ARTIFACT_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let reference = root.join("reference.factsim");
+        write_save_snapshot(&reference, &metadata("Framing"), &snapshot).unwrap();
+        let total = fs::read(&reference).unwrap().len() as u64;
+        // The record header and manifest live inside the payload allowance,
+        // so the exact artifact size must be accepted.
+        let exact = SaveLimits {
+            max_encoded_bytes: total,
+            ..SaveLimits::default()
+        };
+        let bounded = root.join("bounded.factsim");
+        write_save_snapshot_locked(&bounded, &metadata("Framing"), &snapshot, exact).unwrap();
+        assert_eq!(fs::read(&bounded).unwrap().len() as u64, total);
+        let short = SaveLimits {
+            max_encoded_bytes: total - 1,
+            ..SaveLimits::default()
+        };
+        assert!(
+            write_save_snapshot_locked(
+                &root.join("short.factsim"),
+                &metadata("Framing"),
+                &snapshot,
+                short
+            )
+            .is_err()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -5,7 +5,7 @@ use super::{
     SaveMetadata,
 };
 use crate::resources::SimResource;
-use factory_sim::try_capture_save_snapshot;
+use factory_sim::try_capture_record_snapshot;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -167,7 +167,9 @@ pub(crate) fn queue_save(
             .send(())
             .map_err(|_| "save request was abandoned before capture".to_string())?;
         let snapshot_start = Instant::now();
-        let snapshot = try_capture_save_snapshot(&sim, source.world_generation).map_err(
+        // Record-aware capture: partitioning decides what is saveable, not
+        // the monolithic size pass.
+        let snapshot = try_capture_record_snapshot(&sim, source.world_generation).map_err(
             |error| match error {
                 factory_sim::SaveLoadError::TooLarge => {
                     "save exceeds this build's snapshot capture budget".into()

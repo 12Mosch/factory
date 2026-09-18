@@ -1072,12 +1072,14 @@ pub use self::save::{
     try_capture_save_snapshot_with_limits,
 };
 pub use self::save_records::{
-    RECORD_CODEC_IDENTITY, RECORD_FORMAT_VERSION, RECORD_HEADER_SIZE, RECORD_MAGIC, RecordIndex,
-    RecordSummary, extract_record_bytes, extract_record_bytes_with_limits, inspect_record_index,
-    inspect_record_index_with_limits, save_records_to_bytes, save_records_to_bytes_with_limits,
-    save_records_to_writer, save_records_to_writer_with_limits, save_snapshot_records_to_bytes,
+    MAX_RECORD_COUNT, RECORD_CODEC_IDENTITY, RECORD_FORMAT_VERSION, RECORD_HEADER_SIZE,
+    RECORD_MAGIC, RecordIndex, RecordSummary, extract_record_bytes,
+    extract_record_bytes_with_limits, inspect_record_index, inspect_record_index_with_limits,
+    save_records_to_bytes, save_records_to_bytes_with_limits, save_records_to_writer,
+    save_records_to_writer_with_limits, save_snapshot_records_to_bytes,
     save_snapshot_records_to_bytes_with_limits, save_snapshot_records_to_writer,
-    save_snapshot_records_to_writer_with_limits,
+    save_snapshot_records_to_writer_with_limits, try_capture_record_snapshot,
+    try_capture_record_snapshot_with_limits,
 };
 pub use self::scripted::{
     scripted_inputs_for_chemical_science_factory, scripted_inputs_for_red_science_factory,

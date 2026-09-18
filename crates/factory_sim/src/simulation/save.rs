@@ -539,7 +539,7 @@ pub fn capture_save_snapshot(sim: &Simulation) -> SimulationSaveSnapshot {
     capture_save_snapshot_in_generation(sim, 0)
 }
 
-fn capture_save_snapshot_in_generation(
+pub(in crate::simulation) fn capture_save_snapshot_in_generation(
     sim: &Simulation,
     world_generation: u64,
 ) -> SimulationSaveSnapshot {

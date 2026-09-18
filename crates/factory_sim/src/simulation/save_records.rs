@@ -30,7 +30,7 @@
 use super::robot_ops::RobotLogisticWorkState;
 use super::save::{
     PROTOTYPE_FORMAT_VERSION, SAVE_VERSION, SaveLoadError, SimulationSaveSnapshot,
-    SimulationSnapshotOwned, capture_save_snapshot,
+    SimulationSnapshotOwned, capture_save_snapshot_in_generation,
 };
 use super::*;
 use bincode::Options;
@@ -784,24 +784,50 @@ pub fn save_records_to_writer(
     save_records_to_writer_with_limits(sim, writer, crate::SaveLimits::default())
 }
 
-/// Captures the current completed tick with explicit limits, then serializes.
+/// Checks record-aware capture budgets before allocating an owned snapshot,
+/// then captures one immutable completed-tick generation.
 ///
 /// The preflight walks the borrowed schema (collection counts and the chunk
-/// count that determines the record count) before cloning. Aggregate byte
-/// budgets are enforced per record and for the whole container during
-/// encoding, without the monolithic whole-snapshot size pass: a world that
-/// partitions into valid records must not be rejected because its
-/// monolithic form would exceed one record's budget.
+/// count that determines the record count) without cloning and never runs
+/// the monolithic whole-snapshot size pass: a world that partitions into
+/// valid records must not be rejected because its monolithic form would
+/// exceed one record's budget. Aggregate byte budgets are enforced per
+/// record and for the whole container during encoding.
+pub fn try_capture_record_snapshot(
+    sim: &Simulation,
+    world_generation: u64,
+) -> Result<SimulationSaveSnapshot, SaveLoadError> {
+    try_capture_record_snapshot_with_limits(sim, world_generation, crate::SaveLimits::default())
+}
+
+/// Checks record-aware capture budgets with explicit limits.
+pub fn try_capture_record_snapshot_with_limits(
+    sim: &Simulation,
+    world_generation: u64,
+    limits: crate::SaveLimits,
+) -> Result<SimulationSaveSnapshot, SaveLoadError> {
+    super::save::check_borrowed_snapshot_collections(sim, limits)?;
+    if sim.world.chunks.len() + REQUIRED_GLOBAL_KEYS.len() > MAX_RECORD_COUNT as usize {
+        return Err(SaveLoadError::TooLarge);
+    }
+    if u64::try_from(sim.world.chunks.len() + REQUIRED_GLOBAL_KEYS.len()).unwrap_or(u64::MAX)
+        > limits.max_collection_entries
+    {
+        return Err(SaveLoadError::TooLarge);
+    }
+    Ok(capture_save_snapshot_in_generation(sim, world_generation))
+}
+
+/// Captures the current completed tick with explicit limits, then serializes.
+///
+/// Capture uses the record-aware preflight above, so partitioning — not the
+/// monolithic size pass — decides what is saveable.
 pub fn save_records_to_writer_with_limits(
     sim: &Simulation,
     writer: &mut impl Write,
     limits: crate::SaveLimits,
 ) -> Result<(), SaveLoadError> {
-    super::save::check_borrowed_snapshot_collections(sim, limits)?;
-    if sim.world.chunks.len() + REQUIRED_GLOBAL_KEYS.len() > MAX_RECORD_COUNT as usize {
-        return Err(SaveLoadError::TooLarge);
-    }
-    let snapshot = capture_save_snapshot(sim);
+    let snapshot = try_capture_record_snapshot_with_limits(sim, 0, limits)?;
     save_snapshot_records_to_writer_with_limits(&snapshot, writer, limits)
 }
 
@@ -1585,6 +1611,15 @@ mod tests {
             max_record_bytes: biggest,
             ..SaveLimits::default()
         };
+        // The monolithic capture preflight still rejects this world, while
+        // the record-aware capture accepts it: partitioning decides.
+        assert!(matches!(
+            try_capture_save_snapshot_with_limits(&sim, 0, limits),
+            Err(SaveLoadError::TooLarge)
+        ));
+        let snapshot = try_capture_record_snapshot_with_limits(&sim, 7, limits)
+            .expect("record-aware capture accepts partitioned worlds");
+        assert_eq!(snapshot.identity().world_generation, 7);
         let bytes = save_records_to_bytes_with_limits(&sim, limits).unwrap();
         let loaded = load_from_bytes_with_limits(&bytes, limits).unwrap();
         assert_eq!(loaded.state_hash(), sim.state_hash());

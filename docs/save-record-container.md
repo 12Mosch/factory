@@ -165,18 +165,24 @@ count) fails before cloning.
 
 ## Transport and commit
 
-The application save pipeline writes record payloads: background snapshots
-encode through the two-pass record writer (peak encoding memory is one
-record payload plus the manifest, at the cost of encoding twice), and the
-container keeps its existing guarantees around those bytes — streaming
-writes to a temporary file, `sync_all`, atomic installation preserving a
-rollback backup, and catalog validation before the world is replaced.
-Record bytes remain opaque to the container framing: the outer magic,
-metadata, and size checks are unchanged, and the loader dispatches on the
-inner magic. A copied or exported record file loads without external
-references, so plain file copy is the portable export. Loading validates
-before mutating the active world, and failed work leaves the previous save
-intact.
+The application save pipeline writes record payloads end to end.
+Background jobs capture with the record-aware entry point
+(`try_capture_record_snapshot`), whose borrowed preflight checks collection
+counts and the chunk-derived record count without cloning and never runs
+the monolithic size pass, then encode through the two-pass record writer
+(peak encoding memory is one record payload plus the manifest, at the cost
+of encoding twice). The container keeps its existing guarantees around
+those bytes — streaming writes to a temporary file, `sync_all`, atomic
+installation preserving a rollback backup, and catalog validation before
+the world is replaced. The payload allowance is the artifact budget minus
+the outer container overhead, so the record header and manifest framing
+cannot push a within-budget generation over the edge; the writer is scoped
+to that allowance and its pre-write total check guarantees fit before any
+byte reaches the file. The outer magic and metadata framing are unchanged,
+and the loader dispatches on the inner magic. A copied or exported record
+file loads without external references, so plain file copy is the portable
+export. Loading validates before mutating the active world, and failed work
+leaves the previous save intact.
 
 The loader dispatches on magic: `FACTSIM\0` decodes the monolithic snapshot
 (including the v57 migration path), `FACTREC\0` decodes the record
