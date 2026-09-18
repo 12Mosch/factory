@@ -2,6 +2,10 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread::JoinHandle;
 use std::time::SystemTime;
 
@@ -216,6 +220,7 @@ pub(crate) struct CatalogValidationOutcome {
 pub(crate) struct CatalogValidationJob {
     pub(crate) path: PathBuf,
     pub(crate) metadata: SaveFileMetadataFingerprint,
+    pub(crate) cancel: Arc<AtomicBool>,
     pub(crate) handle: JoinHandle<CatalogValidationOutcome>,
 }
 
@@ -251,6 +256,13 @@ impl SaveCatalog {
 
 impl Drop for SaveCatalog {
     fn drop(&mut self) {
+        // Signal cancellation first: workers abort at their next read chunk
+        // instead of hashing and decoding the remainder, so shutdown does
+        // not wait for large saves. Joining afterwards stays deterministic:
+        // no detached worker can outlive the catalog and hold save files.
+        for job in &self.validation_jobs {
+            job.cancel.store(true, Ordering::Relaxed);
+        }
         for job in self.validation_jobs.drain(..) {
             let _ = job.handle.join();
         }

@@ -19,8 +19,12 @@ use factory_sim::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{self, BufReader, Read, Seek};
+use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -580,6 +584,8 @@ fn start_catalog_validation_jobs(catalog: &mut SaveCatalog) {
         };
         let path = request.path.clone();
         let metadata = request.metadata.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
         let handle = thread::spawn(move || {
             validate_loadable_path(
                 request.path,
@@ -587,13 +593,40 @@ fn start_catalog_validation_jobs(catalog: &mut SaveCatalog) {
                 request.compatibility,
                 Some(request.metadata),
                 request.attempt,
+                worker_cancel,
             )
         });
         catalog.validation_jobs.push(CatalogValidationJob {
             path,
             metadata,
+            cancel,
             handle,
         });
+    }
+}
+
+/// Wraps a save handle so catalog shutdown can abort hashing and decoding
+/// at the next read chunk instead of waiting for the remainder.
+struct CancelReader<R> {
+    reader: R,
+    cancel: Arc<AtomicBool>,
+}
+
+impl<R: Read> Read for CancelReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.cancel.load(Ordering::Relaxed) {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "catalog validation cancelled",
+            ));
+        }
+        self.reader.read(buffer)
+    }
+}
+
+impl<R: Seek> Seek for CancelReader<R> {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.reader.seek(position)
     }
 }
 
@@ -786,6 +819,7 @@ fn validate_loadable_file(
         header_compatibility,
         Some(metadata),
         0,
+        Arc::new(AtomicBool::new(false)),
     );
     if let Some(fingerprint) = outcome.fingerprint {
         cache.insert(
@@ -805,6 +839,7 @@ fn validate_loadable_path(
     source_compatibility: SaveCompatibility,
     expected: Option<SaveFileMetadataFingerprint>,
     attempt: u8,
+    cancel: Arc<AtomicBool>,
 ) -> CatalogValidationOutcome {
     let mut file = match fs::File::open(&path) {
         Ok(file) => file,
@@ -864,6 +899,12 @@ fn validate_loadable_path(
             attempt,
         };
     }
+    // From here on every byte is read through the cancellation wrapper so
+    // catalog shutdown aborts hashing and decoding at the next read chunk.
+    let mut file = CancelReader {
+        reader: file,
+        cancel,
+    };
     let fingerprint = match save_file_fingerprint(&mut file, metadata.clone()) {
         Ok(fingerprint) => fingerprint,
         Err(ContainerError::TooLarge) => {
@@ -897,7 +938,7 @@ fn validate_loadable_path(
         Err(ContainerError::Io(_)) => SaveCompatibility::ValidationPending,
         Err(_) => SaveCompatibility::CorruptOrTruncated,
     };
-    let after_metadata = save_file_metadata_fingerprint(&file);
+    let after_metadata = save_file_metadata_fingerprint(&file.reader);
     let stable_fingerprint = match save_file_fingerprint(&mut file, after_metadata.clone()) {
         Ok(after_validation) if after_validation == fingerprint => Some(fingerprint),
         _ => None,
@@ -913,7 +954,7 @@ fn validate_loadable_path(
 
 /// Identifies the exact bytes considered by payload validation.
 fn save_file_fingerprint(
-    file: &mut fs::File,
+    file: &mut (impl Read + Seek),
     metadata: SaveFileMetadataFingerprint,
 ) -> Result<SaveFileFingerprint, ContainerError> {
     file.rewind()?;
@@ -1355,6 +1396,7 @@ mod tests {
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
                 metadata: metadata_a,
+                cancel: Arc::new(AtomicBool::new(false)),
                 handle: thread::spawn(|| stale),
             }],
         };
@@ -1436,6 +1478,7 @@ mod tests {
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
                 metadata: metadata_a,
+                cancel: Arc::new(AtomicBool::new(false)),
                 handle: thread::spawn(|| stale),
             }],
         };
@@ -1532,6 +1575,7 @@ mod tests {
             SaveCompatibility::Compatible,
             Some(metadata_current),
             0,
+            Arc::new(AtomicBool::new(false)),
         );
         assert_eq!(outcome.compatibility, migratable);
         let validated_metadata = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
@@ -1550,6 +1594,7 @@ mod tests {
             migratable,
             Some(metadata_historical),
             0,
+            Arc::new(AtomicBool::new(false)),
         );
         assert_eq!(outcome.compatibility, SaveCompatibility::Compatible);
         fs::remove_dir_all(dir).unwrap();
@@ -1599,6 +1644,7 @@ mod tests {
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
                 metadata: save_file_metadata_fingerprint(&fs::File::open(&path).unwrap()),
+                cancel: Arc::new(AtomicBool::new(false)),
                 handle: thread::spawn(|| transient),
             }],
         };
@@ -1657,6 +1703,7 @@ mod tests {
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
                 metadata: metadata_before,
+                cancel: Arc::new(AtomicBool::new(false)),
                 handle: thread::spawn(|| transient),
             }],
         };
@@ -1741,6 +1788,7 @@ mod tests {
                     modified: None,
                     identity: None,
                 },
+                cancel: Arc::new(AtomicBool::new(false)),
                 handle: thread::spawn(|| transient),
             }],
         };
@@ -1844,6 +1892,95 @@ mod tests {
             SaveCompatibility::Compatible
         );
         assert!(catalog.next_pending_rescan_ms > 0);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn cancel_reader_aborts_reads_when_set() {
+        let bytes = b"FACTSIM payload";
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut reader = CancelReader {
+            reader: std::io::Cursor::new(&bytes[..]),
+            cancel: cancel.clone(),
+        };
+        let mut first = [0; 7];
+        reader.read_exact(&mut first).unwrap();
+        assert_eq!(&first, b"FACTSIM");
+        cancel.store(true, Ordering::Relaxed);
+        assert!(reader.read(&mut first).is_err());
+    }
+
+    #[test]
+    fn cancelled_decode_aborts_without_consuming_payload() {
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        let cancel = Arc::new(AtomicBool::new(true));
+        let mut reader = CancelReader {
+            reader: std::io::Cursor::new(&current),
+            cancel,
+        };
+        let result = load_simulation_from_reader(&mut reader, factory_sim::SaveLimits::default());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn drop_signals_running_jobs_before_joining() {
+        let dir = std::env::temp_dir().join(format!(
+            "factory-drop-cancel-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let catalog = SaveCatalog {
+            entries: Vec::new(),
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            next_pending_rescan_ms: u64::MAX,
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: vec![CatalogValidationJob {
+                path: path.clone(),
+                metadata: SaveFileMetadataFingerprint {
+                    len: 0,
+                    modified: None,
+                    identity: None,
+                },
+                cancel,
+                handle: thread::spawn(move || {
+                    let outcome = CatalogValidationOutcome {
+                        path,
+                        compatibility: SaveCompatibility::ValidationPending,
+                        observed_metadata: None,
+                        fingerprint: None,
+                        attempt: 0,
+                    };
+                    let mut spins = 0u32;
+                    loop {
+                        if worker_cancel.load(Ordering::Relaxed) {
+                            let _ = done_tx.send(true);
+                            return outcome;
+                        }
+                        spins += 1;
+                        if spins > 2_000 {
+                            let _ = done_tx.send(false);
+                            return outcome;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                }),
+            }],
+        };
+
+        drop(catalog);
+
+        // Fails (after ~2s) if drop joins without signalling first.
+        assert_eq!(
+            done_rx.recv_timeout(std::time::Duration::from_secs(10)),
+            Ok(true)
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
