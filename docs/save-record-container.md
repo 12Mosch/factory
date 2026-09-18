@@ -205,10 +205,11 @@ that rule applies to record payloads unchanged.
 `inspect_record_index` validates the header and manifest and lists every
 record without decoding payloads. `extract_record_bytes` verifies one
 record's checksum and returns its payload from a complete file, while
-`extract_record_from_reader` streams only the header, manifest, and target
-payload — records after the target are never touched — so tools can
-range-read one indexed record without retaining the whole save. All three
-enable chunk- or record-granular tools without simulating a partial world.
+`extract_record_from_reader` retains only the header, manifest, and target
+payload — records after the target are never touched. Preceding payload
+bytes are still read and discarded (no `Seek` API), so selective access is
+a bounded-memory guarantee, not a range-I/O one. All three enable chunk- or
+record-granular tools without simulating a partial world.
 
 ## Incremental reuse gate (deferred)
 

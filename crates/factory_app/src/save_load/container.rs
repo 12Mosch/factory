@@ -103,7 +103,6 @@ fn encode_container_with_limits(
     payload: &[u8],
     limits: SaveLimits,
 ) -> Result<Vec<u8>, ContainerError> {
-    check_size(payload.len() as u64, limits.max_simulation_bytes())?;
     let metadata_text = ron::ser::to_string(metadata)
         .map_err(|error| ContainerError::MetadataEncoding(error.to_string()))?;
     let metadata_bytes = metadata_text.as_bytes();
@@ -112,8 +111,13 @@ fn encode_container_with_limits(
     }
     let metadata_len = u32::try_from(metadata_bytes.len())
         .map_err(|_| ContainerError::MetadataTooLarge(metadata_bytes.len()))?;
+    let payload_offset = (PREFIX_SIZE + metadata_bytes.len()) as u64;
     check_size(
-        (PREFIX_SIZE + metadata_bytes.len()) as u64 + payload.len() as u64,
+        payload.len() as u64,
+        simulation_payload_allowance(payload, payload_offset, limits),
+    )?;
+    check_size(
+        payload_offset + payload.len() as u64,
         limits.max_encoded_bytes,
     )?;
     let mut bytes = Vec::with_capacity(PREFIX_SIZE + metadata_bytes.len() + payload.len());
@@ -1155,6 +1159,37 @@ mod tests {
         assert!((bytes.len() - offset) as u64 > limits.max_simulation_bytes());
         let loaded = load_simulation_from_reader(&mut io::Cursor::new(&bytes), limits).unwrap();
         assert_eq!(loaded.state_hash(), simulation.state_hash());
+    }
+
+    #[test]
+    fn record_payload_encodes_under_partitioned_allowance() {
+        let mut simulation = Simulation::new_test_world(83);
+        for _ in 0..12 {
+            simulation.tick();
+        }
+        let snapshot = try_capture_save_snapshot(&simulation, 13).unwrap();
+        let payload = save_snapshot_records_to_bytes(&snapshot).unwrap();
+        let index = inspect_record_index(&payload).unwrap();
+        let biggest = index
+            .records
+            .iter()
+            .map(|record| record.encoded_len)
+            .max()
+            .expect("records exist");
+        let decoded_total: u64 = index.records.iter().map(|record| record.decoded_len).sum();
+        let metadata = metadata("PartitionedEncode");
+        let offset = (PREFIX_SIZE + ron::ser::to_string(&metadata).unwrap().len()) as u64;
+        let limits = SaveLimits {
+            max_encoded_bytes: offset + payload.len() as u64,
+            max_decoded_bytes: decoded_total,
+            max_record_bytes: biggest,
+            ..SaveLimits::default()
+        };
+        // The framed payload exceeds the legacy monolithic allowance but fits
+        // the artifact budget.
+        assert!(payload.len() as u64 > limits.max_simulation_bytes());
+        let bytes = encode_container_with_limits(&metadata, &payload, limits).unwrap();
+        assert_eq!(bytes.len() as u64, offset + payload.len() as u64);
     }
 
     #[test]

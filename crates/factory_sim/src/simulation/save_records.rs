@@ -330,12 +330,32 @@ fn encode_entry(entry: &ManifestEntry, out: &mut Vec<u8>) {
     out.extend_from_slice(&entry.checksum);
 }
 
+/// Framing bytes per manifest entry besides the key: length prefix,
+/// schema/codec/flags, offsets/lengths, and checksum.
+const ENTRY_FRAMING_BYTES: u64 = 4 + 4 + 4 + 4 + 8 + 8 + 8 + 32;
+
 fn parse_entries(
     manifest: &[u8],
     expected: u32,
     limits: crate::SaveLimits,
 ) -> Result<Vec<ManifestEntry>, SaveLoadError> {
-    let mut entries = Vec::new();
+    // Each entry is `ENTRY_FRAMING_BYTES + key_len` with `1..=96` key bytes,
+    // so a manifest for `expected` records can only be this large. Rejecting
+    // impossible size/count combinations up front keeps a hostile manifest
+    // from driving allocation before a single entry parses.
+    let min_len = u64::from(expected).saturating_mul(ENTRY_FRAMING_BYTES + 1);
+    let max_len =
+        u64::from(expected).saturating_mul(ENTRY_FRAMING_BYTES + MAX_RECORD_KEY_BYTES as u64);
+    if (manifest.len() as u64) < min_len || (manifest.len() as u64) > max_len {
+        return Err(record_error(format!(
+            "record index of {} bytes cannot hold {expected} records",
+            manifest.len()
+        )));
+    }
+    // Capacity follows the declared count (itself capped by the header
+    // check), and parsing stops the moment entries exceed it.
+    let capacity = usize::try_from(expected.min(MAX_RECORD_COUNT)).unwrap_or(usize::MAX);
+    let mut entries = Vec::with_capacity(capacity);
     let mut cursor = 0;
     while cursor < manifest.len() {
         let rest = &manifest[cursor..];
@@ -407,6 +427,13 @@ fn parse_entries(
         cursor += entry_len;
         if entries.len() as u64 > limits.max_collection_entries {
             return Err(SaveLoadError::TooLarge);
+        }
+        // Stop the moment parsing would exceed the declared count instead of
+        // allocating the whole manifest first.
+        if entries.len() as u64 > u64::from(expected) {
+            return Err(record_error(format!(
+                "record index declares {expected} records but carries more"
+            )));
         }
     }
     if entries.len() as u32 != expected {
@@ -1567,12 +1594,14 @@ pub fn extract_record_bytes_with_limits(
     Ok(payload.to_vec())
 }
 
-/// Extracts one record payload from a stream without retaining the file.
+/// Extracts one record payload from a stream with bounded memory.
 ///
-/// Only the header, manifest, and the target payload are read: records after
-/// the target are never touched, and no trailing-length check runs, so tools
-/// can range-read one indexed record without holding the whole save. The
-/// manifest and the payload checksum are still fully verified.
+/// Only the header, manifest, and the target payload are retained: records
+/// after the target are never touched, and no trailing-length check runs.
+/// Preceding payload bytes are still read and discarded through the `Read`
+/// interface (there is deliberately no `Seek` API yet), so this saves
+/// memory, not I/O. The manifest and the payload checksum are still fully
+/// verified.
 pub fn extract_record_from_reader(
     reader: &mut impl Read,
     key: &str,
@@ -1859,6 +1888,54 @@ mod tests {
             load_from_bytes(&rebuilt),
             Err(SaveLoadError::Codec(_))
         ));
+    }
+
+    #[test]
+    fn impossible_manifest_size_is_rejected_up_front() {
+        let sim = record_test_sim();
+        let mut bytes = save_records_to_bytes(&sim).unwrap();
+        // Declare one record while keeping the full manifest: no
+        // multi-kilobyte index can hold a single entry, so parsing must
+        // stop before allocating.
+        bytes[44..48].copy_from_slice(&1u32.to_le_bytes());
+        assert!(matches!(
+            load_from_bytes(&bytes),
+            Err(SaveLoadError::Codec(_))
+        ));
+        assert!(inspect_record_index(&bytes).is_err());
+    }
+
+    #[test]
+    fn parse_stops_once_entries_exceed_declared_count() {
+        // Two minimal entries (73 bytes each) fit the size window for a
+        // declared count of one, so the overrun must stop parsing itself.
+        let mut manifest = Vec::new();
+        for key in ["a", "b"] {
+            encode_entry(
+                &ManifestEntry {
+                    key: key.into(),
+                    schema_version: RECORD_SCHEMA_VERSION,
+                    codec_id: RECORD_CODEC_IDENTITY,
+                    required: true,
+                    offset: 0,
+                    encoded_len: 0,
+                    decoded_len: 0,
+                    checksum: [0; 32],
+                },
+                &mut manifest,
+            );
+        }
+        assert_eq!(manifest.len(), 2 * 73);
+        assert!(matches!(
+            parse_entries(&manifest, 1, SaveLimits::default()),
+            Err(SaveLoadError::Codec(_))
+        ));
+        assert_eq!(
+            parse_entries(&manifest, 2, SaveLimits::default())
+                .expect("declared pair parses")
+                .len(),
+            2
+        );
     }
 
     #[test]
