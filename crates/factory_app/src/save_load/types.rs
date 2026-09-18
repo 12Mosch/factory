@@ -65,6 +65,7 @@ impl SaveMetadata {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SaveCompatibility {
     Compatible,
+    MigratableSaveFormat { found: u32, current: u32 },
     SaveFormatOlder { found: u32, supported: u32 },
     SaveFormatNewer { found: u32, supported: u32 },
     PrototypeFormatOlder { found: u32, supported: u32 },
@@ -77,14 +78,17 @@ pub enum SaveCompatibility {
 
 impl SaveCompatibility {
     pub fn can_load(&self) -> bool {
-        matches!(self, Self::Compatible)
+        matches!(self, Self::Compatible | Self::MigratableSaveFormat { .. })
     }
 
     pub fn reason(&self) -> Option<String> {
         Some(match self {
             Self::Compatible => return None,
+            Self::MigratableSaveFormat { found, current } => format!(
+                "Save format {found} will be migrated to {current} when loaded. The source file remains unchanged until you explicitly save."
+            ),
             Self::SaveFormatOlder { found, supported } => format!(
-                "Save format {found} is older than supported format {supported}; this build has no migration for it."
+                "Save format {found} predates the oldest supported migration source ({supported}). Open it with a build that supports that format, then re-save it before updating."
             ),
             Self::SaveFormatNewer { found, supported } => format!(
                 "Save format {found} was created by a newer build (this build supports {supported}); update the game to load it."
@@ -107,7 +111,9 @@ impl SaveCompatibility {
     pub fn short_label(&self) -> &'static str {
         match self {
             Self::Compatible => "Compatible",
-            Self::SaveFormatOlder { .. } | Self::PrototypeFormatOlder { .. } => "Older format",
+            Self::MigratableSaveFormat { .. } => "Migratable",
+            Self::SaveFormatOlder { .. } => "Unsupported old format",
+            Self::PrototypeFormatOlder { .. } => "Older prototype format",
             Self::SaveFormatNewer { .. } | Self::PrototypeFormatNewer { .. } => "Newer format",
             Self::PrototypeHashMismatch => "Different data",
             Self::UnsupportedContainerVersion { .. } => "Unsupported container",

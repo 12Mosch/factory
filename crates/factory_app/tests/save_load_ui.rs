@@ -16,7 +16,10 @@ use factory_app::ui::save_load::{
     SaveConfirmationButton, SaveCreateButton, SaveEntryAction, SaveEntryButton, format_timestamp,
 };
 use factory_data::{EntityPrototypeId, ItemId};
-use factory_sim::{ChunkCoord, EntityId, SAVE_VERSION, SimCommand, load_from_bytes, save_to_bytes};
+use factory_sim::{
+    ChunkCoord, EntityId, OLDEST_SUPPORTED_SAVE_VERSION, SAVE_VERSION, SimCommand, load_from_bytes,
+    save_to_bytes,
+};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -73,6 +76,36 @@ fn f9_reads_existing_raw_quicksave_and_resets_transient_state() {
             .is_none()
     );
     assert!(app.world().resource::<OpenContainer>().entity_id.is_none());
+}
+
+#[test]
+fn migratable_v57_quicksave_is_labeled_loaded_and_left_untouched() {
+    let mut app = test_app(Duration::ZERO, "migratable_v57");
+    let config = app.world().resource::<SaveLoadConfig>().clone();
+    fs::create_dir_all(&config.root_dir).unwrap();
+    let path = config.root_dir.join("quicksave.factsim");
+    let historical = include_bytes!("../../factory_sim/tests/fixtures/save-v57-sanitized.factsim");
+    fs::write(&path, historical).unwrap();
+
+    app.update();
+    let entry = &app.world().resource::<SaveCatalog>().entries()[0];
+    assert!(matches!(
+        entry.compatibility,
+        SaveCompatibility::MigratableSaveFormat {
+            found: OLDEST_SUPPORTED_SAVE_VERSION,
+            current: SAVE_VERSION,
+        }
+    ));
+    assert!(entry.compatibility.can_load());
+
+    tap_key(&mut app, KeyCode::F9);
+
+    let loaded = app.world().resource::<SimResource>().read();
+    assert_eq!(loaded.tick_count(), 64);
+    assert_eq!(loaded.seed(), 241);
+    loaded.validate_state().unwrap();
+    drop(loaded);
+    assert_eq!(fs::read(&path).unwrap(), historical);
 }
 
 #[test]
@@ -230,7 +263,7 @@ fn incompatible_named_save_stays_visible_and_deletable() {
     let bytes = fs::read(&path).unwrap();
     let (metadata, payload) = decode_container(&bytes).unwrap();
     let mut payload = payload.to_vec();
-    payload[8..12].copy_from_slice(&(SAVE_VERSION - 1).to_le_bytes());
+    payload[8..12].copy_from_slice(&(OLDEST_SUPPORTED_SAVE_VERSION - 1).to_le_bytes());
     fs::write(&path, encode_container(&metadata, &payload).unwrap()).unwrap();
     refresh_manager(&mut app);
 
@@ -475,7 +508,7 @@ fn recovery_never_replaces_an_intact_primary_or_uses_ambiguous_backups() {
     let different_payload = save_to_bytes(&app.world().resource::<SimResource>().read()).unwrap();
     let different_bytes = encode_container(&metadata, &different_payload).unwrap();
     let mut older_payload = payload.to_vec();
-    older_payload[8..12].copy_from_slice(&(SAVE_VERSION - 1).to_le_bytes());
+    older_payload[8..12].copy_from_slice(&(OLDEST_SUPPORTED_SAVE_VERSION - 1).to_le_bytes());
     let incompatible_bytes = encode_container(&metadata, &older_payload).unwrap();
     fs::write(&path, &incompatible_bytes).unwrap();
     fs::write(&backup_one, &valid_bytes).unwrap();

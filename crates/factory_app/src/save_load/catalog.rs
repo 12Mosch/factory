@@ -220,14 +220,16 @@ fn remove_recovery_artifact(path: &Path) {
 fn primary_state(path: &Path, kind: &SaveKind, current_hash: u64) -> PrimaryState {
     let inspection = inspect_file(path, kind, current_hash);
     match inspection.compatibility {
-        SaveCompatibility::Compatible => match load_simulation(path) {
-            Ok(_) => PrimaryState::Valid,
-            Err(ContainerError::Simulation(error)) => classify_simulation_result(Err(error)),
-            Err(ContainerError::Io(_) | ContainerError::TooLarge) => {
-                PrimaryState::IntactButIncompatible
+        SaveCompatibility::Compatible | SaveCompatibility::MigratableSaveFormat { .. } => {
+            match load_simulation(path) {
+                Ok(_) => PrimaryState::Valid,
+                Err(ContainerError::Simulation(error)) => classify_simulation_result(Err(error)),
+                Err(ContainerError::Io(_) | ContainerError::TooLarge) => {
+                    PrimaryState::IntactButIncompatible
+                }
+                Err(_) => PrimaryState::Corrupt,
             }
-            Err(_) => PrimaryState::Corrupt,
-        },
+        }
         SaveCompatibility::CorruptOrTruncated | SaveCompatibility::NotFactorySave => {
             if inspection.safe_to_replace {
                 PrimaryState::Corrupt
@@ -278,7 +280,7 @@ fn validate_recovery_backup(
             return RecoveryBackup::Corrupt;
         }
         return match classify_inspection(&bytes, current_hash) {
-            SaveCompatibility::Compatible => {
+            SaveCompatibility::Compatible | SaveCompatibility::MigratableSaveFormat { .. } => {
                 let result = load_from_bytes(&bytes);
                 classify_backup_result(bytes, result)
             }
@@ -306,14 +308,16 @@ fn validate_recovery_backup(
     }
 
     match classify_inspection(&container.simulation_header, current_hash) {
-        SaveCompatibility::Compatible => match super::container::container_payload_offset(&bytes) {
-            Ok(offset) => {
-                let result = load_from_bytes(&bytes[offset..]);
-                classify_backup_result(bytes, result)
+        SaveCompatibility::Compatible | SaveCompatibility::MigratableSaveFormat { .. } => {
+            match super::container::container_payload_offset(&bytes) {
+                Ok(offset) => {
+                    let result = load_from_bytes(&bytes[offset..]);
+                    classify_backup_result(bytes, result)
+                }
+                Err(error @ ContainerError::Io(_)) => RecoveryBackup::Inaccessible(error),
+                Err(_) => RecoveryBackup::Corrupt,
             }
-            Err(error @ ContainerError::Io(_)) => RecoveryBackup::Inaccessible(error),
-            Err(_) => RecoveryBackup::Corrupt,
-        },
+        }
         SaveCompatibility::CorruptOrTruncated | SaveCompatibility::NotFactorySave => {
             RecoveryBackup::Corrupt
         }

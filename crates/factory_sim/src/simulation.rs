@@ -1061,11 +1061,11 @@ use self::rail_state::RailSubsystem;
 use self::robot_state::RobotSubsystem;
 pub use self::rolling_stock_ops::braking_distance_fixed;
 pub use self::save::{
-    MAX_SNAPSHOT_BYTES, PROTOTYPE_FORMAT_VERSION, SAVE_HEADER_SIZE, SAVE_VERSION, SaveHeaderInfo,
-    SaveLoadError, SaveSnapshotIdentity, SimulationSaveSnapshot, capture_save_snapshot,
-    inspect_save_header, load_from_bytes, load_from_bytes_with_limits, load_from_reader,
-    load_from_reader_with_limits, prototype_hash, save_snapshot_to_bytes,
-    save_snapshot_to_bytes_with_limits, save_snapshot_to_writer,
+    MAX_SNAPSHOT_BYTES, OLDEST_SUPPORTED_SAVE_VERSION, PROTOTYPE_FORMAT_VERSION, SAVE_HEADER_SIZE,
+    SAVE_VERSION, SaveHeaderInfo, SaveLoadError, SaveSnapshotIdentity, SimulationSaveSnapshot,
+    capture_save_snapshot, inspect_save_header, is_save_version_migratable, load_from_bytes,
+    load_from_bytes_with_limits, load_from_reader, load_from_reader_with_limits, prototype_hash,
+    save_snapshot_to_bytes, save_snapshot_to_bytes_with_limits, save_snapshot_to_writer,
     save_snapshot_to_writer_with_limits, save_to_bytes, save_to_bytes_with_limits, save_to_writer,
     save_to_writer_with_limits, try_capture_save_snapshot, try_capture_save_snapshot_with_limits,
 };
