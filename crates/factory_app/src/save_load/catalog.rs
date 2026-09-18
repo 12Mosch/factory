@@ -15,7 +15,7 @@ use factory_sim::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Read;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -436,18 +436,17 @@ fn inspect_entry(
     }
 }
 
-/// Fully validates historical payloads once per stable file identity so the UI
-/// never advertises malformed data as migratable without re-decoding large,
-/// unchanged saves on every catalog refresh.
+/// Fully validates historical payloads once per stable content identity so the
+/// UI never advertises malformed data as migratable without re-decoding large,
+/// unchanged saves on every catalog refresh. Metadata alone is insufficient:
+/// backup and synchronization tools can replace bytes while preserving both
+/// the file length and modification time.
 fn validate_migratable_file(
     path: &Path,
     header_compatibility: SaveCompatibility,
     cache: &mut BTreeMap<PathBuf, CachedMigrationValidation>,
 ) -> SaveCompatibility {
-    let fingerprint = fs::metadata(path).ok().map(|metadata| SaveFileFingerprint {
-        len: metadata.len(),
-        modified: metadata.modified().ok(),
-    });
+    let fingerprint = save_file_fingerprint(path).ok();
     if let Some(fingerprint) = &fingerprint
         && let Some(cached) = cache.get(path)
         && cached.fingerprint == *fingerprint
@@ -471,6 +470,21 @@ fn validate_migratable_file(
         );
     }
     compatibility
+}
+
+/// Identifies the bytes that were considered by migration validation. The
+/// metadata fields retain a cheap diagnostic identity while the digest closes
+/// the same-length, preserved-timestamp replacement hole.
+fn save_file_fingerprint(path: &Path) -> io::Result<SaveFileFingerprint> {
+    let mut file = fs::File::open(path)?;
+    let metadata = file.metadata()?;
+    let mut hasher = blake3::Hasher::new();
+    io::copy(&mut file, &mut hasher)?;
+    Ok(SaveFileFingerprint {
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+        content_digest: *hasher.finalize().as_bytes(),
+    })
 }
 
 /// Performs the shared lightweight container/header classification used by
@@ -581,6 +595,40 @@ pub(crate) fn now_unix_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn content_digest_invalidates_same_metadata_migration_cache_entry() {
+        let path = std::env::temp_dir().join(format!(
+            "factory-migration-cache-{}-{}.factsim",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        let historical =
+            include_bytes!("../../../factory_sim/tests/fixtures/save-v57-sanitized.factsim");
+        fs::write(&path, historical).unwrap();
+        let current_fingerprint = save_file_fingerprint(&path).unwrap();
+        let mut stale_fingerprint = current_fingerprint.clone();
+        stale_fingerprint.content_digest[0] ^= 0xff;
+        let mut cache = BTreeMap::from([(
+            path.clone(),
+            CachedMigrationValidation {
+                fingerprint: stale_fingerprint,
+                compatibility: SaveCompatibility::CorruptOrTruncated,
+            },
+        )]);
+        let header_compatibility = SaveCompatibility::MigratableSaveFormat {
+            found: factory_sim::OLDEST_SUPPORTED_SAVE_VERSION,
+            current: factory_sim::SAVE_VERSION,
+        };
+
+        let compatibility =
+            validate_migratable_file(&path, header_compatibility.clone(), &mut cache);
+
+        assert_eq!(compatibility, header_compatibility);
+        assert_eq!(cache[&path].fingerprint, current_fingerprint);
+        assert_eq!(cache[&path].compatibility, header_compatibility);
+        fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn policy_rejection_preserves_primary_and_defers_backup_recovery() {

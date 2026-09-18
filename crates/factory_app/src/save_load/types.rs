@@ -156,6 +156,7 @@ pub struct SaveCatalog {
 pub(crate) struct SaveFileFingerprint {
     pub(crate) len: u64,
     pub(crate) modified: Option<SystemTime>,
+    pub(crate) content_digest: [u8; 32],
 }
 
 #[derive(Clone, Debug)]
