@@ -2,7 +2,8 @@ use super::compatibility::classify_header;
 use super::container::{
     CONTAINER_VERSION, ContainerError, SaveArtifactKind, discard_save_artifact, fallback_metadata,
     inspect_container, inspect_container_from_reader, load_simulation, load_simulation_from_reader,
-    parse_save_artifact, promote_backup, retired_save_artifact_primary, with_save_artifact_lock,
+    parse_save_artifact, promote_backup, read_inspection_bytes, retired_save_artifact_primary,
+    with_save_artifact_lock,
 };
 use super::{
     CachedSaveValidation, CatalogValidationJob, CatalogValidationOutcome, CatalogValidationRequest,
@@ -26,7 +27,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_CATALOG_VALIDATION_JOBS: usize = 1;
 /// Number of retries after the initial validation attempt. Attempts are
@@ -38,7 +39,7 @@ const MAX_CATALOG_VALIDATION_JOBS: usize = 1;
 const MAX_CATALOG_VALIDATION_RETRIES: u8 = 2;
 /// How often entries stuck at `ValidationPending` with no queued or running
 /// validation are re-observed.
-const PENDING_RESCAN_INTERVAL_MS: u64 = 2_000;
+const PENDING_RESCAN_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Replaces the in-memory catalog after a lightweight scan, then queues bounded
 /// background payload validation for cache misses.
@@ -474,7 +475,11 @@ fn prepare_entry_validation(
     cache: &BTreeMap<PathBuf, CachedSaveValidation>,
     requests: &mut Vec<CatalogValidationRequest>,
 ) {
-    if !entry.compatibility.can_load() {
+    // Settled rejections need no work. A pending entry was never classified
+    // (transient inspection I/O), so it must still be observed below.
+    if !entry.compatibility.can_load()
+        && entry.compatibility != SaveCompatibility::ValidationPending
+    {
         return;
     }
     let Ok(mut file) = fs::File::open(&entry.path) else {
@@ -490,15 +495,20 @@ fn prepare_entry_validation(
         return;
     };
     let metadata = save_file_metadata_fingerprint(&file);
-    if let Some(inspected) = &entry.inspected
-        && inspected != &metadata
+    if entry.compatibility == SaveCompatibility::ValidationPending
+        || entry
+            .inspected
+            .as_ref()
+            .is_some_and(|inspected| inspected != &metadata)
     {
-        // The path was replaced after header inspection, so the entry's
-        // classification describes different bytes. Re-derive it from the
-        // instance this handle observes before pairing it with an identity.
+        // No classification exists for these bytes, or the path was replaced
+        // after header inspection. Re-derive it from the instance this
+        // handle observes before pairing it with an identity.
         entry.compatibility = classify_open_save(&mut file, &entry.metadata.kind, current_hash);
         entry.inspected = Some(metadata.clone());
-        if !entry.compatibility.can_load() {
+        if !entry.compatibility.can_load()
+            && entry.compatibility != SaveCompatibility::ValidationPending
+        {
             return;
         }
     }
@@ -642,9 +652,17 @@ fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) {
             continue;
         }
         let job = catalog.validation_jobs.swap_remove(index);
+        let path = job.path.clone();
         let outcome = match job.handle.join() {
             Ok(outcome) => outcome,
-            Err(_) => continue,
+            Err(_) => {
+                // The entry stays pending; the rescan timer re-observes it.
+                warn!(
+                    "catalog validation worker for {} panicked; retrying",
+                    path.display()
+                );
+                continue;
+            }
         };
         let current_metadata = fs::File::open(&outcome.path)
             .ok()
@@ -753,11 +771,11 @@ fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) {
 /// Each rescan performs a single observation per entry; a still-failing
 /// entry simply waits for the next interval.
 fn rescan_stale_pending(catalog: &mut SaveCatalog) {
-    let now = now_unix_ms();
-    if now < catalog.next_pending_rescan_ms {
+    let now = Instant::now();
+    if catalog.next_pending_rescan.is_some_and(|due| now < due) {
         return;
     }
-    catalog.next_pending_rescan_ms = now.saturating_add(PENDING_RESCAN_INTERVAL_MS);
+    catalog.next_pending_rescan = Some(now + PENDING_RESCAN_INTERVAL);
     let stale: Vec<(PathBuf, SaveKind)> = catalog
         .entries
         .iter()
@@ -1052,12 +1070,17 @@ fn save_file_identity(_file: &fs::File, _metadata: &fs::Metadata) -> Option<Save
 
 /// Performs the shared lightweight container/header classification used by
 /// both catalog display and full recovery safety checks.
+///
+/// Reads that never observe file bytes (open and other I/O failures)
+/// report `ValidationPending` instead of corruption so a transient denial
+/// is retried rather than mislabelled; only observed malformation or
+/// truncation reports `CorruptOrTruncated`.
 fn inspect_file(path: &Path, kind: &SaveKind, current_hash: u64) -> FileInspection {
     match fs::File::open(path) {
         Ok(mut file) => inspect_open_file(&mut file, kind, current_hash),
         Err(_) => FileInspection {
             metadata: None,
-            compatibility: SaveCompatibility::CorruptOrTruncated,
+            compatibility: SaveCompatibility::ValidationPending,
             safe_to_replace: false,
             inspected: None,
         },
@@ -1084,7 +1107,7 @@ fn inspect_open_file(file: &mut fs::File, kind: &SaveKind, current_hash: u64) ->
     if file.rewind().is_err() {
         return FileInspection {
             metadata: None,
-            compatibility: SaveCompatibility::CorruptOrTruncated,
+            compatibility: SaveCompatibility::ValidationPending,
             safe_to_replace: false,
             inspected,
         };
@@ -1103,11 +1126,23 @@ fn inspect_open_file(file: &mut fs::File, kind: &SaveKind, current_hash: u64) ->
         }
         Err(ContainerError::InvalidContainerMagic) if kind == &SaveKind::Quicksave => {
             let mut header = vec![0; SAVE_HEADER_SIZE];
-            match file.rewind().and_then(|()| file.read_exact(&mut header)) {
+            let read = file
+                .rewind()
+                .map_err(ContainerError::Io)
+                .and_then(|()| read_inspection_bytes(file, &mut header));
+            match read {
                 Ok(()) => complete(None, classify_inspection(&header, current_hash)),
-                Err(_) => FileInspection {
+                // An established short file is corrupt; any other failure
+                // observed no bytes and stays pending for a retry.
+                Err(ContainerError::Truncated) => FileInspection {
                     metadata: None,
                     compatibility: SaveCompatibility::CorruptOrTruncated,
+                    safe_to_replace: false,
+                    inspected,
+                },
+                Err(_) => FileInspection {
+                    metadata: None,
+                    compatibility: SaveCompatibility::ValidationPending,
                     safe_to_replace: false,
                     inspected,
                 },
@@ -1118,7 +1153,7 @@ fn inspect_open_file(file: &mut fs::File, kind: &SaveKind, current_hash: u64) ->
         }
         Err(ContainerError::Io(_)) => FileInspection {
             metadata: None,
-            compatibility: SaveCompatibility::CorruptOrTruncated,
+            compatibility: SaveCompatibility::ValidationPending,
             safe_to_replace: false,
             inspected,
         },
@@ -1385,7 +1420,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
-            next_pending_rescan_ms: u64::MAX,
+            next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
             validation_queue: VecDeque::from([CatalogValidationRequest {
                 path: path.clone(),
                 kind: SaveKind::Quicksave,
@@ -1473,7 +1508,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
-            next_pending_rescan_ms: u64::MAX,
+            next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -1639,7 +1674,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
-            next_pending_rescan_ms: u64::MAX,
+            next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -1698,7 +1733,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
-            next_pending_rescan_ms: u64::MAX,
+            next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -1779,7 +1814,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
-            next_pending_rescan_ms: u64::MAX,
+            next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -1875,7 +1910,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
-            next_pending_rescan_ms: 0,
+            next_pending_rescan: None,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: Vec::new(),
         };
@@ -1891,7 +1926,7 @@ mod tests {
             catalog.entries[0].compatibility,
             SaveCompatibility::Compatible
         );
-        assert!(catalog.next_pending_rescan_ms > 0);
+        assert!(catalog.next_pending_rescan.is_some());
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1939,7 +1974,7 @@ mod tests {
             entries: Vec::new(),
             revision: 0,
             validation_cache: BTreeMap::new(),
-            next_pending_rescan_ms: u64::MAX,
+            next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -1981,6 +2016,87 @@ mod tests {
             done_rx.recv_timeout(std::time::Duration::from_secs(10)),
             Ok(true)
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn inspection_io_failure_is_pending_not_corrupt() {
+        let current_hash =
+            factory_sim::prototype_hash(&factory_data::PrototypeCatalog::load_base().unwrap());
+        let missing = std::env::temp_dir().join(format!(
+            "factory-inspect-missing-{}-{}.factsim",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        let _ = fs::remove_file(&missing);
+
+        let inspection = inspect_file(&missing, &SaveKind::Quicksave, current_hash);
+        assert_eq!(
+            inspection.compatibility,
+            SaveCompatibility::ValidationPending
+        );
+        assert!(!inspection.safe_to_replace);
+        assert!(inspection.inspected.is_none());
+    }
+
+    #[test]
+    fn inspection_short_file_is_corrupt() {
+        let dir = std::env::temp_dir().join(format!(
+            "factory-inspect-short-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        fs::write(&path, b"short").unwrap();
+        let current_hash =
+            factory_sim::prototype_hash(&factory_data::PrototypeCatalog::load_base().unwrap());
+
+        let inspection = inspect_file(&path, &SaveKind::Quicksave, current_hash);
+        assert_eq!(
+            inspection.compatibility,
+            SaveCompatibility::CorruptOrTruncated
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn prepare_pending_entry_with_readable_file_queues_validation() {
+        let dir = std::env::temp_dir().join(format!(
+            "factory-prepare-pending-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        let current_hash =
+            factory_sim::prototype_hash(&factory_data::PrototypeCatalog::load_base().unwrap());
+
+        // Inspection failed transiently, so no classification exists, but the
+        // file is readable now.
+        let mut entry = SaveEntry {
+            id: SaveId::new("quicksave"),
+            metadata: fallback_metadata(
+                SaveId::new("quicksave"),
+                SaveKind::Quicksave,
+                "Quicksave".into(),
+                0,
+            ),
+            compatibility: SaveCompatibility::ValidationPending,
+            metadata_available: true,
+            path: path.clone(),
+            inspected: None,
+        };
+        let cache = BTreeMap::new();
+        let mut requests = Vec::new();
+        prepare_entry_validation(&mut entry, current_hash, &cache, &mut requests);
+
+        assert_eq!(entry.compatibility, SaveCompatibility::ValidationPending);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].compatibility, SaveCompatibility::Compatible);
         fs::remove_dir_all(dir).unwrap();
     }
 

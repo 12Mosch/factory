@@ -7,7 +7,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::JoinHandle;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -166,9 +166,10 @@ pub struct SaveCatalog {
     pub(crate) validation_cache: BTreeMap<PathBuf, CachedSaveValidation>,
     pub(crate) validation_queue: VecDeque<CatalogValidationRequest>,
     pub(crate) validation_jobs: Vec<CatalogValidationJob>,
-    /// Earliest wall-clock time (see `now_unix_ms`) at which entries stuck
-    /// at `ValidationPending` with no scheduled validation are re-observed.
-    pub(crate) next_pending_rescan_ms: u64,
+    /// Earliest time at which entries stuck at `ValidationPending` with no
+    /// scheduled validation are re-observed. Monotonic so a backward wall-
+    /// clock jump cannot suspend rescans; `None` means a rescan is due.
+    pub(crate) next_pending_rescan: Option<Instant>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -203,7 +203,10 @@ pub(crate) fn inspect_container_from_reader(
 
 /// Treats a short file as corruption while retaining every other read failure
 /// as an I/O error so recovery cannot replace a primary it could not inspect.
-fn read_inspection_bytes(reader: &mut impl Read, buffer: &mut [u8]) -> Result<(), ContainerError> {
+pub(crate) fn read_inspection_bytes(
+    reader: &mut impl Read,
+    buffer: &mut [u8],
+) -> Result<(), ContainerError> {
     reader.read_exact(buffer).map_err(|error| {
         if error.kind() == io::ErrorKind::UnexpectedEof {
             ContainerError::Truncated
