@@ -22,7 +22,7 @@ fn generated_world_chunk_scaling() {
         .map(measure_generated_world)
         .collect::<Vec<_>>();
     print_scaling_samples("generated_chunks", &samples);
-    assert_linear_tail(&samples, "generated chunks");
+    assert_approximately_linear(&samples, "generated chunks");
 }
 
 fn measure_generated_world(side: i32) -> ScalingSample {
@@ -50,7 +50,7 @@ fn player_corpse_scaling() {
         .map(measure_corpses)
         .collect::<Vec<_>>();
     print_scaling_samples("unrecovered_corpses", &samples);
-    assert_linear_tail(&samples, "unrecovered corpses");
+    assert_approximately_linear(&samples, "unrecovered corpses");
 
     let mut recovered = Simulation::new_player_corpse_fixture(1);
     recovered
@@ -113,19 +113,45 @@ fn print_scaling_samples(name: &str, samples: &[ScalingSample]) {
     }
 }
 
-fn assert_linear_tail(samples: &[ScalingSample], fixture: &str) {
-    let [.., previous, last] = samples else {
+fn assert_approximately_linear(samples: &[ScalingSample], fixture: &str) {
+    const MAX_SLOPE_RATIO: f64 = 1.25;
+
+    let [first, _, ..] = samples else {
         panic!("scaling measurement needs at least two samples");
     };
-    let count_growth = (last.count - previous.count) as u64;
-    let heap_growth = last.retained_heap.saturating_sub(previous.retained_heap);
-    let payload_growth = last.payload_bytes.saturating_sub(previous.payload_bytes);
-    assert!(count_growth > 0);
-    assert!(heap_growth > 0, "{fixture} should retain additional heap");
-    assert!(payload_growth > 0, "{fixture} should grow the save payload");
-    eprintln!(
-        "{fixture} tail slope: retained_heap_bytes_per_unit={:.2} payload_bytes_per_unit={:.2}",
-        heap_growth as f64 / count_growth as f64,
-        payload_growth as f64 / count_growth as f64,
-    );
+    let mut heap_slopes = Vec::with_capacity(samples.len() - 1);
+    let mut payload_slopes = Vec::with_capacity(samples.len() - 1);
+    let mut previous = first;
+    for sample in &samples[1..] {
+        let count_growth = (sample.count - previous.count) as f64;
+        assert!(count_growth > 0.0, "{fixture} counts must increase");
+        let heap_growth = sample
+            .retained_heap
+            .checked_sub(previous.retained_heap)
+            .expect("fixture should retain additional heap") as f64;
+        let payload_growth = sample
+            .payload_bytes
+            .checked_sub(previous.payload_bytes)
+            .expect("fixture should grow the save payload") as f64;
+        assert!(heap_growth > 0.0, "{fixture} should retain additional heap");
+        assert!(
+            payload_growth > 0.0,
+            "{fixture} should grow the save payload"
+        );
+        heap_slopes.push(heap_growth / count_growth);
+        payload_slopes.push(payload_growth / count_growth);
+        previous = sample;
+    }
+    for (name, slopes) in [("retained heap", heap_slopes), ("payload", payload_slopes)] {
+        let minimum = slopes.iter().copied().fold(f64::INFINITY, f64::min);
+        let maximum = slopes.iter().copied().fold(0.0, f64::max);
+        assert!(
+            maximum <= minimum * MAX_SLOPE_RATIO,
+            "{fixture} {name} slope varied from {minimum:.2} to {maximum:.2} bytes per unit"
+        );
+        eprintln!(
+            "{fixture} {name} slopes: {slopes:?} bytes per unit (max/min {:.3})",
+            maximum / minimum,
+        );
+    }
 }
