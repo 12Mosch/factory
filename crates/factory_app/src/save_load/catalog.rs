@@ -12,7 +12,7 @@ use super::{
     local_datetime_from_unix_ms,
 };
 use bevy::log::warn;
-use bevy::prelude::ResMut;
+use bevy::prelude::{DetectChangesMut, ResMut};
 use factory_data::PrototypeCatalog;
 use factory_sim::{
     SAVE_HEADER_SIZE, SaveLimits, SaveLoadError, inspect_save_header, load_from_bytes,
@@ -532,25 +532,28 @@ fn prepare_entry_validation(
     }
 }
 
-fn queue_catalog_validation(catalog: &mut SaveCatalog, request: CatalogValidationRequest) {
+/// Queues a validation request unless the same file version is already
+/// queued or running. Returns whether the queue changed.
+fn queue_catalog_validation(catalog: &mut SaveCatalog, request: CatalogValidationRequest) -> bool {
     if catalog
         .validation_jobs
         .iter()
         .any(|job| job.path == request.path && job.metadata == request.metadata)
     {
-        return;
+        return false;
     }
     if catalog
         .validation_queue
         .iter()
         .any(|queued| queued.path == request.path && queued.metadata == request.metadata)
     {
-        return;
+        return false;
     }
     catalog
         .validation_queue
         .retain(|queued| queued.path != request.path);
     catalog.validation_queue.push_back(request);
+    true
 }
 
 /// Builds a validation request for a file that could not be opened for
@@ -587,7 +590,10 @@ fn inspect_current_file(
     Some((metadata, compatibility))
 }
 
-fn start_catalog_validation_jobs(catalog: &mut SaveCatalog) {
+/// Starts queued validations up to the job bound. Returns whether any job
+/// started.
+fn start_catalog_validation_jobs(catalog: &mut SaveCatalog) -> bool {
+    let mut started = false;
     while catalog.validation_jobs.len() < MAX_CATALOG_VALIDATION_JOBS {
         let Some(request) = catalog.validation_queue.pop_front() else {
             break;
@@ -612,7 +618,9 @@ fn start_catalog_validation_jobs(catalog: &mut SaveCatalog) {
             cancel,
             handle,
         });
+        started = true;
     }
+    started
 }
 
 /// Wraps a save handle so catalog shutdown can abort hashing and decoding
@@ -641,10 +649,17 @@ impl<R: Seek> Seek for CancelReader<R> {
 }
 
 pub(crate) fn poll_catalog_validation_jobs(mut catalog: ResMut<SaveCatalog>) {
-    poll_catalog_validation_jobs_inner(&mut catalog);
+    if poll_catalog_validation_jobs_inner(catalog.bypass_change_detection()) {
+        catalog.set_changed();
+    }
 }
 
-fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) {
+/// Collects finished validation jobs and schedules retries/rescans.
+/// Returns whether externally relevant catalog state (entries, cache,
+/// revision, queues, or jobs) changed; pure timer bookkeeping does not
+/// count, so an idle catalog never trips Bevy change detection.
+fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) -> bool {
+    let mut changed = false;
     let mut index = 0;
     while index < catalog.validation_jobs.len() {
         if !catalog.validation_jobs[index].handle.is_finished() {
@@ -686,6 +701,7 @@ fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) {
                         compatibility: outcome.compatibility.clone(),
                     },
                 );
+                changed = true;
             }
             if let Some(entry) = catalog
                 .entries
@@ -695,6 +711,7 @@ fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) {
             {
                 entry.compatibility = outcome.compatibility;
                 catalog.revision = catalog.revision.wrapping_add(1);
+                changed = true;
             }
         } else if outcome.attempt < MAX_CATALOG_VALIDATION_RETRIES
             && let Some(entry_index) = catalog
@@ -711,7 +728,7 @@ fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) {
             let next_attempt = outcome.attempt + 1;
             if let Some((metadata, fresh)) = inspect_current_file(&outcome.path, &kind) {
                 if fresh.can_load() {
-                    queue_catalog_validation(
+                    changed |= queue_catalog_validation(
                         catalog,
                         CatalogValidationRequest {
                             path: outcome.path,
@@ -724,11 +741,12 @@ fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) {
                 } else {
                     catalog.entries[entry_index].compatibility = fresh;
                     catalog.revision = catalog.revision.wrapping_add(1);
+                    changed = true;
                 }
             } else {
                 // The file is momentarily unreadable (brief lock, mid-sync
                 // replacement). Queue a bounded blind retry.
-                queue_catalog_validation(
+                changed |= queue_catalog_validation(
                     catalog,
                     blind_retry_request(outcome.path, kind, next_attempt),
                 );
@@ -757,23 +775,26 @@ fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) {
             {
                 entry.compatibility = fresh;
                 catalog.revision = catalog.revision.wrapping_add(1);
+                changed = true;
             }
         }
     }
-    rescan_stale_pending(catalog);
-    start_catalog_validation_jobs(catalog);
+    changed |= rescan_stale_pending(catalog);
+    changed |= start_catalog_validation_jobs(catalog);
+    changed
 }
 
 /// Re-observes entries stuck at `ValidationPending` with no queued or
-/// running validation, at most every `PENDING_RESCAN_INTERVAL_MS`. This
+/// running validation, at most every `PENDING_RESCAN_INTERVAL`. This
 /// covers attempt exhaustion and refresh-time open failures, so recovered
 /// access is picked up without waiting for an unrelated catalog refresh.
 /// Each rescan performs a single observation per entry; a still-failing
-/// entry simply waits for the next interval.
-fn rescan_stale_pending(catalog: &mut SaveCatalog) {
+/// entry simply waits for the next interval. Returns whether any request
+/// was queued; advancing the throttle alone does not count.
+fn rescan_stale_pending(catalog: &mut SaveCatalog) -> bool {
     let now = Instant::now();
     if catalog.next_pending_rescan.is_some_and(|due| now < due) {
-        return;
+        return false;
     }
     catalog.next_pending_rescan = Some(now + PENDING_RESCAN_INTERVAL);
     let stale: Vec<(PathBuf, SaveKind)> = catalog
@@ -792,14 +813,16 @@ fn rescan_stale_pending(catalog: &mut SaveCatalog) {
         })
         .map(|entry| (entry.path.clone(), entry.metadata.kind.clone()))
         .collect();
+    let mut queued = false;
     for (path, kind) in stale {
         // Observe once: a still-unreadable file fails without chaining, and
         // the next interval tries again.
-        queue_catalog_validation(
+        queued |= queue_catalog_validation(
             catalog,
             blind_retry_request(path, kind, MAX_CATALOG_VALIDATION_RETRIES),
         );
     }
+    queued
 }
 
 /// Fully validates a loadable payload synchronously for explicit callers such
@@ -2097,6 +2120,153 @@ mod tests {
         assert_eq!(entry.compatibility, SaveCompatibility::ValidationPending);
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].compatibility, SaveCompatibility::Compatible);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn idle_poll_reports_no_mutation() {
+        let dir = std::env::temp_dir().join(format!(
+            "factory-idle-poll-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::Compatible,
+                metadata_available: true,
+                path,
+                inspected: None,
+            }],
+            revision: 7,
+            validation_cache: BTreeMap::new(),
+            next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: Vec::new(),
+        };
+
+        assert!(!poll_catalog_validation_jobs_inner(&mut catalog));
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::Compatible
+        );
+        assert_eq!(catalog.revision, 7);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn finished_outcome_reports_mutation() {
+        let dir = std::env::temp_dir().join(format!(
+            "factory-outcome-poll-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        let mut open = fs::File::open(&path).unwrap();
+        let metadata = save_file_metadata_fingerprint(&open);
+        let fingerprint = save_file_fingerprint(&mut open, metadata.clone()).unwrap();
+        drop(open);
+
+        let outcome = CatalogValidationOutcome {
+            path: path.clone(),
+            compatibility: SaveCompatibility::Compatible,
+            observed_metadata: Some(metadata.clone()),
+            fingerprint: Some(fingerprint),
+            attempt: 0,
+        };
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+                inspected: None,
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: vec![CatalogValidationJob {
+                path: path.clone(),
+                metadata,
+                cancel: Arc::new(AtomicBool::new(false)),
+                handle: thread::spawn(|| outcome),
+            }],
+        };
+
+        // A published outcome schedules no retry; the loop ends once the
+        // single job is consumed.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut mutated = false;
+        while !catalog.validation_jobs.is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "validation job did not finish"
+            );
+            mutated |= poll_catalog_validation_jobs_inner(&mut catalog);
+            if !catalog.validation_jobs.is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+        assert!(mutated);
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::Compatible
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rescan_throttle_advance_reports_no_mutation() {
+        let dir = std::env::temp_dir().join(format!(
+            "factory-throttle-poll-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::Compatible,
+                metadata_available: true,
+                path,
+                inspected: None,
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            next_pending_rescan: None,
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: Vec::new(),
+        };
+
+        // The throttle advances but nothing observable changes.
+        assert!(!poll_catalog_validation_jobs_inner(&mut catalog));
+        assert!(catalog.next_pending_rescan.is_some());
         fs::remove_dir_all(dir).unwrap();
     }
 
