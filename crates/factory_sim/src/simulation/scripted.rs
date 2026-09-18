@@ -65,6 +65,52 @@ impl Simulation {
         sim
     }
 
+    /// World with `corpse_count` unrecovered player corpses at the player spawn.
+    ///
+    /// Each corpse owns one full stack of sixteen distinct base-game items. The
+    /// persistence performance suite uses this deterministic fixture to measure
+    /// the durable-state cost of repeated deaths without making fixture setup
+    /// itself exercise combat and respawning thousands of times.
+    pub fn new_player_corpse_fixture(corpse_count: usize) -> Self {
+        const ITEM_KINDS_PER_CORPSE: usize = 16;
+
+        let mut sim = Self::new_seeded(123);
+        let (x, y) = sim.player.tile_position();
+        let items = sim
+            .world
+            .prototypes
+            .items()
+            .iter()
+            .take(ITEM_KINDS_PER_CORPSE)
+            .map(|item| {
+                ItemAmount::new(&sim.world.prototypes, item.id, u64::from(item.stack_size))
+                    .expect("catalog items form valid corpse amounts")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            items.len(),
+            ITEM_KINDS_PER_CORPSE,
+            "base catalog should contain enough representative corpse items"
+        );
+        let corpse_count = u64::try_from(corpse_count).expect("corpse count should fit in u64");
+        sim.statistics.player_deaths = corpse_count;
+        for id in 1..=corpse_count {
+            sim.corpses.insert(
+                id,
+                PlayerCorpse {
+                    id,
+                    created_tick: sim.tick,
+                    x,
+                    y,
+                    items: items.clone(),
+                    weapon: PlayerWeaponState::default(),
+                    repair_remaining_health: 0,
+                },
+            );
+        }
+        sim
+    }
+
     /// World with `train_count` fuelled trains running along straight track.
     ///
     /// Used by the performance suite, which needs trains actually moving —

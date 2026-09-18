@@ -133,3 +133,22 @@ fn corpse_identity_location_and_contents_are_hashed_and_validated() {
         Err(SimValidationError::InvalidPlayerCorpse { corpse_id: 1 })
     );
 }
+
+#[test]
+fn representative_corpse_fixture_round_trips_and_releases_empty_state() {
+    let sim = Simulation::new_player_corpse_fixture(128);
+    assert_eq!(sim.corpses().count(), 128);
+    sim.validate().unwrap();
+    let mut loaded = load_from_bytes(&save_to_bytes(&sim).unwrap()).unwrap();
+    assert_eq!(loaded.state_hash(), sim.state_hash());
+    assert_eq!(loaded.corpses().count(), 128);
+
+    loaded.recover_corpse(1).unwrap();
+    assert!(loaded.corpse(1).is_none());
+    assert_eq!(loaded.corpses().count(), 127);
+    loaded.validate().unwrap();
+    let reloaded = load_from_bytes(&save_to_bytes(&loaded).unwrap()).unwrap();
+    assert!(reloaded.corpse(1).is_none());
+    assert_eq!(reloaded.corpses().count(), 127);
+    assert_eq!(reloaded.state_hash(), loaded.state_hash());
+}

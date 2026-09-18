@@ -1048,6 +1048,24 @@ fn reset_allocation_counters() {
     ALLOCATED_BYTES.store(0, Ordering::Relaxed);
 }
 
+fn measure<T>(operation: impl FnOnce() -> T) -> (T, Duration, u64, u64, u64) {
+    let allocated = ALLOCATED_BYTES.load(Ordering::Relaxed);
+    let live_before = LIVE_ALLOCATED_BYTES.load(Ordering::Relaxed);
+    PEAK_LIVE_ALLOCATED_BYTES.store(live_before, Ordering::Relaxed);
+    let started = Instant::now();
+    let value = operation();
+    let live_after = LIVE_ALLOCATED_BYTES.load(Ordering::Relaxed);
+    (
+        value,
+        started.elapsed(),
+        ALLOCATED_BYTES.load(Ordering::Relaxed) - allocated,
+        PEAK_LIVE_ALLOCATED_BYTES
+            .load(Ordering::Relaxed)
+            .saturating_sub(live_before),
+        live_after.saturating_sub(live_before),
+    )
+}
+
 fn allocation_sample() -> AllocationSample {
     AllocationSample {
         count: ALLOCATION_COUNT.load(Ordering::Relaxed),
@@ -1371,3 +1389,6 @@ fn benchmark_train_journeys(sim: &Simulation) -> Vec<(factory_sim::TrainId, Enti
 
 #[path = "performance/persistence.rs"]
 mod persistence_budgets;
+
+#[path = "performance/persistent_state_scaling.rs"]
+mod persistent_state_scaling;
