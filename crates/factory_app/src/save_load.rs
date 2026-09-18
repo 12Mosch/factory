@@ -5,6 +5,7 @@ mod jobs;
 mod timestamp;
 mod types;
 
+pub(crate) use catalog::poll_catalog_validation_jobs;
 pub use catalog::{refresh_catalog, scan_catalog};
 pub(crate) use container::write_save_bytes;
 pub use container::{
@@ -312,6 +313,7 @@ pub(crate) fn poll_save_jobs(
     for job in jobs::take_completed(&mut pending) {
         match job.result {
             Ok(outcome) => {
+                catalog.invalidate_validation(&job.id);
                 metrics.last_snapshot_world_generation = outcome.snapshot_world_generation;
                 metrics.last_snapshot_capture_ms = outcome.snapshot_capture_ms;
                 metrics.last_snapshot_tick = outcome.snapshot_tick;
@@ -509,7 +511,7 @@ pub fn format_save_load_error(error: SaveLoadError) -> String {
     match error {
         SaveLoadError::TooLarge => "Cannot load save: it exceeds this build's save size or collection limits.".into(),
         SaveLoadError::UnsupportedSaveVersion { found, supported } if found > supported => format!("Cannot load save: format {found} was created by a newer build; update the game."),
-        SaveLoadError::UnsupportedSaveVersion { found, supported } => format!("Cannot load save: format {found} is older than {supported}; this build has no migration."),
+        SaveLoadError::UnsupportedSaveVersion { found, .. } => format!("Cannot load save: format {found} predates the oldest supported migration source ({}). Use a build that supports it and re-save before updating.", factory_sim::OLDEST_SUPPORTED_SAVE_VERSION),
         SaveLoadError::UnsupportedPrototypeFormatVersion { found, supported } if found > supported => format!("Cannot load save: prototype format {found} was created by a newer build; update the game."),
         SaveLoadError::UnsupportedPrototypeFormatVersion { found, supported } => format!("Cannot load save: prototype format {found} is older than {supported}; this build has no migration."),
         SaveLoadError::PrototypeHashMismatch { .. } => "Cannot load save: it uses different game/prototype data and may come from another build or data set.".into(),
@@ -631,6 +633,7 @@ mod tests {
             compatibility: SaveCompatibility::Compatible,
             metadata_available: true,
             path: PathBuf::from(format!("autosave-{generation}.factsim")),
+            inspected: None,
         }
     }
 }

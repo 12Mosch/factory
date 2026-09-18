@@ -119,6 +119,39 @@ use std::io::{Read, Write};
 // v58: unfinished train route searches gained durable A* frontiers so searches
 // larger than one tick's expansion slice resume identically across a save.
 pub const SAVE_VERSION: u32 = 58;
+/// Oldest historical simulation format this build can migrate.
+///
+/// Versions before this boundary omitted deterministic state that cannot be
+/// reconstructed. Keep this constant and the dispatcher below in sync whenever
+/// the save format changes.
+pub const OLDEST_SUPPORTED_SAVE_VERSION: u32 = 57;
+const CURRENT_SNAPSHOT_LAYOUT_VERSION: u32 = 58;
+const _: () = assert!(
+    SAVE_VERSION == CURRENT_SNAPSHOT_LAYOUT_VERSION,
+    "a new save version requires a schema, migration step, or compatibility-boundary decision"
+);
+
+/// Header-level support declared by the same explicit table used by decoding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveVersionSupport {
+    UnsupportedOld,
+    Migratable,
+    Current,
+    Newer,
+}
+
+pub const fn save_version_support(version: u32) -> SaveVersionSupport {
+    match version {
+        57 => SaveVersionSupport::Migratable,
+        58 => SaveVersionSupport::Current,
+        0..57 => SaveVersionSupport::UnsupportedOld,
+        _ => SaveVersionSupport::Newer,
+    }
+}
+const _: () = assert!(matches!(
+    save_version_support(SAVE_VERSION),
+    SaveVersionSupport::Current
+));
 // v8: PrototypeCatalog gained the world_generation config section.
 // v9: WorldGenerationConfig gained the optional distance_scaling section.
 // v10: combat prototypes (health, pollution, ammo, turrets, enemy bases).
@@ -307,6 +340,163 @@ define_snapshot! {
     attack_targets: enemy::AttackTargetCache => sim.attack_targets; clone_for_save,
 }
 
+/// Frozen top-level v57 wire layout.
+///
+/// Nested types are intentionally the runtime types that v57 used. The checked-in
+/// fixture guards their continued compatibility; changing one requires either a
+/// historical adapter or an explicit compatibility-boundary decision.
+#[derive(Deserialize, Serialize)]
+struct SimulationSnapshotV57 {
+    tick: u64,
+    day_night_cycle: Option<DayNightCycleState>,
+    world_seed: u64,
+    prototypes: PrototypeCatalog,
+    chunks: BTreeMap<ChunkCoord, Chunk>,
+    chunk_generation_queue: ChunkGenerationQueue,
+    chart: ChartState,
+    item_statistics: ItemStatistics,
+    fluid_statistics: FluidStatistics,
+    power_statistics: PowerStatistics,
+    rockets_launched: u64,
+    player_deaths: u64,
+    entities: EntityStore,
+    construction: ConstructionState,
+    player: PlayerState,
+    player_equipment: PlayerEquipmentState,
+    player_weapon: PlayerWeaponState,
+    delayed_combat: DelayedCombatState,
+    player_inventory: Inventory,
+    corpses: BTreeMap<u64, PlayerCorpse>,
+    manual_mining_progress: Option<ManualMiningProgress>,
+    crafting_queue: CraftingQueue,
+    onboarding_progress: OnboardingProgress,
+    research: ResearchState,
+    power_summary: PowerSummary,
+    power_networks: Vec<PowerNetworkSnapshot>,
+    entity_power_statuses: DenseEntityMap<EntityPowerStatus>,
+    fluid_networks: Vec<FluidNetworkSnapshot>,
+    fluid_topology_dirty: bool,
+    heat_networks: Vec<HeatNetworkSnapshot>,
+    heat_topology_dirty: bool,
+    robot_networks: Vec<RobotNetworkSnapshot>,
+    robot_logistic_work: RobotLogisticWorkState,
+    robot_flights: RobotFlightSubsystem,
+    rolling_stock: RollingStockSubsystem,
+    pollution: PollutionState,
+    enemies: EnemySubsystem,
+    config: SimulationConfig,
+    entity_topology_revision: u64,
+    world_chunk_revision: u64,
+    world_walkability_revision: u64,
+    transport: TransportLaneCache,
+    enemy_navigation: enemy::EnemyNavigation,
+    attack_targets: enemy::AttackTargetCache,
+}
+
+impl From<SimulationSnapshotV57> for SimulationSnapshotOwned {
+    fn from(snapshot: SimulationSnapshotV57) -> Self {
+        Self {
+            tick: snapshot.tick,
+            day_night_cycle: snapshot.day_night_cycle,
+            world_seed: snapshot.world_seed,
+            prototypes: snapshot.prototypes,
+            chunks: snapshot.chunks,
+            chunk_generation_queue: snapshot.chunk_generation_queue,
+            chart: snapshot.chart,
+            item_statistics: snapshot.item_statistics,
+            fluid_statistics: snapshot.fluid_statistics,
+            power_statistics: snapshot.power_statistics,
+            rockets_launched: snapshot.rockets_launched,
+            player_deaths: snapshot.player_deaths,
+            entities: snapshot.entities,
+            construction: snapshot.construction,
+            player: snapshot.player,
+            player_equipment: snapshot.player_equipment,
+            player_weapon: snapshot.player_weapon,
+            delayed_combat: snapshot.delayed_combat,
+            player_inventory: snapshot.player_inventory,
+            corpses: snapshot.corpses,
+            manual_mining_progress: snapshot.manual_mining_progress,
+            crafting_queue: snapshot.crafting_queue,
+            onboarding_progress: snapshot.onboarding_progress,
+            research: snapshot.research,
+            power_summary: snapshot.power_summary,
+            power_networks: snapshot.power_networks,
+            entity_power_statuses: snapshot.entity_power_statuses,
+            fluid_networks: snapshot.fluid_networks,
+            fluid_topology_dirty: snapshot.fluid_topology_dirty,
+            heat_networks: snapshot.heat_networks,
+            heat_topology_dirty: snapshot.heat_topology_dirty,
+            robot_networks: snapshot.robot_networks,
+            robot_logistic_work: snapshot.robot_logistic_work,
+            robot_flights: snapshot.robot_flights,
+            rolling_stock: snapshot.rolling_stock,
+            pending_train_route_searches: BTreeMap::new(),
+            pollution: snapshot.pollution,
+            enemies: snapshot.enemies,
+            config: snapshot.config,
+            entity_topology_revision: snapshot.entity_topology_revision,
+            world_chunk_revision: snapshot.world_chunk_revision,
+            world_walkability_revision: snapshot.world_walkability_revision,
+            transport: snapshot.transport,
+            enemy_navigation: snapshot.enemy_navigation,
+            attack_targets: snapshot.attack_targets,
+        }
+    }
+}
+
+#[cfg(test)]
+impl SimulationSnapshotV57 {
+    fn from_simulation(sim: &Simulation) -> Self {
+        Self {
+            tick: sim.tick,
+            day_night_cycle: sim.day_night_cycle,
+            world_seed: sim.world.seed,
+            prototypes: sim.world.prototypes.clone(),
+            chunks: sim.world.chunks.clone(),
+            chunk_generation_queue: sim.chunk_generation_queue.clone(),
+            chart: sim.chart.clone(),
+            item_statistics: sim.statistics.items.clone(),
+            fluid_statistics: sim.statistics.fluids.clone(),
+            power_statistics: sim.statistics.power.clone(),
+            rockets_launched: sim.statistics.rockets_launched,
+            player_deaths: sim.statistics.player_deaths,
+            entities: sim.entities.clone(),
+            construction: sim.construction.clone(),
+            player: sim.player,
+            player_equipment: sim.player_equipment.clone(),
+            player_weapon: sim.player_weapon,
+            delayed_combat: sim.delayed_combat.clone(),
+            player_inventory: sim.player_inventory.clone(),
+            corpses: sim.corpses.clone(),
+            manual_mining_progress: sim.manual_mining_progress,
+            crafting_queue: sim.crafting_queue.clone(),
+            onboarding_progress: sim.onboarding_progress,
+            research: sim.research.clone(),
+            power_summary: sim.power.summary,
+            power_networks: sim.power.networks.clone(),
+            entity_power_statuses: sim.power.entity_statuses.clone(),
+            fluid_networks: sim.fluids.networks.clone(),
+            fluid_topology_dirty: sim.fluids.topology_dirty,
+            heat_networks: sim.heat.networks.clone(),
+            heat_topology_dirty: sim.heat.topology_dirty,
+            robot_networks: sim.robots.networks.clone(),
+            robot_logistic_work: sim.robots.logistic_work.clone(),
+            robot_flights: sim.robot_flights.clone(),
+            rolling_stock: sim.rolling_stock.clone(),
+            pollution: sim.pollution.clone(),
+            enemies: sim.enemies.clone(),
+            config: sim.config,
+            entity_topology_revision: sim.entity_topology_revision,
+            world_chunk_revision: sim.world.chunk_revision,
+            world_walkability_revision: sim.world.walkability_revision,
+            transport: sim.transport.clone_for_save(),
+            enemy_navigation: sim.enemy_navigation.clone_for_save(),
+            attack_targets: sim.attack_targets.clone_for_save(),
+        }
+    }
+}
+
 /// An owned, immutable copy of the durable state for one completed simulation tick.
 ///
 /// Capturing the snapshot performs the state copies needed to release the live
@@ -446,6 +636,22 @@ fn encode_snapshot_into_with_limits(
     writer: &mut impl Write,
     limits: SaveLimits,
 ) -> Result<(), SaveLoadError> {
+    encode_versioned_snapshot_into_with_limits(
+        SAVE_VERSION,
+        prototype_hash,
+        snapshot,
+        writer,
+        limits,
+    )
+}
+
+fn encode_versioned_snapshot_into_with_limits(
+    save_version: u32,
+    prototype_hash: u64,
+    snapshot: &impl Serialize,
+    writer: &mut impl Write,
+    limits: SaveLimits,
+) -> Result<(), SaveLoadError> {
     if limits.max_encoded_bytes < SAVE_HEADER_SIZE as u64 {
         return Err(SaveLoadError::TooLarge);
     }
@@ -460,7 +666,7 @@ fn encode_snapshot_into_with_limits(
         .map_err(SaveLoadError::from)?;
     writer.write_all(&SAVE_MAGIC).map_err(io_save_error)?;
     writer
-        .write_all(&SAVE_VERSION.to_le_bytes())
+        .write_all(&save_version.to_le_bytes())
         .map_err(io_save_error)?;
     writer
         .write_all(&PROTOTYPE_FORMAT_VERSION.to_le_bytes())
@@ -533,11 +739,45 @@ pub fn load_from_reader_with_limits(
     let header = read_header_from(reader)?;
     validate_header(header)?;
 
-    let (snapshot, payload_bytes): (SimulationSnapshotOwned, u64) =
-        crate::save_limits::deserialize_from(reader, limits).map_err(SaveLoadError::from)?;
+    let (snapshot, payload_bytes) =
+        decode_and_migrate_snapshot(header.save_version, reader, limits)?;
     reject_trailing_or_oversized(reader, payload_bytes, limits.payload_bytes())?;
 
     finish_load(header, snapshot)
+}
+
+/// Dispatches each immutable historical wire schema through one explicit step.
+fn decode_and_migrate_snapshot(
+    version: u32,
+    reader: &mut impl Read,
+    limits: SaveLimits,
+) -> Result<(SimulationSnapshotOwned, u64), SaveLoadError> {
+    match save_version_support(version) {
+        SaveVersionSupport::Migratable => match version {
+            57 => {
+                let (snapshot, bytes): (SimulationSnapshotV57, u64) =
+                    crate::save_limits::deserialize_from(reader, limits)
+                        .map_err(SaveLoadError::from)?;
+                Ok((migrate_v57_to_v58(snapshot), bytes))
+            }
+            _ => unreachable!("the support table lists every migratable schema"),
+        },
+        SaveVersionSupport::Current => {
+            crate::save_limits::deserialize_from(reader, limits).map_err(SaveLoadError::from)
+        }
+        SaveVersionSupport::UnsupportedOld | SaveVersionSupport::Newer => {
+            Err(SaveLoadError::UnsupportedSaveVersion {
+                found: version,
+                supported: SAVE_VERSION,
+            })
+        }
+    }
+}
+
+fn migrate_v57_to_v58(snapshot: SimulationSnapshotV57) -> SimulationSnapshotOwned {
+    // v57 had no resumable train-search frontier. An empty pending set is the
+    // only truthful default; all state that existed in v57 is moved unchanged.
+    snapshot.into()
 }
 
 fn reject_trailing_or_oversized(
@@ -615,7 +855,10 @@ fn validate_header(header: SaveHeader) -> Result<(), SaveLoadError> {
             found: header.magic,
         });
     }
-    if header.save_version != SAVE_VERSION {
+    if matches!(
+        save_version_support(header.save_version),
+        SaveVersionSupport::UnsupportedOld | SaveVersionSupport::Newer
+    ) {
         return Err(SaveLoadError::UnsupportedSaveVersion {
             found: header.save_version,
             supported: SAVE_VERSION,
@@ -929,6 +1172,123 @@ mod tests {
 
     struct FailingIo;
 
+    fn sanitized_v57_fixture_simulation() -> Simulation {
+        let (mut simulation, rails) =
+            crate::simulation::tests::rolling_stock::world_with_rail_run(24);
+        for _ in 1..64 {
+            simulation.tick();
+        }
+        let stock_id = crate::simulation::tests::rolling_stock::place_stock(
+            &mut simulation,
+            &rails,
+            8,
+            "locomotive",
+        )
+        .expect("the sanitized locomotive fits on its rail run");
+        let train_id = simulation
+            .rolling_stock_piece(stock_id)
+            .expect("the sanitized locomotive was placed")
+            .train;
+        simulation
+            .set_train_destination(train_id, rails[20])
+            .expect("the sanitized train accepts its destination");
+        let standing = simulation
+            .rolling_stock_piece(stock_id)
+            .expect("the sanitized locomotive remains placed")
+            .position;
+        let train = simulation
+            .rolling_stock
+            .trains
+            .get_mut(&train_id)
+            .expect("the sanitized train exists");
+        train.route = None;
+        train.route_search_exhausted_at = Some(standing);
+        simulation
+            .validate_state()
+            .expect("the historical exhausted-search marker is valid without a frontier");
+        simulation
+    }
+
+    #[test]
+    #[ignore = "fixture regeneration is an explicit maintainer action"]
+    fn regenerate_sanitized_v57_fixture() {
+        let simulation = sanitized_v57_fixture_simulation();
+        let snapshot = SimulationSnapshotV57::from_simulation(&simulation);
+        let mut bytes = Vec::new();
+        encode_versioned_snapshot_into_with_limits(
+            57,
+            prototype_hash(&simulation.world.prototypes),
+            &snapshot,
+            &mut bytes,
+            SaveLimits::default(),
+        )
+        .unwrap();
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("save-v57-sanitized.factsim"), bytes).unwrap();
+    }
+
+    #[test]
+    fn v57_fixture_migrates_validates_and_continues_deterministically() {
+        let bytes = include_bytes!("../../tests/fixtures/save-v57-sanitized.factsim");
+        let header = inspect_save_header(bytes).unwrap();
+        assert_eq!(header.save_version, 57);
+        assert_eq!(header.prototype_format_version, PROTOTYPE_FORMAT_VERSION);
+
+        let mut expected = sanitized_v57_fixture_simulation();
+        let mut migrated = load_from_bytes(bytes).unwrap();
+        migrated.validate_state().unwrap();
+        assert_eq!(migrated.state_hash(), expected.state_hash(), "at migration");
+        assert!(migrated.train_routing.pending.is_empty());
+        let train_id = *migrated
+            .rolling_stock
+            .trains
+            .keys()
+            .next()
+            .expect("the historical fixture has one train");
+        assert!(
+            migrated
+                .train(train_id)
+                .expect("the migrated train exists")
+                .route_search_exhausted_at
+                .is_some(),
+            "the v57 exhaustion marker is preserved"
+        );
+
+        for relative_tick in 0..32 {
+            expected.tick();
+            migrated.tick();
+            assert_eq!(
+                migrated.state_hash(),
+                expected.state_hash(),
+                "continuation diverged at relative tick {relative_tick}"
+            );
+            migrated.validate_state().unwrap();
+        }
+        let train = migrated.train(train_id).expect("the migrated train exists");
+        assert!(
+            train.route.is_some(),
+            "v58 restarted the frontier-less search"
+        );
+        assert_eq!(train.route_search_exhausted_at, None);
+    }
+
+    #[test]
+    fn unknown_future_version_is_rejected_before_payload_decode() {
+        let fixture = include_bytes!("../../tests/fixtures/save-v57-sanitized.factsim");
+        let mut future_header = fixture[..SAVE_HEADER_SIZE].to_vec();
+        future_header[8..12].copy_from_slice(&(SAVE_VERSION + 1).to_le_bytes());
+        assert!(matches!(
+            load_from_bytes(&future_header),
+            Err(SaveLoadError::UnsupportedSaveVersion {
+                found,
+                supported: SAVE_VERSION,
+            }) if found == SAVE_VERSION + 1
+        ));
+    }
+
     impl Read for FailingIo {
         fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
             Err(io::ErrorKind::PermissionDenied.into())
@@ -1000,18 +1360,18 @@ mod tests {
             Err(SaveLoadError::InvalidSimulationState(SimValidationError::InvalidChunk(found))) if found == coord));
     }
 
-    /// Version 54 remains an explicit boundary for unrecoverable work state.
+    /// The version immediately before the supported window remains rejected.
     #[test]
-    fn version_54_is_an_explicit_unsupported_history_boundary() {
+    fn version_before_migration_window_is_an_explicit_history_boundary() {
         let mut bytes = save_to_bytes(&Simulation::new_test_world(293)).unwrap();
-        bytes[8..12].copy_from_slice(&54_u32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&(OLDEST_SUPPORTED_SAVE_VERSION - 1).to_le_bytes());
         bytes.truncate(SAVE_HEADER_SIZE);
         assert!(matches!(
             load_from_bytes(&bytes),
             Err(SaveLoadError::UnsupportedSaveVersion {
-                found: 54,
+                found,
                 supported: SAVE_VERSION
-            })
+            }) if found == OLDEST_SUPPORTED_SAVE_VERSION - 1
         ));
     }
 

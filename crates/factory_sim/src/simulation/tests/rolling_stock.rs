@@ -93,7 +93,7 @@ fn stock_prototype(sim: &Simulation, name: &str) -> EntityPrototypeId {
 /// Puts one piece of stock on the rail at `rail_index` of the run, stocking the
 /// player inventory and unlocking the technology first so the placement is
 /// exercised through the same path a player uses.
-pub(super) fn place_stock(
+pub(in crate::simulation) fn place_stock(
     sim: &mut Simulation,
     rails: &[EntityId],
     rail_index: usize,

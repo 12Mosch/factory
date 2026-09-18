@@ -16,7 +16,10 @@ use factory_app::ui::save_load::{
     SaveConfirmationButton, SaveCreateButton, SaveEntryAction, SaveEntryButton, format_timestamp,
 };
 use factory_data::{EntityPrototypeId, ItemId};
-use factory_sim::{ChunkCoord, EntityId, SAVE_VERSION, SimCommand, load_from_bytes, save_to_bytes};
+use factory_sim::{
+    ChunkCoord, EntityId, OLDEST_SUPPORTED_SAVE_VERSION, SAVE_VERSION, SimCommand, load_from_bytes,
+    save_to_bytes,
+};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -73,6 +76,75 @@ fn f9_reads_existing_raw_quicksave_and_resets_transient_state() {
             .is_none()
     );
     assert!(app.world().resource::<OpenContainer>().entity_id.is_none());
+}
+
+#[test]
+fn migratable_v57_quicksave_is_labeled_loaded_and_left_untouched() {
+    let mut app = test_app(Duration::ZERO, "migratable_v57");
+    let config = app.world().resource::<SaveLoadConfig>().clone();
+    fs::create_dir_all(&config.root_dir).unwrap();
+    let path = config.root_dir.join("quicksave.factsim");
+    let historical = include_bytes!("../../factory_sim/tests/fixtures/save-v57-sanitized.factsim");
+    fs::write(&path, historical).unwrap();
+
+    app.update();
+    drain_catalog_validations(&mut app);
+    let entry = &app.world().resource::<SaveCatalog>().entries()[0];
+    assert!(matches!(
+        entry.compatibility,
+        SaveCompatibility::MigratableSaveFormat {
+            found: OLDEST_SUPPORTED_SAVE_VERSION,
+            current: SAVE_VERSION,
+        }
+    ));
+    assert!(entry.compatibility.can_load());
+
+    tap_key(&mut app, KeyCode::F9);
+
+    let loaded = app.world().resource::<SimResource>().read();
+    assert_eq!(loaded.tick_count(), 64);
+    assert_eq!(loaded.seed(), 123);
+    loaded.validate_state().unwrap();
+    drop(loaded);
+    assert_eq!(fs::read(&path).unwrap(), historical);
+}
+
+#[test]
+fn malformed_v57_payload_is_catalogued_as_corrupt_not_migratable() {
+    let app = test_app(Duration::ZERO, "malformed_v57");
+    let config = app.world().resource::<SaveLoadConfig>().clone();
+    fs::create_dir_all(&config.root_dir).unwrap();
+    let path = config.root_dir.join("quicksave.factsim");
+    let historical = include_bytes!("../../factory_sim/tests/fixtures/save-v57-sanitized.factsim");
+    fs::write(&path, &historical[..factory_sim::SAVE_HEADER_SIZE + 1]).unwrap();
+
+    let entries = scan_catalog(&config).unwrap();
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].compatibility,
+        SaveCompatibility::CorruptOrTruncated
+    );
+    assert!(!entries[0].compatibility.can_load());
+}
+
+#[test]
+fn malformed_current_payload_is_catalogued_as_corrupt_not_compatible() {
+    let app = test_app(Duration::ZERO, "malformed_current");
+    let config = app.world().resource::<SaveLoadConfig>().clone();
+    fs::create_dir_all(&config.root_dir).unwrap();
+    let path = config.root_dir.join("quicksave.factsim");
+    let current = save_to_bytes(&app.world().resource::<SimResource>().read()).unwrap();
+    fs::write(&path, &current[..factory_sim::SAVE_HEADER_SIZE + 1]).unwrap();
+
+    let entries = scan_catalog(&config).unwrap();
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].compatibility,
+        SaveCompatibility::CorruptOrTruncated
+    );
+    assert!(!entries[0].compatibility.can_load());
 }
 
 #[test]
@@ -230,7 +302,7 @@ fn incompatible_named_save_stays_visible_and_deletable() {
     let bytes = fs::read(&path).unwrap();
     let (metadata, payload) = decode_container(&bytes).unwrap();
     let mut payload = payload.to_vec();
-    payload[8..12].copy_from_slice(&(SAVE_VERSION - 1).to_le_bytes());
+    payload[8..12].copy_from_slice(&(OLDEST_SUPPORTED_SAVE_VERSION - 1).to_le_bytes());
     fs::write(&path, encode_container(&metadata, &payload).unwrap()).unwrap();
     refresh_manager(&mut app);
 
@@ -475,7 +547,7 @@ fn recovery_never_replaces_an_intact_primary_or_uses_ambiguous_backups() {
     let different_payload = save_to_bytes(&app.world().resource::<SimResource>().read()).unwrap();
     let different_bytes = encode_container(&metadata, &different_payload).unwrap();
     let mut older_payload = payload.to_vec();
-    older_payload[8..12].copy_from_slice(&(SAVE_VERSION - 1).to_le_bytes());
+    older_payload[8..12].copy_from_slice(&(OLDEST_SUPPORTED_SAVE_VERSION - 1).to_le_bytes());
     let incompatible_bytes = encode_container(&metadata, &older_payload).unwrap();
     fs::write(&path, &incompatible_bytes).unwrap();
     fs::write(&backup_one, &valid_bytes).unwrap();
@@ -1161,6 +1233,7 @@ fn refresh_manager(app: &mut App) {
         .resource_mut::<SaveLoadWindowState>()
         .refresh_on_open = true;
     app.update();
+    drain_catalog_validations(app);
 }
 
 fn press_entry(app: &mut App, id: &factory_app::save_load::SaveId, action: SaveEntryAction) {
@@ -1217,9 +1290,28 @@ fn drain_save_jobs(app: &mut App) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if app.world().resource::<PendingSaveJobs>().is_empty() {
+            drain_catalog_validations(app);
             return;
         }
         assert!(Instant::now() < deadline, "save jobs did not drain");
+        app.update();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn drain_catalog_validations(app: &mut App) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app
+        .world()
+        .resource::<SaveCatalog>()
+        .entries()
+        .iter()
+        .any(|entry| entry.compatibility == SaveCompatibility::ValidationPending)
+    {
+        assert!(
+            Instant::now() < deadline,
+            "catalog validation jobs did not drain"
+        );
         app.update();
         std::thread::sleep(Duration::from_millis(1));
     }
