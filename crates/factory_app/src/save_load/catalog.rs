@@ -5,8 +5,9 @@ use super::container::{
     promote_backup, retired_save_artifact_primary, with_save_artifact_lock,
 };
 use super::{
-    CachedMigrationValidation, SaveCatalog, SaveCompatibility, SaveEntry, SaveFileFingerprint,
-    SaveId, SaveKind, SaveLoadConfig, SaveMetadata, local_datetime_from_unix_ms,
+    CachedSaveValidation, SaveCatalog, SaveCompatibility, SaveEntry, SaveFileFingerprint,
+    SaveFileIdentity, SaveFileMetadataFingerprint, SaveId, SaveKind, SaveLoadConfig, SaveMetadata,
+    local_datetime_from_unix_ms,
 };
 use bevy::log::warn;
 use factory_data::PrototypeCatalog;
@@ -22,7 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Replaces the in-memory catalog with a freshly recovered and inspected scan.
 pub fn refresh_catalog(config: &SaveLoadConfig, catalog: &mut SaveCatalog) -> Result<(), String> {
-    let entries = scan_catalog_with_cache(config, &mut catalog.migration_validation)?;
+    let entries = scan_catalog_with_cache(config, &mut catalog.validation_cache)?;
     catalog.replace(entries);
     Ok(())
 }
@@ -34,10 +35,10 @@ pub fn scan_catalog(config: &SaveLoadConfig) -> Result<Vec<SaveEntry>, String> {
 
 fn scan_catalog_with_cache(
     config: &SaveLoadConfig,
-    migration_validation: &mut BTreeMap<PathBuf, CachedMigrationValidation>,
+    validation_cache: &mut BTreeMap<PathBuf, CachedSaveValidation>,
 ) -> Result<Vec<SaveEntry>, String> {
     if !config.root_dir.exists() {
-        migration_validation.clear();
+        validation_cache.clear();
         return Ok(Vec::new());
     }
     let current_hash = prototype_hash(
@@ -70,7 +71,7 @@ fn scan_catalog_with_cache(
             kind,
             fallback_name,
             current_hash,
-            migration_validation,
+            validation_cache,
         ));
     }
     entries.sort_by(|left, right| {
@@ -91,7 +92,7 @@ fn scan_catalog_with_cache(
         .iter()
         .map(|entry| entry.path.clone())
         .collect::<BTreeSet<_>>();
-    migration_validation.retain(|path, _| present.contains(path));
+    validation_cache.retain(|path, _| present.contains(path));
     Ok(entries)
 }
 
@@ -402,17 +403,14 @@ fn inspect_entry(
     kind: SaveKind,
     fallback_name: String,
     current_hash: u64,
-    migration_validation: &mut BTreeMap<PathBuf, CachedMigrationValidation>,
+    validation_cache: &mut BTreeMap<PathBuf, CachedSaveValidation>,
 ) -> SaveEntry {
     let timestamp = file_timestamp_ms(&path);
     let fallback = || fallback_metadata(id.clone(), kind.clone(), fallback_name.clone(), timestamp);
     let mut inspection = inspect_file(&path, &kind, current_hash);
-    if matches!(
-        inspection.compatibility,
-        SaveCompatibility::MigratableSaveFormat { .. }
-    ) {
+    if inspection.compatibility.can_load() {
         inspection.compatibility =
-            validate_migratable_file(&path, inspection.compatibility, migration_validation);
+            validate_loadable_file(&path, inspection.compatibility, validation_cache);
     }
     let metadata = inspection
         .metadata
@@ -437,21 +435,31 @@ fn inspect_entry(
     }
 }
 
-/// Fully validates historical payloads once per stable content identity so the
-/// UI never advertises malformed data as migratable without re-decoding large,
-/// unchanged saves on every catalog refresh. Metadata alone is insufficient:
-/// backup and synchronization tools can replace bytes while preserving both
-/// the file length and modification time.
-fn validate_migratable_file(
+/// Fully validates loadable payloads once per stable file identity so the UI
+/// never advertises malformed data as compatible. File identity and change
+/// time make unchanged cache hits O(1), while a bounded content digest guards
+/// validation misses and detects in-place mutation during decoding.
+fn validate_loadable_file(
     path: &Path,
     header_compatibility: SaveCompatibility,
-    cache: &mut BTreeMap<PathBuf, CachedMigrationValidation>,
+    cache: &mut BTreeMap<PathBuf, CachedSaveValidation>,
 ) -> SaveCompatibility {
     let mut file = match fs::File::open(path) {
         Ok(file) => file,
         Err(_) => return header_compatibility,
     };
-    let fingerprint = match save_file_fingerprint(&mut file) {
+    let metadata_fingerprint = save_file_metadata_fingerprint(&file);
+    if metadata_fingerprint.len > SaveLimits::default().max_encoded_bytes {
+        cache.remove(path);
+        return SaveCompatibility::ExceedsCurrentLimits;
+    }
+    if metadata_fingerprint.identity.is_some()
+        && let Some(cached) = cache.get(path)
+        && cached.fingerprint.metadata == metadata_fingerprint
+    {
+        return cached.compatibility.clone();
+    }
+    let fingerprint = match save_file_fingerprint(&mut file, metadata_fingerprint) {
         Ok(fingerprint) => fingerprint,
         Err(ContainerError::TooLarge) => {
             cache.remove(path);
@@ -459,12 +467,6 @@ fn validate_migratable_file(
         }
         Err(_) => return header_compatibility,
     };
-    if let Some(cached) = cache.get(path)
-        && cached.fingerprint == fingerprint
-    {
-        return cached.compatibility.clone();
-    }
-
     let load_result = match file.rewind() {
         Ok(()) => {
             load_simulation_from_reader(&mut BufReader::new(&mut file), SaveLimits::default())
@@ -477,7 +479,8 @@ fn validate_migratable_file(
         Err(ContainerError::Io(_)) => (header_compatibility, false),
         Err(_) => (SaveCompatibility::CorruptOrTruncated, true),
     };
-    let stable_fingerprint = match save_file_fingerprint(&mut file) {
+    let after_metadata = save_file_metadata_fingerprint(&file);
+    let stable_fingerprint = match save_file_fingerprint(&mut file, after_metadata) {
         Ok(after_validation) => after_validation == fingerprint,
         Err(ContainerError::TooLarge) => {
             cache.remove(path);
@@ -485,10 +488,10 @@ fn validate_migratable_file(
         }
         Err(_) => false,
     };
-    if cacheable && stable_fingerprint {
+    if cacheable && stable_fingerprint && fingerprint.metadata.identity.is_some() {
         cache.insert(
             path.to_path_buf(),
-            CachedMigrationValidation {
+            CachedSaveValidation {
                 fingerprint,
                 compatibility: compatibility.clone(),
             },
@@ -497,14 +500,14 @@ fn validate_migratable_file(
     compatibility
 }
 
-/// Identifies the bytes that were considered by migration validation. The
-/// metadata fields retain a cheap diagnostic identity while the digest closes
-/// the same-length, preserved-timestamp replacement hole.
-fn save_file_fingerprint(file: &mut fs::File) -> Result<SaveFileFingerprint, ContainerError> {
+/// Identifies the exact bytes considered by payload validation.
+fn save_file_fingerprint(
+    file: &mut fs::File,
+    metadata: SaveFileMetadataFingerprint,
+) -> Result<SaveFileFingerprint, ContainerError> {
     file.rewind()?;
-    let metadata = file.metadata()?;
     let maximum = SaveLimits::default().max_encoded_bytes;
-    if metadata.len() > maximum {
+    if metadata.len > maximum {
         return Err(ContainerError::TooLarge);
     }
     let mut hasher = blake3::Hasher::new();
@@ -516,10 +519,83 @@ fn save_file_fingerprint(file: &mut fs::File) -> Result<SaveFileFingerprint, Con
         return Err(ContainerError::TooLarge);
     }
     Ok(SaveFileFingerprint {
-        len: copied,
-        modified: metadata.modified().ok(),
+        metadata: SaveFileMetadataFingerprint {
+            len: copied,
+            ..metadata
+        },
         content_digest: *hasher.finalize().as_bytes(),
     })
+}
+
+fn save_file_metadata_fingerprint(file: &fs::File) -> SaveFileMetadataFingerprint {
+    match file.metadata() {
+        Ok(metadata) => SaveFileMetadataFingerprint {
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+            identity: save_file_identity(file, &metadata),
+        },
+        Err(_) => SaveFileMetadataFingerprint {
+            len: 0,
+            modified: None,
+            identity: None,
+        },
+    }
+}
+
+#[cfg(unix)]
+fn save_file_identity(_file: &fs::File, metadata: &fs::Metadata) -> Option<SaveFileIdentity> {
+    use std::os::unix::fs::MetadataExt;
+
+    let mut file_id = [0; 16];
+    file_id[..8].copy_from_slice(&metadata.ino().to_le_bytes());
+    Some(SaveFileIdentity {
+        volume_or_device: metadata.dev(),
+        file_id,
+        change_time: metadata.ctime(),
+        change_time_nanoseconds: metadata.ctime_nsec(),
+    })
+}
+
+#[cfg(windows)]
+fn save_file_identity(file: &fs::File, _metadata: &fs::Metadata) -> Option<SaveFileIdentity> {
+    use std::mem::size_of;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_BASIC_INFO, FILE_ID_INFO, FileBasicInfo, FileIdInfo, GetFileInformationByHandleEx,
+    };
+
+    let mut id = FILE_ID_INFO::default();
+    let mut basic = FILE_BASIC_INFO::default();
+    // SAFETY: both output pointers refer to correctly sized writable structs,
+    // and the borrowed file keeps the handle valid for both calls.
+    let id_ok = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            (&raw mut id).cast(),
+            size_of::<FILE_ID_INFO>() as u32,
+        )
+    } != 0;
+    // SAFETY: same argument validity as above, with FILE_BASIC_INFO.
+    let basic_ok = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileBasicInfo,
+            (&raw mut basic).cast(),
+            size_of::<FILE_BASIC_INFO>() as u32,
+        )
+    } != 0;
+    (id_ok && basic_ok).then_some(SaveFileIdentity {
+        volume_or_device: id.VolumeSerialNumber,
+        file_id: id.FileId.Identifier,
+        change_time: basic.ChangeTime,
+        change_time_nanoseconds: 0,
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn save_file_identity(_file: &fs::File, _metadata: &fs::Metadata) -> Option<SaveFileIdentity> {
+    None
 }
 
 /// Performs the shared lightweight container/header classification used by
@@ -632,7 +708,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn content_digest_invalidates_same_metadata_migration_cache_entry() {
+    fn stable_file_identity_invalidates_same_size_timestamp_cache_entry() {
         let path = std::env::temp_dir().join(format!(
             "factory-migration-cache-{}-{}.factsim",
             std::process::id(),
@@ -642,12 +718,18 @@ mod tests {
             include_bytes!("../../../factory_sim/tests/fixtures/save-v57-sanitized.factsim");
         fs::write(&path, historical).unwrap();
         let mut file = fs::File::open(&path).unwrap();
-        let current_fingerprint = save_file_fingerprint(&mut file).unwrap();
+        let metadata = save_file_metadata_fingerprint(&file);
+        let current_fingerprint = save_file_fingerprint(&mut file, metadata).unwrap();
         let mut stale_fingerprint = current_fingerprint.clone();
-        stale_fingerprint.content_digest[0] ^= 0xff;
+        stale_fingerprint
+            .metadata
+            .identity
+            .as_mut()
+            .expect("test filesystem should expose stable file identity")
+            .change_time ^= 1;
         let mut cache = BTreeMap::from([(
             path.clone(),
-            CachedMigrationValidation {
+            CachedSaveValidation {
                 fingerprint: stale_fingerprint,
                 compatibility: SaveCompatibility::CorruptOrTruncated,
             },
@@ -657,8 +739,7 @@ mod tests {
             current: factory_sim::SAVE_VERSION,
         };
 
-        let compatibility =
-            validate_migratable_file(&path, header_compatibility.clone(), &mut cache);
+        let compatibility = validate_loadable_file(&path, header_compatibility.clone(), &mut cache);
 
         assert_eq!(compatibility, header_compatibility);
         assert_eq!(cache[&path].fingerprint, current_fingerprint);
@@ -686,7 +767,7 @@ mod tests {
             current: factory_sim::SAVE_VERSION,
         };
 
-        let compatibility = validate_migratable_file(&path, header_compatibility, &mut cache);
+        let compatibility = validate_loadable_file(&path, header_compatibility, &mut cache);
 
         assert_eq!(compatibility, SaveCompatibility::ExceedsCurrentLimits);
         assert!(cache.is_empty());

@@ -17,7 +17,7 @@ chrono = { version = "0.4.41", default-features = false, features = ["clock"] }
 libc = "0.2.189"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 factory_data = { workspace = true, features = ["test-utils"] }

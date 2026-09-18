@@ -312,6 +312,7 @@ pub(crate) fn poll_save_jobs(
     for job in jobs::take_completed(&mut pending) {
         match job.result {
             Ok(outcome) => {
+                catalog.invalidate_validation(&job.id);
                 metrics.last_snapshot_world_generation = outcome.snapshot_world_generation;
                 metrics.last_snapshot_capture_ms = outcome.snapshot_capture_ms;
                 metrics.last_snapshot_tick = outcome.snapshot_tick;

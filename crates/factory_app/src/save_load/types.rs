@@ -149,18 +149,32 @@ impl SaveEntry {
 pub struct SaveCatalog {
     entries: Vec<SaveEntry>,
     pub revision: u64,
-    pub(crate) migration_validation: BTreeMap<PathBuf, CachedMigrationValidation>,
+    pub(crate) validation_cache: BTreeMap<PathBuf, CachedSaveValidation>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SaveFileIdentity {
+    pub(crate) volume_or_device: u64,
+    pub(crate) file_id: [u8; 16],
+    pub(crate) change_time: i64,
+    pub(crate) change_time_nanoseconds: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SaveFileMetadataFingerprint {
+    pub(crate) len: u64,
+    pub(crate) modified: Option<SystemTime>,
+    pub(crate) identity: Option<SaveFileIdentity>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SaveFileFingerprint {
-    pub(crate) len: u64,
-    pub(crate) modified: Option<SystemTime>,
+    pub(crate) metadata: SaveFileMetadataFingerprint,
     pub(crate) content_digest: [u8; 32],
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct CachedMigrationValidation {
+pub(crate) struct CachedSaveValidation {
     pub(crate) fingerprint: SaveFileFingerprint,
     pub(crate) compatibility: SaveCompatibility,
 }
@@ -177,6 +191,12 @@ impl SaveCatalog {
     pub(crate) fn replace(&mut self, entries: Vec<SaveEntry>) {
         self.entries = entries;
         self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub(crate) fn invalidate_validation(&mut self, id: &SaveId) {
+        if let Some(path) = self.get(id).map(|entry| entry.path.clone()) {
+            self.validation_cache.remove(&path);
+        }
     }
 
     pub fn named_case_insensitive(&self, name: &str) -> Option<&SaveEntry> {

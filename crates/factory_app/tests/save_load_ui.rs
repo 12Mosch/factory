@@ -128,6 +128,25 @@ fn malformed_v57_payload_is_catalogued_as_corrupt_not_migratable() {
 }
 
 #[test]
+fn malformed_current_payload_is_catalogued_as_corrupt_not_compatible() {
+    let app = test_app(Duration::ZERO, "malformed_current");
+    let config = app.world().resource::<SaveLoadConfig>().clone();
+    fs::create_dir_all(&config.root_dir).unwrap();
+    let path = config.root_dir.join("quicksave.factsim");
+    let current = save_to_bytes(&app.world().resource::<SimResource>().read()).unwrap();
+    fs::write(&path, &current[..factory_sim::SAVE_HEADER_SIZE + 1]).unwrap();
+
+    let entries = scan_catalog(&config).unwrap();
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].compatibility,
+        SaveCompatibility::CorruptOrTruncated
+    );
+    assert!(!entries[0].compatibility.can_load());
+}
+
+#[test]
 fn recovery_restores_a_legacy_raw_quicksave_backup() {
     let app = test_app(Duration::ZERO, "raw_quicksave_recovery");
     let expected = sim_tick_and_hash(&app);
