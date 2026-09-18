@@ -30,9 +30,9 @@ mod trains;
 use super::super::robot_ops::RobotLogisticWorkState;
 use super::super::save::SimulationSnapshotOwned;
 use super::super::*;
-#[cfg(test)]
-use super::codec::decode_group;
 use super::codec::{ManifestEntry, RecordHeader};
+#[cfg(test)]
+use super::codec::{checksum, decode_group};
 use super::registry::*;
 use bincode::Options;
 
@@ -187,10 +187,14 @@ impl<'a> BorrowedRecordFields<'a> {
         }
     }
 
-    /// Lists every record key: the registry globals plus one per world chunk.
+    /// Lists every record key: one per handler row plus one per world chunk.
     pub(super) fn keys(&self) -> Vec<String> {
-        let mut keys = Vec::with_capacity(REQUIRED_GLOBAL_KEYS.len() + self.chunks.len());
-        keys.extend(REQUIRED_GLOBAL_KEYS.iter().map(|key| key.to_string()));
+        let mut keys = Vec::with_capacity(RECORD_HANDLERS.len() + self.chunks.len());
+        keys.extend(
+            RECORD_HANDLERS
+                .iter()
+                .map(|handler| handler.key.to_string()),
+        );
         keys.extend(self.chunks.keys().map(|coord| chunk_key(*coord)));
         keys
     }
@@ -209,29 +213,185 @@ pub(super) fn measure_tuple(
         .map_err(SaveLoadError::from)
 }
 
-/// Encodes the borrowed group for `key`. Every registry key must dispatch
-/// here; chunk records resolve through the world map.
+/// One operational record: its stable key and ownership plus the subsystem
+/// handlers that encode, measure, and decode it.
+///
+/// [`RECORD_HANDLERS`] is the single dispatch source: [`encode_record`],
+/// [`measure_record`], and [`decode_into_slot`] all resolve through
+/// [`find_handler`], so adding a record means adding one row plus its
+/// subsystem helpers — never editing parallel matches. Chunk records are
+/// the only dynamic family and resolve through the world map instead.
+#[derive(Clone, Copy)]
+pub(super) struct RecordHandler {
+    pub(super) key: &'static str,
+    pub(super) owner: &'static str,
+    pub(super) required: bool,
+    pub(super) description: &'static str,
+    pub(super) encode: for<'a> fn(
+        &'a BorrowedRecordFields<'a>,
+        crate::SaveLimits,
+    ) -> Result<Vec<u8>, SaveLoadError>,
+    pub(super) measure:
+        for<'a> fn(&'a BorrowedRecordFields<'a>, crate::SaveLimits) -> Result<u64, SaveLoadError>,
+    pub(super) decode:
+        fn(&mut PartialSnapshot, &str, &[u8], crate::SaveLimits) -> Result<(), SaveLoadError>,
+}
+
+pub(super) const RECORD_HANDLERS: [RecordHandler; 14] = [
+    RecordHandler {
+        key: KEY_CORE,
+        owner: "simulation core",
+        required: true,
+        description: "tick, world seed, day/night phase, config, topology/chunk/walkability revisions",
+        encode: core::encode,
+        measure: core::measure,
+        decode: core::decode,
+    },
+    RecordHandler {
+        key: KEY_PROTOTYPES,
+        owner: "global data identity",
+        required: true,
+        description: "prototype catalog",
+        encode: singles::encode_prototypes,
+        measure: singles::measure_prototypes,
+        decode: singles::decode_prototypes,
+    },
+    RecordHandler {
+        key: KEY_CHART,
+        owner: "global",
+        required: true,
+        description: "chart state",
+        encode: singles::encode_chart,
+        measure: singles::measure_chart,
+        decode: singles::decode_chart,
+    },
+    RecordHandler {
+        key: KEY_CHUNK_QUEUE,
+        owner: "global",
+        required: true,
+        description: "pending chunk-generation requests",
+        encode: singles::encode_chunk_queue,
+        measure: singles::measure_chunk_queue,
+        decode: singles::decode_chunk_queue,
+    },
+    RecordHandler {
+        key: KEY_STATISTICS,
+        owner: "global",
+        required: true,
+        description: "item/fluid/power statistics, launches, deaths",
+        encode: statistics::encode,
+        measure: statistics::measure,
+        decode: statistics::decode,
+    },
+    RecordHandler {
+        key: KEY_ENTITIES,
+        owner: "global entity ownership",
+        required: true,
+        description: "entity store",
+        encode: singles::encode_entities,
+        measure: singles::measure_entities,
+        decode: singles::decode_entities,
+    },
+    RecordHandler {
+        key: KEY_CONSTRUCTION,
+        owner: "global",
+        required: true,
+        description: "construction state",
+        encode: singles::encode_construction,
+        measure: singles::measure_construction,
+        decode: singles::decode_construction,
+    },
+    RecordHandler {
+        key: KEY_PLAYER,
+        owner: "global",
+        required: true,
+        description: "player, equipment, weapon, combat, inventory, corpses, mining, crafting, onboarding, research",
+        encode: player::encode,
+        measure: player::measure,
+        decode: player::decode,
+    },
+    RecordHandler {
+        key: KEY_POWER,
+        owner: "global network ownership",
+        required: true,
+        description: "power summary, networks, entity statuses",
+        encode: networks::encode_power,
+        measure: networks::measure_power,
+        decode: networks::decode_power,
+    },
+    RecordHandler {
+        key: KEY_FLUIDS,
+        owner: "global network ownership",
+        required: true,
+        description: "fluid networks, invalidation flag",
+        encode: networks::encode_fluids,
+        measure: networks::measure_fluids,
+        decode: networks::decode_fluids,
+    },
+    RecordHandler {
+        key: KEY_HEAT,
+        owner: "global network ownership",
+        required: true,
+        description: "heat networks, invalidation flag",
+        encode: networks::encode_heat,
+        measure: networks::measure_heat,
+        decode: networks::decode_heat,
+    },
+    RecordHandler {
+        key: KEY_ROBOTS,
+        owner: "cross-chunk ownership",
+        required: true,
+        description: "robot networks, logistic work, flights",
+        encode: robots::encode,
+        measure: robots::measure,
+        decode: robots::decode,
+    },
+    RecordHandler {
+        key: KEY_TRAINS,
+        owner: "cross-chunk ownership",
+        required: true,
+        description: "rolling stock, pending route searches with frontiers",
+        encode: trains::encode,
+        measure: trains::measure,
+        decode: trains::decode,
+    },
+    RecordHandler {
+        key: KEY_ENVIRONMENT,
+        owner: "cross-chunk ownership",
+        required: true,
+        description: "pollution, enemies, transport cache, navigation, targeting",
+        encode: environment::encode,
+        measure: environment::measure,
+        decode: environment::decode,
+    },
+];
+
+/// Resolves a global key to its handler. A key with no row here is either a
+/// chunk record or unknown — there is no second mapping to drift.
+pub(super) fn find_handler(key: &str) -> Option<&'static RecordHandler> {
+    RECORD_HANDLERS.iter().find(|handler| handler.key == key)
+}
+
+/// Reports the manifest `required` flag for `key`. Handler rows control the
+/// wire: chunk records are always required, and unknown keys never reach the
+/// writer because [`BorrowedRecordFields::keys`] only yields handler keys
+/// and chunks.
+pub(super) fn record_required(key: &str) -> bool {
+    find_handler(key)
+        .map(|handler| handler.required)
+        .unwrap_or(true)
+}
+
+/// Encodes the borrowed group for `key` through its handler row; chunk
+/// records resolve through the world map.
 pub(super) fn encode_record(
     fields: &BorrowedRecordFields<'_>,
     key: &str,
     limits: crate::SaveLimits,
 ) -> Result<Vec<u8>, SaveLoadError> {
-    match key {
-        KEY_CORE => core::encode(fields, limits),
-        KEY_PROTOTYPES => singles::encode_prototypes(fields, limits),
-        KEY_CHART => singles::encode_chart(fields, limits),
-        KEY_CHUNK_QUEUE => singles::encode_chunk_queue(fields, limits),
-        KEY_STATISTICS => statistics::encode(fields, limits),
-        KEY_ENTITIES => singles::encode_entities(fields, limits),
-        KEY_CONSTRUCTION => singles::encode_construction(fields, limits),
-        KEY_PLAYER => player::encode(fields, limits),
-        KEY_POWER => networks::encode_power(fields, limits),
-        KEY_FLUIDS => networks::encode_fluids(fields, limits),
-        KEY_HEAT => networks::encode_heat(fields, limits),
-        KEY_ROBOTS => robots::encode(fields, limits),
-        KEY_TRAINS => trains::encode(fields, limits),
-        KEY_ENVIRONMENT => environment::encode(fields, limits),
-        _ => match parse_chunk_key(key).and_then(|coord| fields.chunks.get(&coord)) {
+    match find_handler(key) {
+        Some(handler) => (handler.encode)(fields, limits),
+        None => match parse_chunk_key(key).and_then(|coord| fields.chunks.get(&coord)) {
             Some(chunk) => chunks::encode(chunk, limits),
             None => Err(record_error(format!(
                 "record codec has no payload for key {key:?}"
@@ -240,29 +400,16 @@ pub(super) fn encode_record(
     }
 }
 
-/// Measures the borrowed group for `key`, sharing the dispatch above so
+/// Measures the borrowed group for `key` through the same handler row, so
 /// sizing and encoding can never diverge.
 pub(super) fn measure_record(
     fields: &BorrowedRecordFields<'_>,
     key: &str,
     limits: crate::SaveLimits,
 ) -> Result<u64, SaveLoadError> {
-    match key {
-        KEY_CORE => core::measure(fields, limits),
-        KEY_PROTOTYPES => singles::measure_prototypes(fields, limits),
-        KEY_CHART => singles::measure_chart(fields, limits),
-        KEY_CHUNK_QUEUE => singles::measure_chunk_queue(fields, limits),
-        KEY_STATISTICS => statistics::measure(fields, limits),
-        KEY_ENTITIES => singles::measure_entities(fields, limits),
-        KEY_CONSTRUCTION => singles::measure_construction(fields, limits),
-        KEY_PLAYER => player::measure(fields, limits),
-        KEY_POWER => networks::measure_power(fields, limits),
-        KEY_FLUIDS => networks::measure_fluids(fields, limits),
-        KEY_HEAT => networks::measure_heat(fields, limits),
-        KEY_ROBOTS => robots::measure(fields, limits),
-        KEY_TRAINS => trains::measure(fields, limits),
-        KEY_ENVIRONMENT => environment::measure(fields, limits),
-        _ => match parse_chunk_key(key).and_then(|coord| fields.chunks.get(&coord)) {
+    match find_handler(key) {
+        Some(handler) => (handler.measure)(fields, limits),
+        None => match parse_chunk_key(key).and_then(|coord| fields.chunks.get(&coord)) {
             Some(chunk) => chunks::measure(chunk, limits),
             None => Err(record_error(format!(
                 "record codec has no payload for key {key:?}"
@@ -382,27 +529,14 @@ pub(super) fn decode_into_slot(
     payload: &[u8],
     limits: crate::SaveLimits,
 ) -> Result<(), SaveLoadError> {
-    let known = is_global_key(&entry.key) || parse_chunk_key(&entry.key).is_some();
+    let known = find_handler(&entry.key).is_some() || parse_chunk_key(&entry.key).is_some();
     if known {
         check_identity_codec(entry)?;
         check_record_schema(entry)?;
     }
-    match entry.key.as_str() {
-        KEY_CORE => core::decode(partial, &entry.key, payload, limits),
-        KEY_PROTOTYPES => singles::decode_prototypes(partial, &entry.key, payload, limits),
-        KEY_CHART => singles::decode_chart(partial, &entry.key, payload, limits),
-        KEY_CHUNK_QUEUE => singles::decode_chunk_queue(partial, &entry.key, payload, limits),
-        KEY_STATISTICS => statistics::decode(partial, &entry.key, payload, limits),
-        KEY_ENTITIES => singles::decode_entities(partial, &entry.key, payload, limits),
-        KEY_CONSTRUCTION => singles::decode_construction(partial, &entry.key, payload, limits),
-        KEY_PLAYER => player::decode(partial, &entry.key, payload, limits),
-        KEY_POWER => networks::decode_power(partial, &entry.key, payload, limits),
-        KEY_FLUIDS => networks::decode_fluids(partial, &entry.key, payload, limits),
-        KEY_HEAT => networks::decode_heat(partial, &entry.key, payload, limits),
-        KEY_ROBOTS => robots::decode(partial, &entry.key, payload, limits),
-        KEY_TRAINS => trains::decode(partial, &entry.key, payload, limits),
-        KEY_ENVIRONMENT => environment::decode(partial, &entry.key, payload, limits),
-        _ => chunks::decode(partial, entry, payload, limits),
+    match find_handler(&entry.key) {
+        Some(handler) => (handler.decode)(partial, &entry.key, payload, limits),
+        None => chunks::decode(partial, entry, payload, limits),
     }
 }
 
@@ -506,24 +640,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_and_dispatch_agree() {
-        // Every registry key must encode and measure from live state, and no
-        // dispatch arm may exist outside the registry.
+    fn every_handler_round_trips_through_its_decode_slot() {
+        // Dispatch is a table lookup, so no stale arm can exist outside it:
+        // this test drives every handler row through encode, measure, and
+        // decode, then requires the assembled generation to accept them all.
         let sim = Simulation::new_test_world(11);
         let fields = BorrowedRecordFields::from_simulation(&sim);
         let limits = crate::SaveLimits::default();
-        for entry in RECORD_REGISTRY {
-            let payload = encode_record(&fields, entry.key, limits)
-                .unwrap_or_else(|_| panic!("registry key {:?} must encode", entry.key));
-            let size = measure_record(&fields, entry.key, limits)
-                .unwrap_or_else(|_| panic!("registry key {:?} must measure", entry.key));
+        let mut partial = PartialSnapshot::default();
+        for handler in RECORD_HANDLERS {
+            let payload = (handler.encode)(&fields, limits)
+                .unwrap_or_else(|_| panic!("handler {:?} must encode", handler.key));
+            let size = (handler.measure)(&fields, limits)
+                .unwrap_or_else(|_| panic!("handler {:?} must measure", handler.key));
             assert_eq!(
                 size,
                 payload.len() as u64,
                 "measured and encoded sizes must agree for {:?}",
-                entry.key
+                handler.key
             );
+            let entry = ManifestEntry {
+                key: handler.key.to_string(),
+                schema_version: RECORD_SCHEMA_VERSION,
+                codec_id: RECORD_CODEC_IDENTITY,
+                required: handler.required,
+                offset: 0,
+                encoded_len: payload.len() as u64,
+                decoded_len: payload.len() as u64,
+                checksum: checksum(&payload),
+            };
+            decode_into_slot(&mut partial, &entry, &payload, limits)
+                .unwrap_or_else(|_| panic!("handler {:?} must decode", handler.key));
         }
+        let header = RecordHeader {
+            save_version: SAVE_VERSION,
+            prototype_format_version: PROTOTYPE_FORMAT_VERSION,
+            prototype_hash: 0,
+            record_format_version: RECORD_FORMAT_VERSION,
+            tick: sim.tick_count(),
+            world_seed: sim.seed(),
+            record_count: RECORD_HANDLERS.len() as u32,
+            index_len: 0,
+            index_checksum: [0; 32],
+        };
+        let snapshot = assemble_snapshot(&header, partial).expect("complete decode assembles");
+        assert_eq!(snapshot.tick, sim.tick_count());
+        assert_eq!(snapshot.world_seed, sim.seed());
         assert!(encode_record(&fields, "no-such-record", limits).is_err());
         assert!(measure_record(&fields, "no-such-record", limits).is_err());
     }

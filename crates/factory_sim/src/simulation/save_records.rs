@@ -48,11 +48,11 @@ pub(crate) use codec::{
 pub use codec::{RecordIndex, RecordSummary};
 use groups::{
     BorrowedRecordFields, PartialSnapshot, assemble_snapshot, decode_into_slot,
-    encode_group_by_key, preflight_record_sizes,
+    encode_group_by_key, preflight_record_sizes, record_required,
 };
 pub use registry::{
     MAX_RECORD_COUNT, RECORD_CODEC_IDENTITY, RECORD_FORMAT_VERSION, RECORD_HEADER_SIZE,
-    RECORD_MAGIC,
+    RECORD_MAGIC, RECORD_REGISTRY, RecordDescriptor,
 };
 pub(crate) use registry::{RECORD_SCHEMA_VERSION, record_error};
 #[cfg(test)]
@@ -131,7 +131,7 @@ pub fn save_snapshot_records_to_writer_with_limits(
                 key: keys[index].clone(),
                 schema_version: RECORD_SCHEMA_VERSION,
                 codec_id: RECORD_CODEC_IDENTITY,
-                required: true,
+                required: record_required(&keys[index]),
                 offset: 0,
                 encoded_len,
                 // Identity codec: decoded length equals encoded length.
@@ -155,7 +155,7 @@ pub fn save_snapshot_records_to_writer_with_limits(
             key: keys[index].clone(),
             schema_version: RECORD_SCHEMA_VERSION,
             codec_id: RECORD_CODEC_IDENTITY,
-            required: true,
+            required: record_required(&keys[index]),
             offset: cursor,
             encoded_len,
             decoded_len: encoded_len,
@@ -782,6 +782,36 @@ mod tests {
             assert_eq!(&chunk_key(chunk.coord), key);
         }
         assert!(extract_record_bytes(&bytes, "no-such-record").is_err());
+    }
+
+    #[test]
+    fn manifest_required_flags_follow_registry_descriptors() {
+        // The `required` flag on the wire must come from the handler table,
+        // not from a writer-side literal: every global entry carries its
+        // descriptor's flag, and every chunk entry is required.
+        let sim = record_test_sim();
+        let bytes = save_records_to_bytes(&sim).expect("record save should encode");
+        let index = inspect_record_index(&bytes).expect("index inspects");
+        assert!(!index.records.is_empty());
+        for record in &index.records {
+            if let Some(descriptor) = super::registry::RECORD_REGISTRY
+                .iter()
+                .find(|descriptor| descriptor.key == record.key)
+            {
+                assert_eq!(
+                    record.required, descriptor.required,
+                    "wire flag must follow {:?}",
+                    record.key
+                );
+            } else {
+                assert!(
+                    record.key.starts_with("chunk/"),
+                    "unexpected global record {:?}",
+                    record.key
+                );
+                assert!(record.required, "chunk records are required");
+            }
+        }
     }
 
     #[test]
