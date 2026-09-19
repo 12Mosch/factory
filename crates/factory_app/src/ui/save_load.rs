@@ -5,10 +5,11 @@ use bevy::text::{EditableText, TextCursorStyle};
 use crate::audio::SoundEvent;
 use crate::resources::SimResource;
 use crate::save_load::{
-    LoadState, PendingLoadJobs, PendingSaveConfirmation, PendingSaveJobs, SaveCatalog, SaveEntry,
-    SaveId, SaveKind, SaveLoadConfig, SaveLoadStatus, SaveLoadStatusKind, SaveLoadTab,
-    SaveLoadWindowState, delete_save_with_loads, format_world_seed, load_save,
-    local_datetime_from_unix_ms, request_named_save, request_overwrite,
+    DeferredNamedSave, LoadState, PendingCatalogScan, PendingLoadJobs, PendingSaveConfirmation,
+    PendingSaveJobs, SaveCatalog, SaveEntry, SaveId, SaveKind, SaveLoadConfig, SaveLoadStatus,
+    SaveLoadStatusKind, SaveLoadTab, SaveLoadWindowState, delete_save_with_loads,
+    format_world_seed, load_save, local_datetime_from_unix_ms, request_named_save_guarded,
+    request_overwrite,
 };
 use crate::ui::layout::scroll_column;
 use crate::ui::pause_menu::PauseMenuState;
@@ -242,6 +243,8 @@ pub(crate) fn submit_save_create_requests(
     mut requests: MessageReader<SaveCreateRequested>,
     config: Res<SaveLoadConfig>,
     catalog: Res<SaveCatalog>,
+    pending_scan: Res<PendingCatalogScan>,
+    mut deferred: ResMut<DeferredNamedSave>,
     mut pending: ResMut<PendingSaveJobs>,
     mut confirmation: ResMut<PendingSaveConfirmation>,
     mut status: ResMut<SaveLoadStatus>,
@@ -252,11 +255,50 @@ pub(crate) fn submit_save_create_requests(
     if requests.read().count() == 0 {
         return;
     }
-    request_named_save(
+    request_named_save_guarded(
         &state.name_buffer,
         &sim,
         &config,
         &catalog,
+        &pending_scan,
+        &mut deferred,
+        &mut pending,
+        &mut confirmation,
+        &mut status,
+        &mut metrics,
+    );
+}
+
+/// Submits a named-save request parked while a catalog refresh was
+/// outstanding. PostUpdate runs after the scan poll, so the re-admission
+/// uniqueness check observes the landed catalog; a still-outstanding (or
+/// renewed) scan keeps the request parked for a later frame.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn submit_deferred_named_save(
+    config: Res<SaveLoadConfig>,
+    catalog: Res<SaveCatalog>,
+    pending_scan: Res<PendingCatalogScan>,
+    mut deferred: ResMut<DeferredNamedSave>,
+    mut pending: ResMut<PendingSaveJobs>,
+    mut confirmation: ResMut<PendingSaveConfirmation>,
+    mut status: ResMut<SaveLoadStatus>,
+    sim: Res<crate::resources::SimResource>,
+    mut metrics: ResMut<crate::save_load::SaveLoadMetrics>,
+) {
+    let Some(name) = deferred.name.take() else {
+        return;
+    };
+    if !pending_scan.is_empty() {
+        deferred.name = Some(name);
+        return;
+    }
+    request_named_save_guarded(
+        &name,
+        &sim,
+        &config,
+        &catalog,
+        &pending_scan,
+        &mut deferred,
         &mut pending,
         &mut confirmation,
         &mut status,
@@ -295,6 +337,8 @@ pub(crate) fn submit_save_name_input(
     inputs: Query<(&EditableText, &EditableTextSanitizer), With<SaveNameInput>>,
     config: Res<SaveLoadConfig>,
     catalog: Res<SaveCatalog>,
+    pending_scan: Res<PendingCatalogScan>,
+    mut deferred: ResMut<DeferredNamedSave>,
     mut pending: ResMut<PendingSaveJobs>,
     mut confirmation: ResMut<PendingSaveConfirmation>,
     mut status: ResMut<SaveLoadStatus>,
@@ -323,11 +367,13 @@ pub(crate) fn submit_save_name_input(
     if !can_submit(input, sanitizer) {
         return;
     }
-    request_named_save(
+    request_named_save_guarded(
         &editor_value(input),
         &sim,
         &config,
         &catalog,
+        &pending_scan,
+        &mut deferred,
         &mut pending,
         &mut confirmation,
         &mut status,

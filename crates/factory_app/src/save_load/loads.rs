@@ -256,11 +256,23 @@ impl PendingLoadJobs {
             self.recertifying = None;
             cancelled = true;
         }
-        if let Some(running) = &self.running
-            && &running.id == id
-            && !running.handle.is_finished()
+        if self
+            .running
+            .as_ref()
+            .is_some_and(|running| &running.id == id)
         {
-            running.cancel.store(true, Ordering::Relaxed);
+            if self
+                .running
+                .as_ref()
+                .is_some_and(|running| running.handle.is_finished())
+            {
+                // Finished between frames but never collected: the result
+                // must never install. Joining a finished handle returns
+                // immediately, so retiring it here never blocks the frame.
+                self.join_running();
+            } else if let Some(running) = &self.running {
+                running.cancel.store(true, Ordering::Relaxed);
+            }
             cancelled = true;
         }
         // Rebase `latest_request` onto the newest survivor: a removed newest
@@ -302,9 +314,16 @@ impl PendingLoadJobs {
         self.ready = None;
         self.recertifying = None;
         self.latest_request = None;
-        if let Some(running) = &self.running
-            && !running.handle.is_finished()
+        if self
+            .running
+            .as_ref()
+            .is_some_and(|running| running.handle.is_finished())
         {
+            // Same finished-but-uncollected gap as `cancel`: a result that
+            // finished between frames must be retired here, or the next
+            // poll collects it toward installation.
+            self.join_running();
+        } else if let Some(running) = &self.running {
             running.cancel.store(true, Ordering::Relaxed);
         }
     }
@@ -1026,6 +1045,72 @@ mod tests {
         assert!(
             status.message.is_none(),
             "the orphaned Loading status must be released, got: {status:?}"
+        );
+    }
+
+    /// A running load whose worker already returned, parked as the frame
+    /// would observe it between the worker finishing and the next poll
+    /// collecting the result.
+    fn finished_running_load(id: &str, request_id: PersistenceRequestId) -> RunningLoad {
+        let ready = parked_ready(id, request_id);
+        let handle = thread::spawn(move || Ok::<LoadCandidate, LoadJobError>(ready.candidate));
+        // The worker returns immediately; wait bounded so a stall fails
+        // loudly instead of hanging the suite.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !handle.is_finished() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "load worker did not finish"
+            );
+            thread::yield_now();
+        }
+        RunningLoad {
+            request_id,
+            id: SaveId::new(id),
+            display_name: id.into(),
+            observed_generation: 0,
+            phase: Arc::new(AtomicU8::new(LoadJobPhase::ReadyToInstall.encode())),
+            cancel: Arc::new(AtomicBool::new(false)),
+            handle,
+        }
+    }
+
+    #[test]
+    fn cancel_finished_running_load_discards_result_before_poll() {
+        // Review edge case: the sole running load finishes between frames
+        // but is never collected. Cancelling it must retire the finished
+        // result — the next poll must have nothing to install.
+        let request_id = PersistenceRequestId::next();
+        let mut pending = PendingLoadJobs::default();
+        pending.running = Some(finished_running_load("sole", request_id));
+        pending.latest_request = Some(request_id);
+        assert!(pending.cancel(&SaveId::new("sole")));
+        assert!(pending.is_empty());
+        assert_eq!(
+            pending.latest_request(),
+            None,
+            "cancelling the finished load must retire the latest request"
+        );
+        assert!(
+            take_completed_loads(&mut pending).is_empty(),
+            "a cancelled finished result must never reach the installer"
+        );
+    }
+
+    #[test]
+    fn cancel_all_discards_finished_running_load_before_poll() {
+        // Same edge case through `cancel_all` (e.g. new-world creation
+        // racing a decode that just finished): nothing may install after.
+        let request_id = PersistenceRequestId::next();
+        let mut pending = PendingLoadJobs::default();
+        pending.running = Some(finished_running_load("sole", request_id));
+        pending.latest_request = Some(request_id);
+        pending.cancel_all();
+        assert!(pending.is_empty());
+        assert_eq!(pending.latest_request(), None);
+        assert!(
+            take_completed_loads(&mut pending).is_empty(),
+            "a result finished before cancel_all must never install"
         );
     }
 

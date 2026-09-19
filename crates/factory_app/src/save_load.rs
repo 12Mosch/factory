@@ -9,6 +9,8 @@ mod timestamp;
 mod types;
 
 pub(crate) use catalog::inspect::now_unix_ms;
+#[cfg(test)]
+pub(crate) use catalog::poll_catalog_scan;
 pub(crate) use catalog::poll_catalog_validation_jobs;
 pub use catalog::{PendingCatalogScan, refresh_catalog_blocking, scan_catalog};
 pub(crate) use catalog::{poll_catalog_scan_system, request_catalog_scan};
@@ -183,6 +185,67 @@ pub fn request_named_save(
         true,
         sim,
         pending,
+        status,
+        metrics,
+    )
+}
+
+/// A named-save request parked while a catalog refresh is outstanding.
+/// Admission validates uniqueness against the in-memory catalog, so a save
+/// admitted from a stale catalog could duplicate a display name that an
+/// external actor added mid-scan. The validated name waits here until the
+/// scan lands and is then re-validated against the fresh catalog.
+#[derive(Resource, Default)]
+pub struct DeferredNamedSave {
+    pub(crate) name: Option<String>,
+}
+
+/// Admits a named save only from a settled catalog when the name is new.
+/// While a refresh scan is outstanding the in-memory entries may predate
+/// external additions, so a request for an unknown name is parked (last one
+/// wins) with an Info status instead of being admitted; the deferred drain
+/// re-runs admission — including the uniqueness check — once the scan
+/// lands. A name already in the catalog routes to overwrite confirmation
+/// immediately: that path mints no new entry, so it cannot duplicate a
+/// display name no matter what the outstanding scan later reports. Parking
+/// and re-admission are purely in-memory: filesystem work stays on the scan
+/// worker throughout.
+#[allow(clippy::too_many_arguments)]
+pub fn request_named_save_guarded(
+    name: &str,
+    sim: &SimResource,
+    config: &SaveLoadConfig,
+    catalog: &SaveCatalog,
+    pending_scan: &PendingCatalogScan,
+    deferred: &mut DeferredNamedSave,
+    pending: &mut PendingSaveJobs,
+    confirmation: &mut PendingSaveConfirmation,
+    status: &mut SaveLoadStatus,
+    metrics: &mut SaveLoadMetrics,
+) -> bool {
+    let valid = match validate_save_name(name) {
+        Ok(valid) => valid,
+        Err(error) => {
+            set_error(status, error);
+            return false;
+        }
+    };
+    if catalog.named_case_insensitive(&valid).is_none() && !pending_scan.is_empty() {
+        deferred.name = Some(valid.clone());
+        status.message = Some(format!(
+            "Refreshing save list; {valid} will be created once it lands."
+        ));
+        status.kind = SaveLoadStatusKind::Info;
+        status.last_completed_id = None;
+        return false;
+    }
+    request_named_save(
+        name,
+        sim,
+        config,
+        catalog,
+        pending,
+        confirmation,
         status,
         metrics,
     )
@@ -1229,6 +1292,200 @@ mod tests {
         };
         clear_loading_status_if_idle(&idle, &mut status);
         assert_eq!(status.message.as_deref(), Some("Saving Base..."));
+    }
+
+    /// Outstanding-scan admission state: a refresh requested against a
+    /// missing directory, so the worker is present (the scan is
+    /// outstanding) but inert and settles on the first polls.
+    struct DeferredFixture {
+        config: SaveLoadConfig,
+        catalog: SaveCatalog,
+        pending_scan: PendingCatalogScan,
+        sim: SimResource,
+        pending: PendingSaveJobs,
+        confirmation: PendingSaveConfirmation,
+        status: SaveLoadStatus,
+        metrics: SaveLoadMetrics,
+        deferred: DeferredNamedSave,
+    }
+
+    impl DeferredFixture {
+        fn with_outstanding_scan() -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "factory-deferred-save-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let config = SaveLoadConfig {
+                root_dir: dir,
+                autosave_interval_ticks: 300,
+                autosave_slot_count: 5,
+            };
+            let catalog = SaveCatalog::default();
+            let mut pending_scan = PendingCatalogScan::default();
+            request_catalog_scan(&config, &mut pending_scan, catalog.scan_epoch);
+            assert!(
+                !pending_scan.is_empty(),
+                "the refresh scan must be outstanding"
+            );
+            Self {
+                config,
+                catalog,
+                pending_scan,
+                sim: SimResource::new(factory_sim::Simulation::new_test_world(7)),
+                pending: PendingSaveJobs::default(),
+                confirmation: PendingSaveConfirmation::default(),
+                status: SaveLoadStatus::default(),
+                metrics: SaveLoadMetrics::default(),
+                deferred: DeferredNamedSave::default(),
+            }
+        }
+
+        fn guarded(&mut self, name: &str) -> bool {
+            let Self {
+                config,
+                catalog,
+                pending_scan,
+                sim,
+                pending,
+                confirmation,
+                status,
+                metrics,
+                deferred,
+            } = self;
+            request_named_save_guarded(
+                name,
+                sim,
+                config,
+                catalog,
+                pending_scan,
+                deferred,
+                pending,
+                confirmation,
+                status,
+                metrics,
+            )
+        }
+
+        fn settle_scan(&mut self) {
+            let Self {
+                config,
+                catalog,
+                pending_scan,
+                status,
+                ..
+            } = self;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !pending_scan.is_empty() {
+                poll_catalog_scan(config, pending_scan, catalog, status);
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "catalog scan did not settle"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+    }
+
+    fn named_entry(display_name: &str) -> SaveEntry {
+        let id = SaveId::new(format!("external-{display_name}"));
+        SaveEntry {
+            id: id.clone(),
+            metadata: SaveMetadata {
+                schema_version: 1,
+                id,
+                display_name: display_name.into(),
+                kind: SaveKind::Named,
+                completed_at_unix_ms: 0,
+                application_version: "test".into(),
+                world_seed: None,
+            },
+            compatibility: SaveCompatibility::Compatible,
+            metadata_available: true,
+            path: PathBuf::from(format!("external-{display_name}.factsim")),
+            inspected: None,
+        }
+    }
+
+    #[test]
+    fn named_save_parks_while_catalog_refresh_outstanding() {
+        // Admission during a refresh must park instead of validating
+        // uniqueness against the stale catalog; once the scan lands, the
+        // parked request is admitted.
+        let mut fixture = DeferredFixture::with_outstanding_scan();
+        assert!(
+            !fixture.guarded("Base"),
+            "admission from a stale catalog must park instead of queueing"
+        );
+        assert_eq!(fixture.deferred.name.as_deref(), Some("Base"));
+        assert_eq!(fixture.pending.queued_len(), 0);
+        assert_eq!(fixture.status.kind, SaveLoadStatusKind::Info);
+        fixture.settle_scan();
+        let name = fixture.deferred.name.take().expect("parked request");
+        assert!(fixture.guarded(&name));
+        assert!(fixture.deferred.name.is_none());
+        // Admission starts the worker immediately when idle, so the
+        // request lives in running rather than the queue.
+        assert!(
+            !fixture.pending.is_empty(),
+            "the settled request must be admitted"
+        );
+        assert_eq!(
+            fixture.status.message.as_deref(),
+            Some("Saving Base..."),
+            "admission must report the requested save"
+        );
+    }
+
+    #[test]
+    fn known_name_routes_to_overwrite_despite_outstanding_scan() {
+        // No duplicate can arise when the name is already listed: the
+        // request routes to overwrite confirmation immediately instead of
+        // parking, no matter what the outstanding scan later reports.
+        let mut fixture = DeferredFixture::with_outstanding_scan();
+        fixture.catalog.entries.push(named_entry("Base"));
+        assert!(!fixture.guarded("base"));
+        assert!(
+            fixture.deferred.name.is_none(),
+            "an overwrite routing must not park"
+        );
+        assert_eq!(fixture.pending.queued_len(), 0);
+        assert!(
+            matches!(fixture.confirmation, PendingSaveConfirmation::Overwrite(_)),
+            "a listed name must ask for overwrite instead, got: {:?}",
+            fixture.confirmation
+        );
+    }
+
+    #[test]
+    fn deferred_named_save_rechecks_uniqueness_after_scan_lands() {
+        // Review scenario: the user creates "Base" while a refresh is
+        // outstanding, and an external actor adds a valid "Base" before it
+        // lands. Draining must re-run the uniqueness check against the
+        // landed catalog and ask for overwrite instead of duplicating the
+        // display name.
+        let mut fixture = DeferredFixture::with_outstanding_scan();
+        assert!(!fixture.guarded("Base"));
+        assert_eq!(fixture.deferred.name.as_deref(), Some("Base"));
+        fixture.settle_scan();
+        // The external "Base" arrives with the landed refresh.
+        fixture.catalog.entries.push(named_entry("Base"));
+        let name = fixture.deferred.name.take().expect("parked request");
+        assert!(!fixture.guarded(&name));
+        assert!(
+            fixture.deferred.name.is_none(),
+            "a resolved request must not stay parked"
+        );
+        assert_eq!(
+            fixture.pending.queued_len(),
+            0,
+            "the duplicate display name must not be admitted"
+        );
+        assert!(
+            matches!(fixture.confirmation, PendingSaveConfirmation::Overwrite(_)),
+            "the landed duplicate must ask for overwrite instead, got: {:?}",
+            fixture.confirmation
+        );
     }
 
     #[test]
