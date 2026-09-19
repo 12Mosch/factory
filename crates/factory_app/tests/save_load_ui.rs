@@ -1571,6 +1571,13 @@ fn newest_queued_load_wins() {
     create_named_save(&mut app, "First Load Wins Target");
     drain_persistence_jobs(&mut app);
     let first_tick = sim_tick_and_hash(&app).0;
+    // The second target stays tiny: only the first decode must span frames.
+    // Swap in a fresh world so the second save, load, and validation stay
+    // cheap while its tick still differs from the first target's.
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .replace(factory_sim::Simulation::new_test_world(9))
+        .expect("fresh world should install");
     // Frozen test time never advances fixed ticks; lift the clock explicitly.
     app.world_mut()
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(

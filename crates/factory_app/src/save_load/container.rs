@@ -82,6 +82,9 @@ pub enum ContainerError {
     Truncated,
     InvalidContainerMagic,
     Simulation(SaveLoadError),
+    /// The request was cancelled before the commit point. Nothing was
+    /// installed; temporary artifacts are removed by the writer.
+    Cancelled,
 }
 
 impl std::fmt::Display for ContainerError {
@@ -101,6 +104,7 @@ impl std::fmt::Display for ContainerError {
             Self::Truncated => write!(formatter, "save container is truncated"),
             Self::InvalidContainerMagic => write!(formatter, "invalid save container magic"),
             Self::Simulation(error) => write!(formatter, "simulation codec failed: {error:?}"),
+            Self::Cancelled => write!(formatter, "save cancelled before commit"),
         }
     }
 }
@@ -460,9 +464,10 @@ pub(crate) fn write_save_snapshot(
     metadata: &SaveMetadata,
     snapshot: &SimulationSaveSnapshot,
     shutdown: &AtomicBool,
+    cancel: &AtomicBool,
 ) -> Option<Result<StreamWriteMetrics, ContainerError>> {
     with_save_artifact_lock_shutdown_aware(shutdown, || {
-        write_save_snapshot_locked(path, metadata, snapshot, SaveLimits::default())
+        write_save_snapshot_locked(path, metadata, snapshot, SaveLimits::default(), cancel)
     })
 }
 
@@ -471,6 +476,7 @@ fn write_save_snapshot_locked(
     metadata: &SaveMetadata,
     snapshot: &SimulationSaveSnapshot,
     limits: SaveLimits,
+    cancel: &AtomicBool,
 ) -> Result<StreamWriteMetrics, ContainerError> {
     let metadata_text = ron::ser::to_string(metadata)
         .map_err(|error| ContainerError::MetadataEncoding(error.to_string()))?;
@@ -493,24 +499,28 @@ fn write_save_snapshot_locked(
         ..limits
     };
 
-    write_temporary_and_commit(path, |writer| {
-        writer.write_all(&CONTAINER_MAGIC)?;
-        writer.write_all(&CONTAINER_VERSION.to_le_bytes())?;
-        writer.write_all(&metadata_len.to_le_bytes())?;
-        writer.write_all(metadata_bytes)?;
-        let encode_start = Instant::now();
-        let simulation_bytes = {
-            let mut payload = LimitedWriter::new(writer, payload_maximum);
-            save_snapshot_records_to_writer_with_limits(snapshot, &mut payload, record_limits)
-                .map_err(map_simulation_error)?;
-            payload.written
-        };
-        Ok(StreamWriteMetrics {
-            total_bytes: overhead as usize + simulation_bytes,
-            simulation_bytes,
-            encode_ms: encode_start.elapsed().as_secs_f64() * 1000.0,
-        })
-    })
+    write_temporary_and_commit(
+        path,
+        |writer| {
+            writer.write_all(&CONTAINER_MAGIC)?;
+            writer.write_all(&CONTAINER_VERSION.to_le_bytes())?;
+            writer.write_all(&metadata_len.to_le_bytes())?;
+            writer.write_all(metadata_bytes)?;
+            let encode_start = Instant::now();
+            let simulation_bytes = {
+                let mut payload = LimitedWriter::new(writer, payload_maximum);
+                save_snapshot_records_to_writer_with_limits(snapshot, &mut payload, record_limits)
+                    .map_err(map_simulation_error)?;
+                payload.written
+            };
+            Ok(StreamWriteMetrics {
+                total_bytes: overhead as usize + simulation_bytes,
+                simulation_bytes,
+                encode_ms: encode_start.elapsed().as_secs_f64() * 1000.0,
+            })
+        },
+        cancel,
+    )
 }
 
 /// Implements save installation while the process-wide artifact lock is held.
@@ -519,29 +529,37 @@ fn write_save_bytes_locked(
     bytes: &[u8],
     limits: SaveLimits,
 ) -> Result<(), ContainerError> {
-    write_temporary_and_commit(path, |temp| {
-        check_size(bytes.len() as u64, limits.max_encoded_bytes)?;
-        if bytes.starts_with(&CONTAINER_MAGIC) {
-            let offset = container_payload_offset_with_limits(bytes, limits)?;
-            check_size(
-                (bytes.len() - offset) as u64,
-                simulation_payload_allowance(
-                    bytes.get(offset..).unwrap_or(&[]),
-                    offset as u64,
-                    limits,
-                ),
-            )?;
-        } else {
-            check_size(bytes.len() as u64, limits.max_simulation_bytes())?;
-        }
-        temp.write_all(bytes)?;
-        Ok(())
-    })
+    // The synchronous UI path is never cancelled; the worker path threads
+    // its request flag through `write_save_snapshot_locked` instead.
+    let cancel = AtomicBool::new(false);
+    write_temporary_and_commit(
+        path,
+        |temp| {
+            check_size(bytes.len() as u64, limits.max_encoded_bytes)?;
+            if bytes.starts_with(&CONTAINER_MAGIC) {
+                let offset = container_payload_offset_with_limits(bytes, limits)?;
+                check_size(
+                    (bytes.len() - offset) as u64,
+                    simulation_payload_allowance(
+                        bytes.get(offset..).unwrap_or(&[]),
+                        offset as u64,
+                        limits,
+                    ),
+                )?;
+            } else {
+                check_size(bytes.len() as u64, limits.max_simulation_bytes())?;
+            }
+            temp.write_all(bytes)?;
+            Ok(())
+        },
+        &cancel,
+    )
 }
 
 fn write_temporary_and_commit<T>(
     path: &Path,
     encode: impl FnOnce(&mut BufWriter<fs::File>) -> Result<T, ContainerError>,
+    cancel: &AtomicBool,
 ) -> Result<T, ContainerError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -567,6 +585,14 @@ fn write_temporary_and_commit<T>(
         drop(temp);
         sync_parent_directory(path)?;
 
+        // The commit point: a cancel racing the encode is still honored
+        // here, before the rename makes the replacement visible. The
+        // error path below removes the temporary artifact, so a
+        // cancelled request leaves the previous save intact. Once the
+        // rename begins the operation counts as committed.
+        if cancel.load(Ordering::Relaxed) {
+            return Err(ContainerError::Cancelled);
+        }
         let replaced = commit_temporary_file(path, &temp_path, &backup_path)?;
         installed = true;
         // Installation has committed. A durability-barrier failure must not be
@@ -1178,9 +1204,15 @@ mod tests {
         ));
         let path = root.join("manual-stream.factsim");
         let metadata = metadata("Streamed");
-        let metrics = write_save_snapshot(&path, &metadata, &snapshot, &AtomicBool::new(false))
-            .unwrap()
-            .unwrap();
+        let metrics = write_save_snapshot(
+            &path,
+            &metadata,
+            &snapshot,
+            &AtomicBool::new(false),
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(metrics.simulation_bytes, expected_payload.len());
         let bytes = fs::read(&path).unwrap();
         let (decoded_metadata, payload) = decode_container(&bytes).unwrap();
@@ -1211,6 +1243,7 @@ mod tests {
             &path,
             &metadata("Copied"),
             &snapshot,
+            &AtomicBool::new(false),
             &AtomicBool::new(false),
         )
         .unwrap()
@@ -1309,6 +1342,7 @@ mod tests {
             &metadata("Framing"),
             &snapshot,
             &AtomicBool::new(false),
+            &AtomicBool::new(false),
         )
         .unwrap()
         .unwrap();
@@ -1320,7 +1354,9 @@ mod tests {
             ..SaveLimits::default()
         };
         let bounded = root.join("bounded.factsim");
-        write_save_snapshot_locked(&bounded, &metadata("Framing"), &snapshot, exact).unwrap();
+        let cancel = AtomicBool::new(false);
+        write_save_snapshot_locked(&bounded, &metadata("Framing"), &snapshot, exact, &cancel)
+            .unwrap();
         assert_eq!(fs::read(&bounded).unwrap().len() as u64, total);
         let short = SaveLimits {
             max_encoded_bytes: total - 1,
@@ -1331,7 +1367,8 @@ mod tests {
                 &root.join("short.factsim"),
                 &metadata("Framing"),
                 &snapshot,
-                short
+                short,
+                &cancel
             )
             .is_err()
         );
@@ -1408,15 +1445,58 @@ mod tests {
         let path = root.join("manual-test.factsim");
         write_save_bytes(&path, b"previous valid save").unwrap();
 
-        let result: Result<(), ContainerError> = write_temporary_and_commit(&path, |writer| {
-            writer.write_all(b"partial replacement")?;
-            Err(ContainerError::Io(io::Error::other(
-                "injected encoder failure",
-            )))
-        });
+        let cancel = AtomicBool::new(false);
+        let result: Result<(), ContainerError> = write_temporary_and_commit(
+            &path,
+            |writer| {
+                writer.write_all(b"partial replacement")?;
+                Err(ContainerError::Io(io::Error::other(
+                    "injected encoder failure",
+                )))
+            },
+            &cancel,
+        );
         assert!(matches!(result, Err(ContainerError::Io(_))));
         assert_eq!(fs::read(&path).unwrap(), b"previous valid save");
         assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancelled_stream_never_replaces_the_previous_save() {
+        let mut simulation = Simulation::new_test_world(78);
+        for _ in 0..12 {
+            simulation.tick();
+        }
+        let snapshot = try_capture_save_snapshot(&simulation, 3).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "factory-container-cancelled-stream-{}-{}",
+            std::process::id(),
+            SAVE_ARTIFACT_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let path = root.join("manual-test.factsim");
+        let idle = AtomicBool::new(false);
+        write_save_snapshot(&path, &metadata("Original"), &snapshot, &idle, &idle)
+            .unwrap()
+            .unwrap();
+        let previous = fs::read(&path).unwrap();
+        // A cancel racing the encode is still honored at the commit point:
+        // the flag is already set here, which exercises the same check a
+        // mid-encode cancel hits before the rename.
+        let cancel = AtomicBool::new(true);
+        let result =
+            write_save_snapshot(&path, &metadata("Replacement"), &snapshot, &idle, &cancel);
+        assert!(matches!(result, Some(Err(ContainerError::Cancelled))));
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            previous,
+            "a cancelled save must leave the previous save intact"
+        );
+        assert_eq!(
+            fs::read_dir(&root).unwrap().count(),
+            1,
+            "a cancelled save must remove its temporary artifact"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

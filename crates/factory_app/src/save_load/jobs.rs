@@ -1,5 +1,5 @@
 use super::catalog::now_unix_ms;
-use super::container::{METADATA_SCHEMA_VERSION, write_save_snapshot};
+use super::container::{ContainerError, METADATA_SCHEMA_VERSION, write_save_snapshot};
 use super::lifecycle::{
     MAX_QUEUED_SAVES, MAX_RETAINED_SAVE_GENERATIONS, MAX_SAVE_WORKERS, PersistenceRequestId,
     SaveJobError, SaveJobPhase,
@@ -166,8 +166,10 @@ impl PendingSaveJobs {
 
     /// Cancels queued saves with `id` and signals the running save when it
     /// matches. Queued cancellations never touch disk and are never reported
-    /// as committed. A running save checks the flag before commit; once the
-    /// commit point is reached the job runs to completion.
+    /// as committed. A running save honors the flag at the commit point —
+    /// the rename inside the writer — so a cancel racing the encode still
+    /// prevents installation; once the rename begins the job runs to
+    /// completion.
     pub fn cancel(&mut self, id: &SaveId) -> bool {
         let mut cancelled = false;
         let before = self.queue.len();
@@ -447,9 +449,10 @@ fn run_save_worker(
         world_seed: Some(snapshot_seed),
     };
     phase.store(SaveJobPhase::Encoding.encode(), Ordering::Relaxed);
-    // Cancellation is safe only before commit. Once the writer starts, the
-    // job runs to its commit point; post-commit cleanup failures never roll
-    // back a committed save (see `container`).
+    // A pre-write cancellation avoids starting the writer; a cancel racing
+    // the encode is still honored at the rename inside it. Once the rename
+    // begins the job runs to completion, and post-commit cleanup failures
+    // never roll back a committed save (see `container`).
     if cancel.load(Ordering::Relaxed) {
         return Err(SaveJobError::Cancelled);
     }
@@ -460,10 +463,16 @@ fn run_save_worker(
     // unconditional wait would stall shutdown indirectly through the
     // detached holder. Abandoning the wait reports cancellation; nothing
     // has committed yet.
-    let Some(write) = write_save_snapshot(&worker_path, &metadata, &snapshot, &shutdown) else {
+    let Some(write) = write_save_snapshot(&worker_path, &metadata, &snapshot, &shutdown, &cancel)
+    else {
         return Err(SaveJobError::Cancelled);
     };
-    let stream = write.map_err(|error| SaveJobError::Io(error.to_string()))?;
+    // A cancel racing the encode is honored at the commit point inside
+    // the writer and surfaces here instead of reporting success.
+    let stream = write.map_err(|error| match error {
+        ContainerError::Cancelled => SaveJobError::Cancelled,
+        error => SaveJobError::Io(error.to_string()),
+    })?;
     phase.store(SaveJobPhase::Committing.encode(), Ordering::Relaxed);
     let stream_ms = write_start.elapsed().as_secs_f64() * 1000.0;
     // The captured world remains alive only until the streaming encoder is
@@ -743,5 +752,69 @@ mod tests {
             observed.load(Ordering::Relaxed),
             "running worker was not released by the shutdown signal"
         );
+    }
+
+    #[test]
+    fn mid_encode_cancel_reports_cancelled_without_committing() {
+        // Large world so the encode spans many frames; cancel lands
+        // mid-encode, long before the commit.
+        let mut sim = SimResource::new(factory_sim::Simulation::new_test_world(7));
+        {
+            let mut guard = sim.write_for_tests();
+            for y in -20..20 {
+                for x in -20..20 {
+                    guard.ensure_chunk_generated(factory_sim::ChunkCoord { x, y });
+                }
+            }
+        }
+        let source = sim.snapshot_source();
+        let requested = source.generation.load(Ordering::Acquire);
+        let phase = Arc::new(AtomicU8::new(SaveJobPhase::Queued.encode()));
+        let worker_phase = Arc::clone(&phase);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
+        let root =
+            std::env::temp_dir().join(format!("factory-mid-encode-cancel-{}", std::process::id()));
+        let worker_path = root.join("probe.factsim");
+        let committed_path = worker_path.clone();
+        let handle = thread::spawn(move || {
+            run_save_worker(
+                PersistenceRequestId::next(),
+                requested,
+                SaveId::new("probe"),
+                SaveKind::Quicksave,
+                "Probe".into(),
+                worker_path,
+                source,
+                worker_phase,
+                worker_cancel,
+                Arc::new(AtomicBool::new(false)),
+            )
+        });
+        // Wait until the worker is encoding/writing, then cancel: the
+        // request is provably still in flight, before any commit.
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while SaveJobPhase::decode(phase.load(Ordering::Relaxed)) != SaveJobPhase::Writing
+            && !handle.is_finished()
+        {
+            assert!(Instant::now() < deadline, "worker never reached the encode");
+            thread::yield_now();
+        }
+        assert_eq!(
+            SaveJobPhase::decode(phase.load(Ordering::Relaxed)),
+            SaveJobPhase::Writing,
+            "worker finished before the cancel could land mid-encode"
+        );
+        cancel.store(true, Ordering::Relaxed);
+        let result = handle.join().expect("save worker panicked");
+        assert!(
+            matches!(result, Err(SaveJobError::Cancelled)),
+            "mid-encode cancel still committed: {result:?}"
+        );
+        assert!(
+            !committed_path.exists(),
+            "a cancelled save must not install its target"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

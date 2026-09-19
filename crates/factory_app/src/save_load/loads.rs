@@ -379,6 +379,10 @@ fn run_load_worker(
         ContainerError::InvalidContainerMagic => {
             LoadJobError::Corrupt("file is not a Factory save".into())
         }
+        // The load path never threads a cancellation flag, so this is
+        // unreachable; map it to silent cancellation rather than
+        // corruption if that ever changes.
+        ContainerError::Cancelled => LoadJobError::Cancelled,
     })?;
     if cancel.load(Ordering::Relaxed) {
         return Err(LoadJobError::Cancelled);
