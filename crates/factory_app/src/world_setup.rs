@@ -7,7 +7,7 @@ use factory_sim::{EnemyDifficultyPreset, Simulation, SimulationConfig};
 use crate::save_load::{
     LoadState, PendingLoadJobs, PendingSaveConfirmation, PendingSaveJobs, SaveCatalog, SaveId,
     SaveKind, SaveLoadConfig, SaveLoadStatus, delete_save_with_loads, enter_swapped_world,
-    load_save, refresh_catalog,
+    load_save, refresh_catalog_blocking,
 };
 use crate::ui::layout::scroll_column;
 use crate::ui::save_load::format_timestamp;
@@ -96,7 +96,10 @@ pub fn build_world_setup_ui(
     mut list_state: ResMut<WorldSetupSaveListState>,
     setup: Res<WorldSetupState>,
 ) {
-    if let Err(error) = refresh_catalog(&saves, &mut catalog) {
+    // One-time screen build: scan synchronously so the save list is settled
+    // before the first frame. Frame-driven refreshes go through the
+    // background scan worker instead.
+    if let Err(error) = refresh_catalog_blocking(&saves, &mut catalog) {
         status.message = Some(format!("Cannot refresh save catalog: {error}"));
     }
     list_state.revision = catalog.revision;

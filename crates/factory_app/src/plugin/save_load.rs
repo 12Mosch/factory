@@ -2,11 +2,11 @@ use bevy::prelude::*;
 
 use super::{AppSet, InGameSet};
 use crate::save_load::{
-    AutosaveState, PendingLoadJobs, PendingSaveConfirmation, PendingSaveJobs,
+    AutosaveState, PendingCatalogScan, PendingLoadJobs, PendingSaveConfirmation, PendingSaveJobs,
     PresentationReloadToken, SaveCatalog, SaveLoadConfig, SaveLoadMetrics, SaveLoadStatus,
     SaveLoadWindowState, handle_save_load_shortcuts, initialize_save_state,
-    poll_catalog_validation_jobs, poll_load_jobs, poll_save_jobs, refresh_catalog_on_manager_open,
-    run_autosave,
+    poll_catalog_scan_system, poll_catalog_validation_jobs, poll_load_jobs, poll_save_jobs,
+    refresh_catalog_on_manager_open, run_autosave,
 };
 use crate::ui::save_load::{
     SaveCreateRequested, handle_copy_world_seed_button, handle_save_load_buttons,
@@ -28,6 +28,7 @@ impl Plugin for SaveLoadPlugin {
             .init_resource::<SaveLoadMetrics>()
             .init_resource::<PendingSaveJobs>()
             .init_resource::<PendingLoadJobs>()
+            .init_resource::<PendingCatalogScan>()
             .init_resource::<AutosaveState>()
             .init_resource::<PresentationReloadToken>()
             .add_message::<SaveCreateRequested>()
@@ -41,6 +42,7 @@ impl Plugin for SaveLoadPlugin {
                     // shared presentation reset, before map texture/render.
                     poll_save_jobs,
                     poll_load_jobs,
+                    poll_catalog_scan_system,
                     poll_catalog_validation_jobs,
                     handle_save_load_shortcuts.in_set(InGameSet),
                     sync_save_name_from_state.in_set(InGameSet),

@@ -8,11 +8,13 @@ mod timestamp;
 mod types;
 
 pub(crate) use catalog::poll_catalog_validation_jobs;
-pub use catalog::{refresh_catalog, refresh_catalog_blocking, scan_catalog};
+pub use catalog::{PendingCatalogScan, refresh_catalog_blocking, scan_catalog};
+pub(crate) use catalog::{poll_catalog_scan_system, request_catalog_scan};
 pub(crate) use container::write_save_bytes;
 pub use container::{
     BACKUP_ARTIFACT_MARKER, CONTAINER_MAGIC, CONTAINER_VERSION, MAX_METADATA_BYTES,
     METADATA_SCHEMA_VERSION, TEMP_ARTIFACT_MARKER, decode_container, encode_container,
+    hold_save_artifact_lock_for_tests,
 };
 pub use jobs::PendingSaveJobs;
 pub use lifecycle::{
@@ -111,11 +113,12 @@ pub(crate) fn initialize_save_state(
 pub(crate) fn refresh_catalog_on_manager_open(
     mut window: ResMut<SaveLoadWindowState>,
     config: Res<SaveLoadConfig>,
-    mut catalog: ResMut<SaveCatalog>,
-    mut status: ResMut<SaveLoadStatus>,
+    mut pending_scan: ResMut<PendingCatalogScan>,
 ) {
     if window.open && window.refresh_on_open {
-        refresh_with_status(&config, &mut catalog, &mut status);
+        // The previously listed entries stay visible until the background
+        // scan lands; no filesystem work happens on this frame.
+        request_catalog_scan(&config, &mut pending_scan);
         window.refresh_on_open = false;
     }
 }
@@ -265,7 +268,6 @@ pub fn delete_save_with_loads(
 ) -> bool {
     let Some(entry) = catalog.get(id).cloned() else {
         set_error(status, "Cannot delete: save is no longer in the catalog.");
-        refresh_with_status(config, catalog, status);
         return false;
     };
     if pending.is_id_pending(id) {
@@ -283,7 +285,6 @@ pub fn delete_save_with_loads(
     }
     if !entry.path.is_file() {
         set_error(status, "Cannot delete: save file is missing.");
-        refresh_with_status(config, catalog, status);
         return false;
     }
     if let Err(error) = container::remove_save_and_artifacts(&entry.path) {
@@ -293,10 +294,13 @@ pub fn delete_save_with_loads(
         );
         return false;
     }
+    // Drop the entry in-memory for immediate list consistency, including
+    // validation cache pruning. No scan is needed: the artifacts are gone
+    // and the remaining entries are untouched.
+    catalog.remove(id);
     status.message = Some(format!("{} deleted.", entry.metadata.display_name));
     status.kind = SaveLoadStatusKind::Success;
     status.last_completed_id = Some(id.clone());
-    refresh_with_status(config, catalog, status);
     true
 }
 
@@ -331,19 +335,21 @@ pub(crate) fn handle_save_load_shortcuts(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn poll_save_jobs(
     config: Res<SaveLoadConfig>,
     mut catalog: ResMut<SaveCatalog>,
     mut pending: ResMut<PendingSaveJobs>,
+    mut pending_scan: ResMut<PendingCatalogScan>,
     mut status: ResMut<SaveLoadStatus>,
     mut metrics: ResMut<SaveLoadMetrics>,
 ) {
     for job in jobs::take_completed(&mut pending) {
         match job.result {
             Ok(outcome) => {
-                // Results carry request and world-generation ids: a retagged
-                // capture (requested != snapshot after a queued world install)
-                // still commits its single-tick snapshot consistently.
+                // Results carry request and world-generation ids: the worker
+                // enforces them, so a committed snapshot always belongs to
+                // the requested world and tick.
                 debug_assert_eq!(outcome.request_id, job.request_id);
                 let _ = outcome.requested_generation;
                 catalog.invalidate_validation(&job.id);
@@ -363,7 +369,9 @@ pub(crate) fn poll_save_jobs(
                     status.kind = SaveLoadStatusKind::Success;
                     status.last_completed_id = Some(job.id);
                 }
-                refresh_with_status(&config, &mut catalog, &mut status);
+                // The new file lands in the list via a background scan;
+                // validation for it is re-queued on install.
+                request_catalog_scan(&config, &mut pending_scan);
             }
             Err(SaveJobError::Cancelled) => {
                 // A pre-commit cancellation is never reported as committed.
@@ -538,7 +546,14 @@ pub(crate) fn poll_load_jobs(
     mut state: LoadState,
 ) {
     if let Some(ready) = pending.take_ready_for_install() {
-        if install_ready_load(&mut pending, &mut status, &catalog, &mut state, ready) {
+        // A newer request accepted while this candidate waited supersedes it:
+        // installing now would put an obsolete world over the requested one.
+        if pending
+            .latest_request()
+            .is_some_and(|latest| ready.request_id != latest)
+        {
+            // Superseded; drop without touching the world or reporting.
+        } else if install_ready_load(&mut pending, &mut status, &catalog, &mut state, ready) {
             // Installed or terminally resolved; continue to completions.
         } else {
             // Busy: candidate retained inside `pending`; try again next frame.
@@ -621,11 +636,13 @@ fn install_ready_load(
     state: &mut LoadState,
     ready: loads::ReadyLoad,
 ) -> bool {
-    // The catalog may have changed while decoding; a removed or newly
-    // incompatible save must not install.
-    if let Some(entry) = catalog.get(&ready.id)
-        && !entry.compatibility.can_load()
-    {
+    // The catalog may have changed while decoding. A removed entry is a
+    // terminal rejection: a save that is no longer listed must not install.
+    let Some(entry) = catalog.get(&ready.id) else {
+        set_error(status, "Cannot load: save is no longer in the catalog.");
+        return true;
+    };
+    if !entry.compatibility.can_load() {
         set_error(
             status,
             entry
@@ -640,30 +657,18 @@ fn install_ready_load(
         display_name,
         request_id,
         candidate,
-        ..
     } = ready;
-    // Probe before moving the candidate: `replace` consumes the simulation
-    // even on `Busy`, so retain first and retry next frame instead.
-    if state.sim.is_initialized() && !state.sim.is_write_available() {
-        // A save worker holds the read lock for capture. Retain the
-        // validated candidate and retry next frame; commands stay queued.
-        pending.retain_ready(loads::ReadyLoad {
-            id,
-            display_name,
-            request_id,
-            candidate,
-        });
-        if status.kind != SaveLoadStatusKind::Error {
-            status.message = Some("Loading... waiting for the save to release the world.".into());
-            status.kind = SaveLoadStatusKind::Info;
-        }
-        return false;
-    }
-    match state.sim.replace(candidate.simulation) {
+    // Copy scalar identity before the candidate moves into installation.
+    let candidate_observed = candidate.observed_generation;
+    let candidate_tick = candidate.tick;
+    let candidate_player = candidate.player_tile;
+    // One atomic step: `install` swaps the world and publishes the new
+    // generation under a single write guard, and returns the candidate on
+    // contention so a busy simulation retains it for retry instead of
+    // dropping a validated world.
+    match state.sim.install(candidate.simulation) {
         Ok(()) => {
-            let tick = candidate.tick;
-            let player_tile = candidate.player_tile;
-            enter_swapped_world(state, tick, player_tile);
+            enter_swapped_world(state, candidate_tick, candidate_player);
             pending.note_installed(request_id);
             // An older install must not make a queued newer load look stale.
             let current = state.sim.replacement_revision();
@@ -673,20 +678,34 @@ fn install_ready_load(
             status.last_completed_id = Some(id);
             true
         }
-        Err(SimAccessError::Busy) => {
-            // Narrow race between the probe and `replace`: the candidate was
-            // consumed, so report retryably instead of retaining a duplicate.
-            if status.kind != SaveLoadStatusKind::Error {
-                status.message =
-                    Some("Loading... waiting for the save to release the world.".into());
-                status.kind = SaveLoadStatusKind::Info;
+        Err(conflict) => match conflict.cause {
+            SimAccessError::Busy => {
+                // A save worker holds the read lock for capture. Retain the
+                // validated candidate and retry next frame; commands stay queued.
+                pending.retain_ready(loads::ReadyLoad {
+                    id,
+                    display_name,
+                    request_id,
+                    candidate: loads::LoadCandidate {
+                        request_id,
+                        observed_generation: candidate_observed,
+                        simulation: *conflict.simulation,
+                        tick: candidate_tick,
+                        player_tile: candidate_player,
+                    },
+                });
+                if status.kind != SaveLoadStatusKind::Error {
+                    status.message =
+                        Some("Loading... waiting for the save to release the world.".into());
+                    status.kind = SaveLoadStatusKind::Info;
+                }
+                false
             }
-            true
-        }
-        Err(SimAccessError::Poisoned) => {
-            set_error(status, "Cannot load: simulation access failed.");
-            true
-        }
+            SimAccessError::Poisoned => {
+                set_error(status, "Cannot load: simulation access failed.");
+                true
+            }
+        },
     }
 }
 
@@ -781,16 +800,6 @@ fn expected_path(config: &SaveLoadConfig, entry: &SaveEntry) -> PathBuf {
             .root_dir
             .join(format!("{}.factsim", entry.id.as_str())),
         _ => jobs::system_path(config, &entry.metadata.kind),
-    }
-}
-
-fn refresh_with_status(
-    config: &SaveLoadConfig,
-    catalog: &mut SaveCatalog,
-    status: &mut SaveLoadStatus,
-) {
-    if let Err(error) = refresh_catalog(config, catalog) {
-        set_error(status, format!("Cannot refresh save catalog: {error}"));
     }
 }
 

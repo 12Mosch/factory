@@ -262,6 +262,9 @@ impl Drop for PendingLoadJobs {
 }
 
 /// Enqueues an asynchronous load. Returns the request id when accepted.
+/// Newest wins: an accepted request supersedes older queued loads and any
+/// retained older candidate, so obsolete loads never consume decode work or
+/// install over the requested world.
 pub(crate) fn queue_load(
     id: SaveId,
     display_name: String,
@@ -270,10 +273,15 @@ pub(crate) fn queue_load(
     pending: &mut PendingLoadJobs,
 ) -> PersistenceRequestId {
     let request_id = PersistenceRequestId::next();
-    // Newer requests supersede older queued loads: keep only the newest
-    // queued entries within the documented bound.
-    while pending.queue.len() >= MAX_QUEUED_LOADS {
-        pending.queue.pop_front();
+    // Request ids are monotonic, so every queued entry is older than the new
+    // request and is superseded immediately.
+    pending.queue.clear();
+    if pending
+        .ready
+        .as_ref()
+        .is_some_and(|ready| ready.request_id < request_id)
+    {
+        pending.ready = None;
     }
     pending.queue.push_back(QueuedLoad {
         request_id,
@@ -282,6 +290,10 @@ pub(crate) fn queue_load(
         path,
         observed_generation,
     });
+    debug_assert!(
+        pending.queue.len() <= MAX_QUEUED_LOADS,
+        "queued loads must stay within the documented bound"
+    );
     pending.latest_request = Some(request_id);
     pending.start_next();
     request_id
@@ -329,10 +341,9 @@ fn run_load_worker(
     if cancel.load(Ordering::Relaxed) {
         return Err(LoadJobError::Cancelled);
     }
-    phase.store(LoadJobPhase::Validating.encode(), Ordering::Relaxed);
-    simulation.validate_state().map_err(|error| {
-        LoadJobError::Corrupt(format!("saved state failed validation: {error:?}"))
-    })?;
+    // No second validation here: both decode paths
+    // (`load_from_reader_with_limits` and the record loader) already run
+    // `validate_state` before returning, with identical corruption mapping.
     if cancel.load(Ordering::Relaxed) {
         return Err(LoadJobError::Cancelled);
     }
@@ -387,7 +398,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn newer_queued_load_stays_within_documented_bounds() {
+    fn newer_queued_load_supersedes_older_ones() {
         let mut pending = PendingLoadJobs::default();
         // Occupy the worker with a running job so enqueues stay queued.
         let (started_tx, started_rx) = std::sync::mpsc::sync_channel(0);
@@ -416,9 +427,20 @@ mod tests {
                 &mut pending,
             );
         }
-        assert!(
-            pending.queued_len() <= MAX_QUEUED_LOADS,
-            "queued loads must stay within the documented bound"
+        // Newest wins: at most one queued load survives, and it is the
+        // newest request, so obsolete loads never consume decode work.
+        assert_eq!(
+            pending.queued_len(),
+            MAX_QUEUED_LOADS,
+            "only the newest queued load is retained"
+        );
+        assert_eq!(
+            pending
+                .queue
+                .back()
+                .map(|queued| queued.id.as_str().to_owned()),
+            Some(format!("queued-{}", MAX_QUEUED_LOADS + 1)),
+            "the newest queued load must survive superseding"
         );
         release_tx.send(()).unwrap();
         pending.join_running();
@@ -434,7 +456,25 @@ mod tests {
             3,
             &mut pending,
         );
-        assert!(!pending.progress().is_empty());
+        // With no contention the first request starts immediately; progress
+        // reports the running job by id, reaching a non-queued phase once
+        // the worker stores it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let phases = loop {
+            let phases = pending.progress();
+            if phases.len() == 1
+                && phases[0].0 == SaveId::new("first")
+                && phases[0].1 != LoadJobPhase::Queued
+            {
+                break phases;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "load worker did not report progress"
+            );
+            thread::yield_now();
+        };
+        assert_eq!(phases.len(), 1);
         pending.cancel_all();
         pending.join_running();
     }

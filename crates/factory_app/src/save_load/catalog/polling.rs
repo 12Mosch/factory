@@ -6,9 +6,8 @@
 //! trips Bevy change detection.
 
 use super::super::{
-    CachedSaveValidation, CatalogValidationRequest, SaveCatalog, SaveCompatibility, SaveKind,
+    CachedSaveValidation, SaveCatalog, SaveCompatibility, SaveFileMetadataFingerprint, SaveKind,
 };
-use super::inspect::{inspect_current_file, save_file_metadata_fingerprint};
 use super::validation::{
     MAX_CATALOG_VALIDATION_RETRIES, blind_retry_request, queue_catalog_validation,
     start_catalog_validation_jobs,
@@ -54,15 +53,23 @@ pub(crate) fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) -> b
                 continue;
             }
         };
-        let current_metadata = fs::File::open(&outcome.path)
+        // Freshness check without opening the file: a replacement always
+        // rewrites the bytes, so length/mtime equality with the
+        // worker-observed identity is sufficient on the frame schedule.
+        // Handle-bound instance checks already ran inside the worker.
+        let current_metadata = fs::metadata(&outcome.path)
             .ok()
-            .map(|file| save_file_metadata_fingerprint(&file));
+            .map(|metadata| (metadata.len(), metadata.modified().ok()));
+        let worker_metadata =
+            |fingerprint: &SaveFileMetadataFingerprint| (fingerprint.len, fingerprint.modified);
         let still_current = match (&outcome.fingerprint, &outcome.observed_metadata) {
-            (Some(fingerprint), _) => current_metadata.as_ref() == Some(&fingerprint.metadata),
+            (Some(fingerprint), _) => {
+                current_metadata == Some(worker_metadata(&fingerprint.metadata))
+            }
             (None, Some(observed))
                 if outcome.compatibility == SaveCompatibility::ExceedsCurrentLimits =>
             {
-                current_metadata.as_ref() == Some(observed)
+                current_metadata == Some((observed.len, observed.modified))
             }
             (None, None) => false,
             (None, Some(_)) => false,
@@ -99,59 +106,14 @@ pub(crate) fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) -> b
                 .iter()
                 .any(|queued| queued.path == outcome.path)
         {
+            // Retry on the worker, which classifies from its own handle.
+            // No file opens on the frame schedule.
             let kind = catalog.entries[entry_index].metadata.kind.clone();
             let next_attempt = outcome.attempt + 1;
-            if let Some((metadata, fresh)) = inspect_current_file(&outcome.path, &kind) {
-                if fresh.can_load() {
-                    changed |= queue_catalog_validation(
-                        catalog,
-                        CatalogValidationRequest {
-                            path: outcome.path,
-                            kind,
-                            compatibility: fresh,
-                            metadata,
-                            attempt: next_attempt,
-                        },
-                    );
-                } else {
-                    catalog.entries[entry_index].compatibility = fresh;
-                    catalog.revision = catalog.revision.wrapping_add(1);
-                    changed = true;
-                }
-            } else {
-                // The file is momentarily unreadable (brief lock, mid-sync
-                // replacement). Queue a bounded blind retry.
-                changed |= queue_catalog_validation(
-                    catalog,
-                    blind_retry_request(outcome.path, kind, next_attempt),
-                );
-            }
-        } else if outcome.attempt >= MAX_CATALOG_VALIDATION_RETRIES
-            && !catalog
-                .validation_queue
-                .iter()
-                .any(|queued| queued.path == outcome.path)
-            && !catalog
-                .validation_jobs
-                .iter()
-                .any(|job| job.path == outcome.path)
-            && let Some(entry) = catalog
-                .entries
-                .iter_mut()
-                .find(|entry| entry.path == outcome.path)
-            && entry.compatibility == SaveCompatibility::ValidationPending
-        {
-            // Retries are exhausted: reconcile the display with the file
-            // currently on disk instead of leaving a stale pending row.
-            // Loadable candidates stay pending for the periodic rescan.
-            let kind = entry.metadata.kind.clone();
-            if let Some((_, fresh)) = inspect_current_file(&outcome.path, &kind)
-                && !fresh.can_load()
-            {
-                entry.compatibility = fresh;
-                catalog.revision = catalog.revision.wrapping_add(1);
-                changed = true;
-            }
+            changed |= queue_catalog_validation(
+                catalog,
+                blind_retry_request(outcome.path, kind, next_attempt),
+            );
         }
     }
     changed |= rescan_stale_pending(catalog);

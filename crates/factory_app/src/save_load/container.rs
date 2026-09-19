@@ -358,21 +358,21 @@ fn read_bounded_bytes(
     Ok(payload)
 }
 
+/// Test-only hook that holds the save-artifact lock across frames, letting
+/// responsiveness tests prove catalog refreshes never block on the writer.
+#[doc(hidden)]
+pub fn hold_save_artifact_lock_for_tests() -> std::sync::MutexGuard<'static, ()> {
+    SAVE_ARTIFACT_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Serializes save-directory mutations across the catalog and background writer.
 pub(crate) fn with_save_artifact_lock<T>(operation: impl FnOnce() -> T) -> T {
     let _guard = SAVE_ARTIFACT_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     operation()
-}
-
-/// Non-blocking variant for frame schedules: runs `operation` only when the
-/// background writer is not holding the artifact lock. Returns `None` when
-/// the writer is busy so catalog refreshes stay responsive instead of
-/// blocking on encoding, disk I/O, or commit.
-pub(crate) fn try_with_save_artifact_lock<T>(operation: impl FnOnce() -> T) -> Option<T> {
-    let _guard = SAVE_ARTIFACT_LOCK.try_lock().ok()?;
-    Some(operation())
 }
 
 /// Writes and durably installs a complete save without exposing partial contents.

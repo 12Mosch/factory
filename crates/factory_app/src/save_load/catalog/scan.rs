@@ -1,59 +1,129 @@
 //! Directory scanning: refresh the in-memory catalog from disk.
 //!
-//! Scanning is lightweight: entries are built from [`super::inspect`]
-//! header classification, then [`super::validation`] fills in payload
-//! verdicts in the background. [`super::recovery`] runs first so
-//! interrupted writes are settled before anything is listed.
+//! All filesystem work — recovery, directory listing, and header
+//! inspection — runs on a single background scan worker. Frame schedules
+//! only request scans and install finished results, so catalog refreshes
+//! never block the UI on the writer lock or on slow filesystems. Payload
+//! verdicts still arrive via [`super::validation`] workers afterwards.
 
-use super::super::container::{
-    fallback_metadata, try_with_save_artifact_lock, with_save_artifact_lock,
-};
+use super::super::container::{fallback_metadata, with_save_artifact_lock};
 use super::super::{
     CachedSaveValidation, CatalogValidationRequest, SaveCatalog, SaveCompatibility, SaveEntry,
-    SaveId, SaveKind, SaveLoadConfig, local_datetime_from_unix_ms,
+    SaveId, SaveKind, SaveLoadConfig, SaveLoadStatus, SaveLoadStatusKind,
+    local_datetime_from_unix_ms,
 };
-use super::inspect::{
-    classify_open_save, file_timestamp_ms, inspect_file, save_file_metadata_fingerprint,
-};
-use super::polling::poll_catalog_validation_jobs_inner;
+use super::inspect::{file_timestamp_ms, inspect_file};
 use super::recovery::recover_interrupted_saves;
 use super::validation::{
     blind_retry_request, queue_catalog_validation, start_catalog_validation_jobs,
     validate_loadable_file,
 };
 use bevy::log::warn;
+use bevy::prelude::{Res, ResMut, Resource};
 use factory_data::PrototypeCatalog;
 use factory_sim::{SaveLimits, prototype_hash};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
+use std::thread::{self, JoinHandle};
 
-/// Replaces the in-memory catalog after a lightweight scan, then queues bounded
-/// background payload validation for cache misses. Recovery is best-effort and
-/// non-blocking: when the background writer holds the artifact lock, recovery
-/// is deferred to the next refresh instead of stalling the frame.
-pub fn refresh_catalog(config: &SaveLoadConfig, catalog: &mut SaveCatalog) -> Result<(), String> {
-    refresh_catalog_inner(config, catalog, false)
+/// At most one background catalog scan runs at a time. Frame schedules only
+/// request scans and install finished results; the worker owns every file
+/// open, read, stat, and recovery mutation.
+#[derive(Resource, Default)]
+pub struct PendingCatalogScan {
+    worker: Option<JoinHandle<Result<Vec<SaveEntry>, String>>>,
+    requested: bool,
 }
 
-/// Startup variant: recovery blocks on the artifact lock so the first frame
-/// observes a settled catalog. At real startup no writer exists yet, so this
-/// does not stall the UI; under parallel tests it waits out other tests'
-/// writers instead of deferring cleanup nobody re-triggers.
-pub fn refresh_catalog_blocking(
-    config: &SaveLoadConfig,
-    catalog: &mut SaveCatalog,
-) -> Result<(), String> {
-    refresh_catalog_inner(config, catalog, true)
+impl PendingCatalogScan {
+    /// Whether no scan is running or requested.
+    pub fn is_empty(&self) -> bool {
+        self.worker.is_none() && !self.requested
+    }
+
+    fn join_finished(&mut self) -> Option<Result<Vec<SaveEntry>, String>> {
+        let finished = self
+            .worker
+            .as_ref()
+            .is_some_and(|worker| worker.is_finished());
+        if !finished {
+            return None;
+        }
+        let worker = self.worker.take().expect("worker checked");
+        Some(
+            worker
+                .join()
+                .unwrap_or_else(|_| Err("catalog scan worker panicked".into())),
+        )
+    }
 }
 
-fn refresh_catalog_inner(
+impl Drop for PendingCatalogScan {
+    fn drop(&mut self) {
+        // A scan only reads; joining at shutdown cannot lose a save.
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+/// Requests a background catalog scan. Coalesces while a scan is running —
+/// the running scan already observes the latest directory state, and a
+/// follow-up scan starts when it lands if anything requested one meanwhile.
+pub(crate) fn request_catalog_scan(config: &SaveLoadConfig, pending: &mut PendingCatalogScan) {
+    if pending.worker.is_some() {
+        pending.requested = true;
+        return;
+    }
+    let root_dir = config.root_dir.clone();
+    let slot_count = config.autosave_slot_count;
+    pending.requested = false;
+    pending.worker = Some(thread::spawn(move || {
+        scan_catalog_unvalidated(&SaveLoadConfig {
+            root_dir,
+            autosave_interval_ticks: 0,
+            autosave_slot_count: slot_count,
+        })
+        .map(|(entries, _)| entries)
+    }));
+}
+
+/// Installs a finished background scan and queues bounded background payload
+/// validation for cache misses. Purely in-memory: no file opens, reads, or
+/// stats on the frame schedule.
+pub(crate) fn poll_catalog_scan(
     config: &SaveLoadConfig,
+    pending: &mut PendingCatalogScan,
     catalog: &mut SaveCatalog,
-    blocking_recovery: bool,
-) -> Result<(), String> {
-    poll_catalog_validation_jobs_inner(catalog);
-    let (mut entries, current_hash) = scan_catalog_unvalidated(config, blocking_recovery)?;
+    status: &mut SaveLoadStatus,
+) {
+    let Some(outcome) = pending.join_finished() else {
+        return;
+    };
+    match outcome {
+        Ok(entries) => install_scan_entries(catalog, entries),
+        Err(error) => {
+            status.message = Some(format!("Cannot refresh save catalog: {error}"));
+            status.kind = SaveLoadStatusKind::Error;
+            status.last_completed_id = None;
+        }
+    }
+    if pending.requested {
+        request_catalog_scan(config, pending);
+    }
+}
+
+pub(crate) fn poll_catalog_scan_system(
+    config: Res<SaveLoadConfig>,
+    mut pending: ResMut<PendingCatalogScan>,
+    mut catalog: ResMut<SaveCatalog>,
+    mut status: ResMut<SaveLoadStatus>,
+) {
+    poll_catalog_scan(&config, &mut pending, &mut catalog, &mut status);
+}
+
+fn install_scan_entries(catalog: &mut SaveCatalog, mut entries: Vec<SaveEntry>) {
     let present = entries
         .iter()
         .map(|entry| entry.path.clone())
@@ -66,18 +136,24 @@ fn refresh_catalog_inner(
         .retain(|request| present.contains(&request.path));
     let mut requests = Vec::new();
     for entry in &mut entries {
-        prepare_entry_validation(
-            entry,
-            current_hash,
-            &catalog.validation_cache,
-            &mut requests,
-        );
+        plan_entry_validation(entry, &catalog.validation_cache, &mut requests);
     }
     catalog.replace(entries);
     for request in requests {
         queue_catalog_validation(catalog, request);
     }
     start_catalog_validation_jobs(catalog);
+}
+
+/// Startup and screen-transition variant: scans synchronously with blocking
+/// recovery so the first frame observes a settled catalog. At real startup
+/// no writer exists yet, so this does not stall the UI.
+pub fn refresh_catalog_blocking(
+    config: &SaveLoadConfig,
+    catalog: &mut SaveCatalog,
+) -> Result<(), String> {
+    let (entries, _) = scan_catalog_unvalidated(config)?;
+    install_scan_entries(catalog, entries);
     Ok(())
 }
 
@@ -85,7 +161,7 @@ fn refresh_catalog_inner(
 /// Explicit callers (tests, one-shot scans) block on the artifact lock so
 /// recovery is deterministic; interactive refreshes use the non-blocking path.
 pub fn scan_catalog(config: &SaveLoadConfig) -> Result<Vec<SaveEntry>, String> {
-    let (mut entries, current_hash) = scan_catalog_unvalidated(config, true)?;
+    let (mut entries, current_hash) = scan_catalog_unvalidated(config)?;
     let mut cache = BTreeMap::new();
     for entry in &mut entries {
         if entry.compatibility.can_load() {
@@ -96,10 +172,7 @@ pub fn scan_catalog(config: &SaveLoadConfig) -> Result<Vec<SaveEntry>, String> {
     Ok(entries)
 }
 
-fn scan_catalog_unvalidated(
-    config: &SaveLoadConfig,
-    blocking: bool,
-) -> Result<(Vec<SaveEntry>, u64), String> {
+fn scan_catalog_unvalidated(config: &SaveLoadConfig) -> Result<(Vec<SaveEntry>, u64), String> {
     if !config.root_dir.exists() {
         return Ok((Vec::new(), 0));
     }
@@ -107,18 +180,9 @@ fn scan_catalog_unvalidated(
         &PrototypeCatalog::load_base()
             .map_err(|error| format!("failed to load prototype data: {error}"))?,
     );
-    if blocking {
-        with_save_artifact_lock(|| recover_interrupted_saves(config, current_hash));
-    } else if try_with_save_artifact_lock(|| recover_interrupted_saves(config, current_hash))
-        .is_none()
-    {
-        // Never block the frame on the background writer: recovery mutates
-        // artifacts under the same lock held during encoding and commit. When
-        // the writer is busy, skip recovery this refresh and retry on the next
-        // poll; directory listing and header inspection below stay lock-free
-        // and bounded, and payload validation already runs on workers.
-        warn!("save catalog recovery deferred: background save holds the artifact lock");
-    }
+    // Blocking recovery is safe here: this only runs on background scan
+    // workers and in explicit synchronous scans, never on frame schedules.
+    with_save_artifact_lock(|| recover_interrupted_saves(config, current_hash));
     let directory = fs::read_dir(&config.root_dir)
         .map_err(|error| format!("failed to scan save directory: {error}"))?;
     let mut entries = Vec::new();
@@ -193,9 +257,13 @@ pub(crate) fn inspect_entry(
     }
 }
 
-pub(crate) fn prepare_entry_validation(
+/// Plans background validation for one worker-scanned entry without touching
+/// the filesystem. The scan worker already classified the entry from the
+/// single handle it observed, so the frame only compares the observed
+/// identity against the cache: hits apply immediately, misses decode on
+/// validation workers, and never-inspected files get a blind retry.
+pub(crate) fn plan_entry_validation(
     entry: &mut SaveEntry,
-    current_hash: u64,
     cache: &BTreeMap<PathBuf, CachedSaveValidation>,
     requests: &mut Vec<CatalogValidationRequest>,
 ) {
@@ -206,8 +274,8 @@ pub(crate) fn prepare_entry_validation(
     {
         return;
     }
-    let Ok(mut file) = fs::File::open(&entry.path) else {
-        // The file is momentarily unreadable. Publish the pending state
+    let Some(observed) = entry.inspected.clone() else {
+        // The scan worker could not open the file. Publish the pending state
         // together with a blind retry so recovered access is observed
         // without waiting for an unrelated refresh.
         entry.compatibility = SaveCompatibility::ValidationPending;
@@ -218,30 +286,12 @@ pub(crate) fn prepare_entry_validation(
         ));
         return;
     };
-    let metadata = save_file_metadata_fingerprint(&file);
-    if entry.compatibility == SaveCompatibility::ValidationPending
-        || entry
-            .inspected
-            .as_ref()
-            .is_some_and(|inspected| inspected != &metadata)
-    {
-        // No classification exists for these bytes, or the path was replaced
-        // after header inspection. Re-derive it from the instance this
-        // handle observes before pairing it with an identity.
-        entry.compatibility = classify_open_save(&mut file, &entry.metadata.kind, current_hash);
-        entry.inspected = Some(metadata.clone());
-        if !entry.compatibility.can_load()
-            && entry.compatibility != SaveCompatibility::ValidationPending
-        {
-            return;
-        }
-    }
     let source_compatibility = entry.compatibility.clone();
-    if metadata.len > SaveLimits::default().max_encoded_bytes {
+    if observed.len > SaveLimits::default().max_encoded_bytes {
         entry.compatibility = SaveCompatibility::ExceedsCurrentLimits;
-    } else if metadata.identity.is_some()
+    } else if observed.identity.is_some()
         && let Some(cached) = cache.get(&entry.path)
-        && cached.fingerprint.metadata == metadata
+        && cached.fingerprint.metadata == observed
     {
         entry.compatibility = cached.compatibility.clone();
     } else {
@@ -250,7 +300,7 @@ pub(crate) fn prepare_entry_validation(
             path: entry.path.clone(),
             kind: entry.metadata.kind.clone(),
             compatibility: source_compatibility,
-            metadata,
+            metadata: observed,
             attempt: 0,
         });
     }

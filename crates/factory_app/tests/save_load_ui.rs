@@ -5,10 +5,10 @@ use factory_app::FactoryAppPlugin;
 use factory_app::build::resources::{BuildPlacementState, BuildSelection};
 use factory_app::resources::SimResource;
 use factory_app::save_load::{
-    BACKUP_ARTIFACT_MARKER, PendingLoadJobs, PendingSaveConfirmation, PendingSaveJobs, SaveCatalog,
-    SaveCompatibility, SaveKind, SaveLoadConfig, SaveLoadMetrics, SaveLoadStatus, SaveLoadTab,
-    SaveLoadWindowState, TEMP_ARTIFACT_MARKER, decode_container, encode_container,
-    request_system_save, scan_catalog,
+    BACKUP_ARTIFACT_MARKER, PendingCatalogScan, PendingLoadJobs, PendingSaveConfirmation,
+    PendingSaveJobs, SaveCatalog, SaveCompatibility, SaveKind, SaveLoadConfig, SaveLoadMetrics,
+    SaveLoadStatus, SaveLoadTab, SaveLoadWindowState, TEMP_ARTIFACT_MARKER, decode_container,
+    encode_container, request_system_save, scan_catalog,
 };
 use factory_app::simulation::SimCommandRequest;
 use factory_app::ui::resources::OpenContainer;
@@ -1237,7 +1237,25 @@ fn refresh_manager(app: &mut App) {
     app.world_mut()
         .resource_mut::<SaveLoadWindowState>()
         .refresh_on_open = true;
-    app.update();
+    // Scans run on a background worker: update until the requested scan
+    // lands, then drain the payload validations it queued.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        app.update();
+        if app.world().resource::<PendingCatalogScan>().is_empty() {
+            // One more update so a scan requested by this frame's refresh
+            // trigger is observed before deciding nothing is pending.
+            app.update();
+            if app.world().resource::<PendingCatalogScan>().is_empty() {
+                break;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "catalog scan did not land after refresh"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
     drain_catalog_validations(app);
 }
 
@@ -1296,17 +1314,18 @@ fn drain_save_jobs(app: &mut App) {
 }
 
 fn drain_persistence_jobs(app: &mut App) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let saves_empty = app.world().resource::<PendingSaveJobs>().is_empty();
         let loads_empty = app.world().resource::<PendingLoadJobs>().is_empty();
-        if saves_empty && loads_empty {
+        let scans_empty = app.world().resource::<PendingCatalogScan>().is_empty();
+        if saves_empty && loads_empty && scans_empty {
             drain_catalog_validations(app);
             return;
         }
         assert!(
             Instant::now() < deadline,
-            "persistence jobs did not drain (saves_empty={saves_empty}, loads_empty={loads_empty})"
+            "persistence jobs did not drain (saves_empty={saves_empty}, loads_empty={loads_empty}, scans_empty={scans_empty})"
         );
         app.update();
         std::thread::sleep(Duration::from_millis(1));
@@ -1636,30 +1655,60 @@ fn commands_around_load_apply_once_and_continue() {
     app.update();
     press_entry(&mut app, &id, SaveEntryAction::Load);
     app.update();
-    // Ticks stay responsive while decoding runs off-thread.
-    let before = app.world().resource::<SimResource>().read().tick_count();
-    app.update();
-    let during = app.world().resource::<SimResource>().read().tick_count();
     assert!(
-        during >= before,
-        "fixed ticks must continue during load decoding"
+        !app.world().resource::<PendingLoadJobs>().is_empty(),
+        "the requested load must still be pending after one frame"
     );
-    drain_load_jobs(&mut app);
+    // Inject a command while decoding is pending, then count the old-world
+    // ticks that run before installation lands.
+    app.world_mut()
+        .write_message(SimCommandRequest(SimCommand::MovePlayer {
+            direction_x: -1.0,
+            direction_y: 0.0,
+            delta_seconds: 0.25,
+        }));
+    let mut ticks_while_pending = 0;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !app.world().resource::<PendingLoadJobs>().is_empty() {
+        let before = app.world().resource::<SimResource>().read().tick_count();
+        app.update();
+        ticks_while_pending += 1;
+        let after = app.world().resource::<SimResource>().read().tick_count();
+        // Fixed update runs before the installation boundary in one update,
+        // so each update ticks the old world exactly once until the reset
+        // lands: no duplicated steps, none silently discarded.
+        if after < before {
+            break;
+        }
+        assert_eq!(
+            after,
+            before + 1,
+            "old-world ticks must advance exactly once per update while a load is pending"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "load jobs did not drain while counting ticks"
+        );
+    }
+    assert!(
+        ticks_while_pending >= 1,
+        "at least the installing update must tick while the load is pending"
+    );
     // Installation lands exactly on the file's captured tick through the
     // shared reset.
     assert_eq!(
         app.world().resource::<SimResource>().read().tick_count(),
         file_tick
     );
-    // Post-load input applies exactly once on the new world.
-    app.world_mut()
-        .write_message(SimCommandRequest(SimCommand::MovePlayer {
-            direction_x: 0.0,
-            direction_y: 1.0,
-            delta_seconds: 0.5,
-        }));
+    // The pre-installation command belonged to the old world: one idle tick
+    // must not move the player, proving no input leaked across the boundary.
+    let installed_position = app
+        .world()
+        .resource::<SimResource>()
+        .read()
+        .player()
+        .position_tiles();
     freeze_time(&mut app);
-    // Advance exactly one fixed tick deterministically.
     app.world_mut()
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
             1.0 / 60.0,
@@ -1668,6 +1717,178 @@ fn commands_around_load_apply_once_and_continue() {
     assert_eq!(
         app.world().resource::<SimResource>().read().tick_count(),
         file_tick + 1
+    );
+    assert_eq!(
+        app.world()
+            .resource::<SimResource>()
+            .read()
+            .player()
+            .position_tiles(),
+        installed_position,
+        "pre-installation input must not leak into the new world"
+    );
+    // Post-load input applies exactly once on the new world.
+    app.world_mut()
+        .write_message(SimCommandRequest(SimCommand::MovePlayer {
+            direction_x: 0.0,
+            direction_y: 1.0,
+            delta_seconds: 0.5,
+        }));
+    app.update();
+    assert_eq!(
+        app.world().resource::<SimResource>().read().tick_count(),
+        file_tick + 2
+    );
+    assert_ne!(
+        app.world()
+            .resource::<SimResource>()
+            .read()
+            .player()
+            .position_tiles(),
+        installed_position,
+        "post-load input must apply on the new world"
+    );
+}
+
+#[test]
+fn repeated_named_overwrites_serialize_fifo() {
+    use bevy::ecs::system::RunSystemOnce;
+    use factory_app::save_load::request_overwrite;
+    let mut app = test_app(Duration::ZERO, "named_overwrite_fifo");
+    create_named_save(&mut app, "Overwrite Target");
+    drain_persistence_jobs(&mut app);
+    let id = app
+        .world()
+        .resource::<SaveCatalog>()
+        .entries()
+        .iter()
+        .find(|entry| entry.metadata.display_name == "Overwrite Target")
+        .unwrap()
+        .id
+        .clone();
+    // Two overwrites of the same save with no frame between them: the first
+    // occupies the worker (unreaped), so the second must queue FIFO instead
+    // of being rejected as "already being saved".
+    let id2 = id.clone();
+    let first = app
+        .world_mut()
+        .run_system_once(
+            move |sim: bevy::prelude::Res<SimResource>,
+                  catalog: bevy::prelude::Res<SaveCatalog>,
+                  mut pending: bevy::prelude::ResMut<PendingSaveJobs>,
+                  mut status: bevy::prelude::ResMut<SaveLoadStatus>,
+                  mut metrics: bevy::prelude::ResMut<SaveLoadMetrics>| {
+                request_overwrite(&id, &sim, &catalog, &mut pending, &mut status, &mut metrics)
+            },
+        )
+        .expect("overwrite system should run");
+    assert!(first, "first overwrite must be accepted");
+    let second = app
+        .world_mut()
+        .run_system_once(
+            move |sim: bevy::prelude::Res<SimResource>,
+                  catalog: bevy::prelude::Res<SaveCatalog>,
+                  mut pending: bevy::prelude::ResMut<PendingSaveJobs>,
+                  mut status: bevy::prelude::ResMut<SaveLoadStatus>,
+                  mut metrics: bevy::prelude::ResMut<SaveLoadMetrics>| {
+                request_overwrite(
+                    &id2,
+                    &sim,
+                    &catalog,
+                    &mut pending,
+                    &mut status,
+                    &mut metrics,
+                )
+            },
+        )
+        .expect("overwrite system should run");
+    assert!(
+        second,
+        "repeated overwrite of the same save must queue FIFO instead of rejecting"
+    );
+    assert_eq!(
+        app.world().resource::<PendingSaveJobs>().queued_len(),
+        1,
+        "the second overwrite must wait behind the first"
+    );
+    drain_persistence_jobs(&mut app);
+    let status = app.world().resource::<SaveLoadStatus>().clone();
+    assert!(
+        status
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("Overwrite Target saved.")),
+        "the last queued overwrite must win, got: {status:?}"
+    );
+}
+
+#[test]
+fn queued_save_goes_stale_when_world_replaced_while_waiting() {
+    use factory_app::save_load::SaveJobPhase;
+    let mut app = test_app(Duration::ZERO, "save_stale_while_queued");
+    generate_large_world(&mut app);
+    // First quicksave occupies the worker through a slow large capture.
+    tap_key(&mut app, KeyCode::F5);
+    // Second quicksave queues behind it without any frame between the taps
+    // only if the worker is still busy; the large capture makes that certain
+    // enough to assert rather than assume.
+    tap_key(&mut app, KeyCode::F5);
+    assert_eq!(
+        app.world().resource::<PendingSaveJobs>().queued_len(),
+        1,
+        "the second save must wait behind the running large capture"
+    );
+    // Wait until the running capture released the read lock (encoding or
+    // later) so world replacement can install without Busy. The large
+    // capture holds the lock for tens of milliseconds; the loop observes
+    // the phase transition within the first few frames.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        app.update();
+        std::thread::sleep(Duration::from_millis(1));
+        assert!(
+            Instant::now() < deadline,
+            "large capture did not release the read lock"
+        );
+        let phases = app.world().resource::<PendingSaveJobs>().progress();
+        if phases.is_empty() {
+            continue;
+        }
+        if phases[0].1 != SaveJobPhase::Capturing && phases[0].1 != SaveJobPhase::Queued {
+            break;
+        }
+    }
+    // The worker thread only advances phases; moving the queued job onto the
+    // worker happens in `poll_save_jobs` on the next `app.update`. With no
+    // update between the phase poll above and this install, the queued job
+    // cannot have started, so the first attempt deterministically succeeds.
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .replace(factory_sim::Simulation::new_test_world(424_242))
+        .expect("replacement outside capture must succeed");
+    drain_persistence_jobs(&mut app);
+    // The first save committed the requested world; the queued request was
+    // discarded as stale with the previous save intact, never committed.
+    let metrics = *app.world().resource::<SaveLoadMetrics>();
+    assert_eq!(
+        metrics.last_snapshot_world_generation, 0,
+        "the committed save must belong to the requested world"
+    );
+    let status = app.world().resource::<SaveLoadStatus>().clone();
+    assert!(
+        status
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("superseded")),
+        "the stale queued save must report superseding, got: {status:?}"
+    );
+    assert!(
+        app.world()
+            .resource::<SaveLoadConfig>()
+            .root_dir
+            .join("quicksave.factsim")
+            .exists(),
+        "the first save must still be committed"
     );
 }
 
@@ -1725,22 +1946,44 @@ fn cancelled_queued_save_never_reports_committed() {
 }
 
 #[test]
-fn catalog_refresh_stays_responsive_while_save_holds_writer_lock() {
-    let mut app = test_app(Duration::ZERO, "refresh_during_save");
-    generate_large_world(&mut app);
-    press_key(&mut app, KeyCode::F5);
-    app.update();
-    finish_key_press(&mut app, KeyCode::F5);
-    assert!(!app.world().resource::<PendingSaveJobs>().is_empty());
-    // Frame-side catalog refresh must not block on the writer lock.
+fn catalog_refresh_performs_no_frame_filesystem_work() {
+    use factory_app::save_load::hold_save_artifact_lock_for_tests;
+    let mut app = test_app(Duration::ZERO, "refresh_off_frame");
+    create_named_save(&mut app, "Listed Save");
+    drain_persistence_jobs(&mut app);
+    // Hold the writer lock across frames: any frame-side file inspection,
+    // recovery, or listing work would stall here. The old synchronous
+    // refresh blocked on this lock indefinitely.
+    let _writer = hold_save_artifact_lock_for_tests();
+    app.world_mut().resource_mut::<SaveLoadWindowState>().open = true;
+    app.world_mut()
+        .resource_mut::<SaveLoadWindowState>()
+        .refresh_on_open = true;
     let started = Instant::now();
     app.update();
     let elapsed = started.elapsed();
     assert!(
-        elapsed < Duration::from_secs(2),
+        elapsed < Duration::from_millis(250),
         "catalog refresh blocked on the writer lock for {elapsed:?}"
     );
+    // The previous list stays visible while the background scan waits.
+    assert!(
+        app.world()
+            .resource::<SaveCatalog>()
+            .entries()
+            .iter()
+            .any(|entry| entry.metadata.display_name == "Listed Save")
+    );
+    drop(_writer);
+    // Once the writer releases the lock, the requested scan lands.
     drain_persistence_jobs(&mut app);
+    assert!(
+        app.world()
+            .resource::<SaveCatalog>()
+            .entries()
+            .iter()
+            .any(|entry| entry.metadata.display_name == "Listed Save")
+    );
 }
 
 #[test]

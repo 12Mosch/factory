@@ -119,6 +119,21 @@ impl PendingSaveJobs {
             .any(|queued| queued.normalized_name.as_deref() == Some(normalized_name))
     }
 
+    /// Whether the normalized display name is held by a running or queued
+    /// save for a *different* id. Same-id repeats are the same target and
+    /// serialize FIFO; a different id claiming a pending name is a genuine
+    /// collision and must wait.
+    pub fn is_name_pending_by_other_id(&self, normalized_name: &str, id: &SaveId) -> bool {
+        if self.running.as_ref().is_some_and(|job| {
+            &job.id != id && job.normalized_name.as_deref() == Some(normalized_name)
+        }) {
+            return true;
+        }
+        self.queue.iter().any(|queued| {
+            &queued.id != id && queued.normalized_name.as_deref() == Some(normalized_name)
+        })
+    }
+
     /// Number of queued (not yet started) save requests.
     pub fn queued_len(&self) -> usize {
         self.queue.len()
@@ -289,7 +304,7 @@ pub(crate) fn queue_save(
     }
     if explicit
         && let Some(name) = normalized_name.as_deref()
-        && pending.is_name_pending(name)
+        && pending.is_name_pending_by_other_id(name, &id)
     {
         status.message = Some(format!("{display_name} is already being saved."));
         status.kind = SaveLoadStatusKind::Info;
@@ -352,11 +367,14 @@ fn run_save_worker(
         .map_err(|_| SaveJobError::LockPoisoned)?;
     let snapshot_lock_wait_ms = lock_wait_start.elapsed().as_secs_f64() * 1000.0;
     let lock_acquired = Instant::now();
-    // Retag to the generation observed under the lock. A world installed
-    // while this request waited in the queue mutates the same lock, so the
-    // bytes under the lock belong to the current generation, not the
-    // requested one.
+    // Enforce the requested world identity: a world installed while this
+    // request waited in the queue mutates the same lock, so capturing now
+    // would mix the requested tick identity with another world's bytes. The
+    // stale request is discarded with the previous save intact instead.
     let capture_generation = source.generation.load(Ordering::Acquire);
+    if capture_generation != requested_generation {
+        return Err(SaveJobError::Stale);
+    }
     let capture_activity = SnapshotCaptureActivity::begin(&source.active_captures);
     let blocked_before = source.blocked_fixed_ticks.load(Ordering::Relaxed);
     if cancel.load(Ordering::Relaxed) {

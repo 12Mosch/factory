@@ -21,9 +21,12 @@
 //!
 //! # Ordering
 //!
-//! * Saves to the same target serialize in FIFO request order.
-//! * Each save captures exactly one completed tick; the captured tick and the
-//!   world generation observed at capture are reported, never mixed.
+//! * Saves to the same target serialize in FIFO request order, including
+//!   repeated named overwrites of one save.
+//! * Each save captures exactly one completed tick of the requested world. A
+//!   request queued while a different world is installed is discarded as
+//!   stale instead of capturing another world's bytes, so requested
+//!   completed-tick identity is never mixed across worlds.
 //! * Each load result carries its request id and the world generation observed
 //!   when its worker started. A result installs only when its request is still
 //!   the newest and no newer world installation happened after the worker
@@ -49,8 +52,9 @@ pub const MAX_QUEUED_SAVES: usize = 4;
 /// At most one background load decoder at a time.
 pub const MAX_LOAD_WORKERS: usize = 1;
 /// Bounded queue for load requests waiting for the load worker. Only the
-/// newest queued load is retained; an older queued load is superseded.
-pub const MAX_QUEUED_LOADS: usize = 2;
+/// newest queued load is retained; accepting a newer request immediately
+/// supersedes an older queued load and any retained older candidate.
+pub const MAX_QUEUED_LOADS: usize = 1;
 
 static NEXT_PERSISTENCE_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -119,13 +123,13 @@ impl SaveJobPhase {
     }
 }
 
-/// Observable load progress phase.
+/// Observable load progress phase. Decoding includes the validation that
+/// the decode paths run internally before returning a candidate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoadJobPhase {
     Queued,
     Reading,
     Decoding,
-    Validating,
     ReadyToInstall,
 }
 
@@ -134,8 +138,7 @@ impl LoadJobPhase {
         match self {
             Self::Queued => "queued",
             Self::Reading => "reading",
-            Self::Decoding => "decoding",
-            Self::Validating => "validating",
+            Self::Decoding => "decoding and validating",
             Self::ReadyToInstall => "ready to install",
         }
     }
@@ -145,8 +148,7 @@ impl LoadJobPhase {
             Self::Queued => 0,
             Self::Reading => 1,
             Self::Decoding => 2,
-            Self::Validating => 3,
-            Self::ReadyToInstall => 4,
+            Self::ReadyToInstall => 3,
         }
     }
 
@@ -154,8 +156,7 @@ impl LoadJobPhase {
         match value {
             1 => Self::Reading,
             2 => Self::Decoding,
-            3 => Self::Validating,
-            4 => Self::ReadyToInstall,
+            3 => Self::ReadyToInstall,
             _ => Self::Queued,
         }
     }

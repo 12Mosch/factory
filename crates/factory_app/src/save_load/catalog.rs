@@ -6,7 +6,10 @@ pub(crate) mod validation;
 
 pub(crate) use inspect::now_unix_ms;
 pub(crate) use polling::poll_catalog_validation_jobs;
-pub use scan::{refresh_catalog, refresh_catalog_blocking, scan_catalog};
+#[cfg(test)]
+pub(crate) use scan::poll_catalog_scan;
+pub use scan::{PendingCatalogScan, refresh_catalog_blocking, scan_catalog};
+pub(crate) use scan::{poll_catalog_scan_system, request_catalog_scan};
 
 #[cfg(test)]
 use super::container::{ContainerError, fallback_metadata, load_simulation_from_reader};
@@ -29,7 +32,7 @@ pub(crate) use recovery::{
     PrimaryState, RecoveryBackup, classify_backup_result, classify_simulation_result,
 };
 #[cfg(test)]
-pub(crate) use scan::{inspect_entry, prepare_entry_validation};
+pub(crate) use scan::{inspect_entry, plan_entry_validation};
 #[cfg(test)]
 use std::collections::BTreeMap;
 #[cfg(test)]
@@ -75,8 +78,17 @@ mod tests {
             autosave_slot_count: 5,
         };
         let mut catalog = SaveCatalog::default();
+        let mut pending = PendingCatalogScan::default();
+        let mut status = super::super::SaveLoadStatus::default();
 
-        refresh_catalog(&config, &mut catalog).unwrap();
+        // Filesystem work runs on the scan worker; the frame only installs.
+        request_catalog_scan(&config, &mut pending);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !pending.is_empty() {
+            poll_catalog_scan(&config, &mut pending, &mut catalog, &mut status);
+            assert!(Instant::now() < deadline, "catalog scan did not land");
+            thread::sleep(Duration::from_millis(1));
+        }
 
         assert_eq!(catalog.entries.len(), 1);
         assert_eq!(
@@ -406,14 +418,32 @@ mod tests {
 
         let cache = BTreeMap::new();
         let mut requests = Vec::new();
-        prepare_entry_validation(&mut entry, current_hash, &cache, &mut requests);
+        let stale_compat = entry.compatibility.clone();
+        let stale_inspected = entry.inspected.clone();
+        plan_entry_validation(&mut entry, &cache, &mut requests);
 
         assert_eq!(entry.compatibility, SaveCompatibility::ValidationPending);
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].compatibility, SaveCompatibility::Compatible);
+        // The frame never re-opens the file: the request carries the stale
+        // classification and identity for the worker to re-derive.
+        assert_eq!(requests[0].compatibility, stale_compat);
+        assert_eq!(
+            requests[0].metadata,
+            stale_inspected.expect("header inspection observed an identity")
+        );
         assert_eq!(requests[0].kind, SaveKind::Quicksave);
-        let current_metadata = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
-        assert_eq!(requests[0].metadata, current_metadata);
+        // The validation worker observes the replacement and settles the
+        // current classification from its own handle.
+        let request = requests.pop().expect("one request");
+        let outcome = validate_loadable_path(
+            request.path,
+            request.kind,
+            request.compatibility,
+            Some(request.metadata),
+            0,
+            Arc::new(AtomicBool::new(false)),
+        );
+        assert_eq!(outcome.compatibility, SaveCompatibility::Compatible);
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -698,12 +728,10 @@ mod tests {
             path: path.clone(),
             inspected: None,
         };
-        let current_hash =
-            factory_sim::prototype_hash(&factory_data::PrototypeCatalog::load_base().unwrap());
 
         let cache = BTreeMap::new();
         let mut requests = Vec::new();
-        prepare_entry_validation(&mut entry, current_hash, &cache, &mut requests);
+        plan_entry_validation(&mut entry, &cache, &mut requests);
 
         assert_eq!(entry.compatibility, SaveCompatibility::ValidationPending);
         assert_eq!(requests.len(), 1);
@@ -908,11 +936,10 @@ mod tests {
         let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
             .expect("current save should encode");
         fs::write(&path, &current).unwrap();
-        let current_hash =
-            factory_sim::prototype_hash(&factory_data::PrototypeCatalog::load_base().unwrap());
 
-        // Inspection failed transiently, so no classification exists, but the
-        // file is readable now.
+        // Inspection failed transiently, so no classification exists. The
+        // frame still never opens the file: the blind retry carries no
+        // classification and the worker derives it from its own handle.
         let mut entry = SaveEntry {
             id: SaveId::new("quicksave"),
             metadata: fallback_metadata(
@@ -928,11 +955,14 @@ mod tests {
         };
         let cache = BTreeMap::new();
         let mut requests = Vec::new();
-        prepare_entry_validation(&mut entry, current_hash, &cache, &mut requests);
+        plan_entry_validation(&mut entry, &cache, &mut requests);
 
         assert_eq!(entry.compatibility, SaveCompatibility::ValidationPending);
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].compatibility, SaveCompatibility::Compatible);
+        assert_eq!(
+            requests[0].compatibility,
+            SaveCompatibility::ValidationPending
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

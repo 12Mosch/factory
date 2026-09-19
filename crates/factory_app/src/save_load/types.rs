@@ -239,6 +239,18 @@ impl SaveCatalog {
         self.revision = self.revision.wrapping_add(1);
     }
 
+    /// Removes one entry with its validation cache and queued work, keeping
+    /// the list consistent without a disk scan.
+    pub(crate) fn remove(&mut self, id: &SaveId) {
+        if let Some(entry) = self.entries.iter().find(|entry| &entry.id == id) {
+            let path = entry.path.clone();
+            self.validation_cache.remove(&path);
+            self.validation_queue.retain(|request| request.path != path);
+        }
+        self.entries.retain(|entry| &entry.id != id);
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     pub(crate) fn invalidate_validation(&mut self, id: &SaveId) {
         if let Some(path) = self.get(id).map(|entry| entry.path.clone()) {
             self.validation_cache.remove(&path);

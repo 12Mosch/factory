@@ -22,6 +22,15 @@ pub enum SimAccessError {
     Busy,
 }
 
+/// A failed atomic installation that returns the uninstalled candidate, so
+/// async callers can retain and retry it instead of losing a validated world.
+/// The simulation is boxed to keep the `Err` variant small.
+#[derive(Debug)]
+pub struct InstallConflict {
+    pub cause: SimAccessError,
+    pub simulation: Box<Simulation>,
+}
+
 impl SimResource {
     /// Creates the explicit pre-game state, before a world has been started or loaded.
     pub fn empty() -> Self {
@@ -68,12 +77,42 @@ impl SimResource {
         self.inner.as_ref()?.try_write().ok()
     }
 
-    /// Probes whether a world installation would find the write lock free
-    /// without consuming a candidate. Frame schedules check this before moving
-    /// a validated load candidate into [`replace`](Self::replace), so a busy
-    /// simulation retains the candidate for retry instead of dropping it.
-    pub fn is_write_available(&self) -> bool {
-        self.try_write().is_some()
+    /// Installs the first world or replaces the active world in one atomic
+    /// step: the single `try_write` both swaps the simulation and publishes
+    /// the new generation before the guard is released. A save worker that
+    /// acquires the read lock therefore always observes a consistent
+    /// (world, generation) pair, never a new world tagged with the previous
+    /// generation. On contention the candidate is returned with the error so
+    /// async callers can retain and retry it instead of dropping a validated
+    /// world.
+    pub fn install(&mut self, sim: Simulation) -> Result<(), InstallConflict> {
+        if let Some(inner) = &self.inner {
+            let mut guard = match inner.try_write() {
+                Ok(guard) => guard,
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    return Err(InstallConflict {
+                        cause: SimAccessError::Poisoned,
+                        simulation: Box::new(sim),
+                    });
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    return Err(InstallConflict {
+                        cause: SimAccessError::Busy,
+                        simulation: Box::new(sim),
+                    });
+                }
+            };
+            *guard = sim;
+            self.replacement_revision = self.replacement_revision.wrapping_add(1);
+            self.generation
+                .store(self.replacement_revision, Ordering::Release);
+        } else {
+            self.inner = Some(Arc::new(RwLock::new(sim)));
+            self.replacement_revision = self.replacement_revision.wrapping_add(1);
+            self.generation
+                .store(self.replacement_revision, Ordering::Release);
+        }
+        Ok(())
     }
 
     /// Locks the active simulation for test setup, blocking until it is available.
@@ -87,19 +126,7 @@ impl SimResource {
 
     /// Installs the first world or replaces the active world without blocking a save reader.
     pub fn replace(&mut self, sim: Simulation) -> Result<(), SimAccessError> {
-        if let Some(inner) = &self.inner {
-            let mut guard = inner.try_write().map_err(|error| match error {
-                std::sync::TryLockError::Poisoned(_) => SimAccessError::Poisoned,
-                std::sync::TryLockError::WouldBlock => SimAccessError::Busy,
-            })?;
-            *guard = sim;
-        } else {
-            self.inner = Some(Arc::new(RwLock::new(sim)));
-        }
-        self.replacement_revision = self.replacement_revision.wrapping_add(1);
-        self.generation
-            .store(self.replacement_revision, Ordering::Release);
-        Ok(())
+        self.install(sim).map_err(|conflict| conflict.cause)
     }
 
     /// Returns the wrapping revision incremented after every successful world installation.
@@ -116,10 +143,10 @@ impl SimResource {
         )
     }
 
-    /// Pins the simulation handle and its application generation atomically
-    /// with respect to main-thread world replacement. Workers retag to the
-    /// generation observed under the read lock, so a world installed while
-    /// queued still captures consistently.
+    /// Pins the simulation handle and the requested world generation.
+    /// Workers compare the live generation after acquiring the read lock and
+    /// discard the request as stale when a different world was installed
+    /// while it waited, so a snapshot never mixes tick identity across worlds.
     pub(crate) fn snapshot_source(&self) -> SnapshotSource {
         SnapshotSource {
             simulation: self.clone_handle(),
