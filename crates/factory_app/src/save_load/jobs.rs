@@ -2,7 +2,7 @@ use super::catalog::now_unix_ms;
 use super::container::{ContainerError, METADATA_SCHEMA_VERSION, write_save_snapshot};
 use super::lifecycle::{
     MAX_QUEUED_SAVES, MAX_RETAINED_SAVE_GENERATIONS, MAX_SAVE_WORKERS, PersistenceRequestId,
-    SaveJobError, SaveJobPhase,
+    SAVE_CANCEL_ACTIVE, SAVE_CANCEL_COMMITTING, SAVE_CANCEL_REQUESTED, SaveJobError, SaveJobPhase,
 };
 use super::{
     SaveId, SaveKind, SaveLoadConfig, SaveLoadMetrics, SaveLoadStatus, SaveLoadStatusKind,
@@ -65,6 +65,7 @@ struct QueuedSave {
     normalized_name: Option<String>,
     explicit: bool,
     requested_generation: u64,
+    requested_tick: u64,
     source: SnapshotSource,
 }
 
@@ -77,7 +78,7 @@ struct RunningSave {
     normalized_name: Option<String>,
     explicit: bool,
     phase: Arc<AtomicU8>,
-    cancel: Arc<AtomicBool>,
+    cancel: Arc<AtomicU8>,
     handle: JoinHandle<Result<SaveJobOutcome, SaveJobError>>,
 }
 
@@ -166,10 +167,11 @@ impl PendingSaveJobs {
 
     /// Cancels queued saves with `id` and signals the running save when it
     /// matches. Queued cancellations never touch disk and are never reported
-    /// as committed. A running save honors the flag at the commit point —
-    /// the rename inside the writer — so a cancel racing the encode still
-    /// prevents installation; once the rename begins the job runs to
-    /// completion.
+    /// as committed. A running save honors the request at the atomic commit
+    /// point inside the writer: the cancellation and the worker's commit
+    /// claim race on a single compare-exchange, so either the cancel wins
+    /// (no commit) or the worker already claimed committing (cancel reports
+    /// false — too late — instead of a false success).
     pub fn cancel(&mut self, id: &SaveId) -> bool {
         let mut cancelled = false;
         let before = self.queue.len();
@@ -179,8 +181,20 @@ impl PendingSaveJobs {
             && &running.id == id
             && !running.handle.is_finished()
         {
-            running.cancel.store(true, Ordering::Relaxed);
-            cancelled = true;
+            // ACTIVE -> REQUESTED wins; REQUESTED (already asked) still
+            // counts; COMMITTING means the worker already claimed the
+            // commit point and the cancel is too late.
+            match running.cancel.compare_exchange(
+                SAVE_CANCEL_ACTIVE,
+                SAVE_CANCEL_REQUESTED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => cancelled = true,
+                Err(SAVE_CANCEL_REQUESTED) => cancelled = true,
+                Err(SAVE_CANCEL_COMMITTING) => {}
+                Err(_) => {}
+            }
         }
         cancelled
     }
@@ -216,10 +230,11 @@ impl PendingSaveJobs {
             normalized_name,
             explicit,
             requested_generation,
+            requested_tick,
             source,
         } = queued;
         let phase = Arc::new(AtomicU8::new(SaveJobPhase::Queued.encode()));
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(AtomicU8::new(SAVE_CANCEL_ACTIVE));
         let worker_phase = Arc::clone(&phase);
         let worker_cancel = Arc::clone(&cancel);
         let worker_id = id.clone();
@@ -231,6 +246,7 @@ impl PendingSaveJobs {
             run_save_worker(
                 request_id,
                 requested_generation,
+                requested_tick,
                 worker_id,
                 worker_kind,
                 worker_name,
@@ -302,6 +318,7 @@ pub(crate) struct CompletedJob {
 pub(crate) struct SaveJobOutcome {
     pub request_id: PersistenceRequestId,
     pub requested_generation: u64,
+    pub requested_tick: u64,
     pub snapshot_world_generation: u64,
     pub snapshot_tick: u64,
     pub snapshot_lock_wait_ms: f64,
@@ -357,6 +374,10 @@ pub(crate) fn queue_save(
     }
     let submission_start = Instant::now();
     let requested_generation = sim.replacement_revision();
+    // The completed tick at admission: a queued request preserves this exact
+    // identity and goes stale if the world ticks before the worker starts,
+    // instead of silently capturing a later tick.
+    let requested_tick = sim.read().tick_count();
     let source = sim.snapshot_source();
     let request_id = PersistenceRequestId::next();
     pending.queue.push_back(QueuedSave {
@@ -368,6 +389,7 @@ pub(crate) fn queue_save(
         normalized_name,
         explicit,
         requested_generation,
+        requested_tick,
         source,
     });
     pending.start_next();
@@ -384,13 +406,14 @@ pub(crate) fn queue_save(
 fn run_save_worker(
     request_id: PersistenceRequestId,
     requested_generation: u64,
+    requested_tick: u64,
     worker_id: SaveId,
     worker_kind: SaveKind,
     worker_name: String,
     worker_path: PathBuf,
     source: SnapshotSource,
     phase: Arc<AtomicU8>,
-    cancel: Arc<AtomicBool>,
+    cancel: Arc<AtomicU8>,
     shutdown: Arc<AtomicBool>,
 ) -> Result<SaveJobOutcome, SaveJobError> {
     let worker_start = Instant::now();
@@ -405,17 +428,22 @@ fn run_save_worker(
         .map_err(|_| SaveJobError::LockPoisoned)?;
     let snapshot_lock_wait_ms = lock_wait_start.elapsed().as_secs_f64() * 1000.0;
     let lock_acquired = Instant::now();
-    // Enforce the requested world identity: a world installed while this
-    // request waited in the queue mutates the same lock, so capturing now
-    // would mix the requested tick identity with another world's bytes. The
-    // stale request is discarded with the previous save intact instead.
+    // Enforce the requested world and tick identity: a world installed
+    // while this request waited mutates the same lock, and a tick that
+    // advanced while queued means the requested completed tick is no longer
+    // capturable. Capturing now would mix the requested identity with
+    // another world's bytes or a later tick. The stale request is discarded
+    // with the previous save intact instead.
     let capture_generation = source.generation.load(Ordering::Acquire);
     if capture_generation != requested_generation {
         return Err(SaveJobError::Stale);
     }
+    if sim.tick_count() != requested_tick {
+        return Err(SaveJobError::Stale);
+    }
     let capture_activity = SnapshotCaptureActivity::begin(&source.active_captures);
     let blocked_before = source.blocked_fixed_ticks.load(Ordering::Relaxed);
-    if cancel.load(Ordering::Relaxed) {
+    if cancel.load(Ordering::Relaxed) != SAVE_CANCEL_ACTIVE {
         return Err(SaveJobError::Cancelled);
     }
     let snapshot_start = Instant::now();
@@ -436,7 +464,7 @@ fn run_save_worker(
         .blocked_fixed_ticks
         .load(Ordering::Relaxed)
         .saturating_sub(blocked_before);
-    if cancel.load(Ordering::Relaxed) {
+    if cancel.load(Ordering::Relaxed) != SAVE_CANCEL_ACTIVE {
         return Err(SaveJobError::Cancelled);
     }
     let metadata = SaveMetadata {
@@ -450,10 +478,10 @@ fn run_save_worker(
     };
     phase.store(SaveJobPhase::Encoding.encode(), Ordering::Relaxed);
     // A pre-write cancellation avoids starting the writer; a cancel racing
-    // the encode is still honored at the rename inside it. Once the rename
-    // begins the job runs to completion, and post-commit cleanup failures
-    // never roll back a committed save (see `container`).
-    if cancel.load(Ordering::Relaxed) {
+    // the encode loses or wins the atomic commit claim inside it. Once the
+    // worker claims committing, the job runs to completion, and post-commit
+    // cleanup failures never roll back a committed save (see `container`).
+    if cancel.load(Ordering::Relaxed) != SAVE_CANCEL_ACTIVE {
         return Err(SaveJobError::Cancelled);
     }
     phase.store(SaveJobPhase::Writing.encode(), Ordering::Relaxed);
@@ -481,6 +509,7 @@ fn run_save_worker(
     Ok(SaveJobOutcome {
         request_id,
         requested_generation,
+        requested_tick,
         snapshot_world_generation: snapshot_identity.world_generation,
         snapshot_tick: snapshot_identity.tick,
         snapshot_lock_wait_ms,
@@ -560,7 +589,7 @@ mod tests {
             normalized_name: Some(id.into()),
             explicit: true,
             phase: Arc::new(AtomicU8::new(SaveJobPhase::Capturing.encode())),
-            cancel: Arc::new(AtomicBool::new(false)),
+            cancel: Arc::new(AtomicU8::new(SAVE_CANCEL_ACTIVE)),
             handle,
         };
         (running, release_tx)
@@ -601,6 +630,7 @@ mod tests {
     fn queued_saves_stay_within_documented_bounds() {
         let sim = SimResource::new(factory_sim::Simulation::new_test_world(7));
         let source = sim.snapshot_source();
+        let requested_tick = sim.read().tick_count();
         let mut pending = PendingSaveJobs::default();
         for index in 0..MAX_QUEUED_SAVES {
             pending.queue.push_back(QueuedSave {
@@ -612,6 +642,7 @@ mod tests {
                 normalized_name: None,
                 explicit: true,
                 requested_generation: 0,
+                requested_tick,
                 source: SnapshotSource {
                     simulation: Arc::clone(&source.simulation),
                     generation: Arc::clone(&source.generation),
@@ -646,6 +677,7 @@ mod tests {
                 normalized_name: None,
                 explicit: true,
                 requested_generation: 0,
+                requested_tick: sim.read().tick_count(),
                 source,
             }]),
         };
@@ -656,8 +688,39 @@ mod tests {
             pending
                 .running
                 .as_ref()
-                .is_some_and(|job| job.cancel.load(Ordering::Relaxed)),
+                .is_some_and(|job| job.cancel.load(Ordering::Relaxed) == SAVE_CANCEL_REQUESTED),
             "running cancellation must signal the worker before commit"
+        );
+        release.send(()).unwrap();
+        pending.join_running();
+    }
+
+    #[test]
+    fn cancel_after_commit_claim_reports_too_late() {
+        // The worker claims ACTIVE -> COMMITTING with a single
+        // compare-exchange before the rename. A cancel arriving afterwards
+        // must report false (too late) instead of a false success for a
+        // save that is about to commit.
+        let (running, release) = test_running_save("committing");
+        running
+            .cancel
+            .store(SAVE_CANCEL_COMMITTING, Ordering::Relaxed);
+        let mut pending = PendingSaveJobs {
+            running: Some(running),
+            queue: VecDeque::new(),
+            shutdown: Arc::new(AtomicBool::new(false)),
+        };
+        assert!(
+            !pending.cancel(&SaveId::new("committing")),
+            "cancel after the commit claim must report too late, not success"
+        );
+        // The flag stays COMMITTING: the worker owns the commit point.
+        assert_eq!(
+            pending
+                .running
+                .as_ref()
+                .map(|job| job.cancel.load(Ordering::Relaxed)),
+            Some(SAVE_CANCEL_COMMITTING)
         );
         release.send(()).unwrap();
         pending.join_running();
@@ -670,6 +733,7 @@ mod tests {
         let sim = SimResource::new(factory_sim::Simulation::new_test_world(7));
         let source = sim.snapshot_source();
         let requested = source.generation.load(Ordering::Acquire);
+        let requested_tick = sim.read().tick_count();
         let phase = Arc::new(AtomicU8::new(SaveJobPhase::Queued.encode()));
         let worker_phase = Arc::clone(&phase);
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -678,13 +742,14 @@ mod tests {
             run_save_worker(
                 PersistenceRequestId::next(),
                 requested,
+                requested_tick,
                 SaveId::new("shutdown-probe"),
                 SaveKind::Quicksave,
                 "Shutdown probe".into(),
                 std::env::temp_dir().join("factory-shutdown-probe.factsim"),
                 source,
                 worker_phase,
-                Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicU8::new(SAVE_CANCEL_ACTIVE)),
                 worker_shutdown,
             )
         });
@@ -739,7 +804,7 @@ mod tests {
             normalized_name: None,
             explicit: true,
             phase: Arc::new(AtomicU8::new(SaveJobPhase::Capturing.encode())),
-            cancel: Arc::new(AtomicBool::new(false)),
+            cancel: Arc::new(AtomicU8::new(SAVE_CANCEL_ACTIVE)),
             handle,
         });
         let start = Instant::now();
@@ -769,9 +834,10 @@ mod tests {
         }
         let source = sim.snapshot_source();
         let requested = source.generation.load(Ordering::Acquire);
+        let requested_tick = sim.read().tick_count();
         let phase = Arc::new(AtomicU8::new(SaveJobPhase::Queued.encode()));
         let worker_phase = Arc::clone(&phase);
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(AtomicU8::new(SAVE_CANCEL_ACTIVE));
         let worker_cancel = Arc::clone(&cancel);
         let root =
             std::env::temp_dir().join(format!("factory-mid-encode-cancel-{}", std::process::id()));
@@ -781,6 +847,7 @@ mod tests {
             run_save_worker(
                 PersistenceRequestId::next(),
                 requested,
+                requested_tick,
                 SaveId::new("probe"),
                 SaveKind::Quicksave,
                 "Probe".into(),
@@ -805,7 +872,7 @@ mod tests {
             SaveJobPhase::Writing,
             "worker finished before the cancel could land mid-encode"
         );
-        cancel.store(true, Ordering::Relaxed);
+        cancel.store(SAVE_CANCEL_REQUESTED, Ordering::Relaxed);
         let result = handle.join().expect("save worker panicked");
         assert!(
             matches!(result, Err(SaveJobError::Cancelled)),
@@ -814,6 +881,53 @@ mod tests {
         assert!(
             !committed_path.exists(),
             "a cancelled save must not install its target"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn queued_save_goes_stale_when_tick_advances_while_waiting() {
+        // A save accepted at tick N that waits while the same world advances
+        // to N+1 must not silently capture the later tick: the requested
+        // completed-tick identity is no longer capturable, so the worker
+        // reports Stale with the previous save intact.
+        let mut sim = SimResource::new(factory_sim::Simulation::new_test_world(7));
+        let source = sim.snapshot_source();
+        let requested_generation = source.generation.load(Ordering::Acquire);
+        let requested_tick = sim.read().tick_count();
+        // The world ticks once after admission (e.g. while another save
+        // occupied the worker), so the requested tick is gone.
+        sim.write_for_tests().tick();
+        assert_ne!(
+            sim.read().tick_count(),
+            requested_tick,
+            "the test must advance the tick after admission"
+        );
+        let root = std::env::temp_dir().join(format!(
+            "factory-tick-stale-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let result = run_save_worker(
+            PersistenceRequestId::next(),
+            requested_generation,
+            requested_tick,
+            SaveId::new("tick-stale"),
+            SaveKind::Quicksave,
+            "Tick stale".into(),
+            root.join("probe.factsim"),
+            source,
+            Arc::new(AtomicU8::new(SaveJobPhase::Queued.encode())),
+            Arc::new(AtomicU8::new(SAVE_CANCEL_ACTIVE)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        assert!(
+            matches!(result, Err(SaveJobError::Stale)),
+            "a queued save whose tick advanced must go stale, got {result:?}"
+        );
+        assert!(
+            !root.join("probe.factsim").exists(),
+            "a stale save must not install its target"
         );
         let _ = std::fs::remove_dir_all(&root);
     }

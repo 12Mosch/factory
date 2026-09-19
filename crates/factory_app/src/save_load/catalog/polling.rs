@@ -56,14 +56,21 @@ pub(crate) fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) -> b
         // still resolved to the same file instance. Stable identity defeats
         // same-length replacements that preserve mtime; uncertified
         // outcomes always take the retry path below. Payload-derived
-        // verdicts additionally require a stable fingerprint: a missing one
-        // means the pre/post decode observations disagreed (e.g. an
-        // in-place rewrite mid-validation), so the verdict is not tied to
-        // one stable byte sequence. Header-only verdicts (oversized or
-        // unloadable headers, which never decode) install certified. The
+        // verdicts (compatible, migratable, and corruption — all produced
+        // by decoding bytes) additionally require a stable fingerprint: a
+        // missing one means the pre/post decode observations disagreed
+        // (e.g. an in-place rewrite mid-validation), so the verdict is not
+        // tied to one stable byte sequence. Header-only verdicts (oversized
+        // or unloadable headers, which never decode) install certified. The
         // writer epoch rejects verdicts overtaken by our own save commits
         // between certification and installation.
-        let payload_stable = outcome.fingerprint.is_some() || !outcome.compatibility.can_load();
+        let payload_stable = outcome.fingerprint.is_some()
+            || !matches!(
+                outcome.compatibility,
+                SaveCompatibility::Compatible
+                    | SaveCompatibility::MigratableSaveFormat { .. }
+                    | SaveCompatibility::CorruptOrTruncated
+            );
         if outcome.path_confirmed_current
             && outcome.commit_epoch == save_artifact_epoch(&outcome.path)
             && outcome.compatibility != SaveCompatibility::ValidationPending

@@ -32,12 +32,21 @@ use std::thread::{self, JoinHandle};
 /// open, read, stat, and recovery mutation.
 #[derive(Resource, Default)]
 pub struct PendingCatalogScan {
-    worker: Option<JoinHandle<Result<Vec<SaveEntry>, String>>>,
+    worker: Option<RunningCatalogScan>,
     requested: bool,
-    /// Catalog mutation epoch observed by the latest request. A scan that
-    /// lands after a mutation (e.g. a deletion) is dropped unseen so its
-    /// snapshot cannot resurrect removed entries.
+    /// Catalog mutation epoch for a requested follow-up scan. The running
+    /// worker keeps its own epoch (see [`RunningCatalogScan`]): a newer
+    /// request must never relabel an in-flight scan, or a stale snapshot
+    /// could pass the freshness check and resurrect removed entries.
     requested_epoch: u64,
+}
+
+/// One in-flight scan worker with the catalog mutation epoch it observed at
+/// spawn. Compared against the live epoch only when this specific worker
+/// lands, so a later request cannot re-tag it as current.
+struct RunningCatalogScan {
+    epoch: u64,
+    handle: JoinHandle<Result<Vec<SaveEntry>, String>>,
 }
 
 impl PendingCatalogScan {
@@ -46,20 +55,20 @@ impl PendingCatalogScan {
         self.worker.is_none() && !self.requested
     }
 
-    fn join_finished(&mut self) -> Option<Result<Vec<SaveEntry>, String>> {
+    fn join_finished(&mut self) -> Option<(u64, Result<Vec<SaveEntry>, String>)> {
         let finished = self
             .worker
             .as_ref()
-            .is_some_and(|worker| worker.is_finished());
+            .is_some_and(|worker| worker.handle.is_finished());
         if !finished {
             return None;
         }
         let worker = self.worker.take().expect("worker checked");
-        Some(
-            worker
-                .join()
-                .unwrap_or_else(|_| Err("catalog scan worker panicked".into())),
-        )
+        let outcome = worker
+            .handle
+            .join()
+            .unwrap_or_else(|_| Err("catalog scan worker panicked".into()));
+        Some((worker.epoch, outcome))
     }
 }
 
@@ -73,39 +82,44 @@ impl Drop for PendingCatalogScan {
         // abandoning them equals a crash mid-recovery, which the next
         // startup's recovery handles.
         if let Some(worker) = self.worker.take()
-            && worker.is_finished()
+            && worker.handle.is_finished()
         {
-            let _ = worker.join();
+            let _ = worker.handle.join();
         }
     }
 }
 
 /// Requests a background catalog scan. Coalesces while a scan is running —
-/// the running scan already observes the latest directory state, and a
-/// follow-up scan starts when it lands if anything requested one meanwhile.
-/// Records the catalog mutation epoch so a scan overtaken by a deletion is
-/// dropped on landing instead of resurrecting the entry.
+/// a follow-up scan starts when the running one lands if anything requested
+/// one meanwhile. The running worker keeps the epoch it started with; a
+/// newer request records only the follow-up epoch and never relabels the
+/// in-flight scan, so a scan overtaken by a mutation is dropped on landing
+/// instead of resurrecting removed entries.
 pub(crate) fn request_catalog_scan(
     config: &SaveLoadConfig,
     pending: &mut PendingCatalogScan,
     epoch: u64,
 ) {
-    pending.requested_epoch = epoch;
     if pending.worker.is_some() {
         pending.requested = true;
+        pending.requested_epoch = epoch;
         return;
     }
     let root_dir = config.root_dir.clone();
     let slot_count = config.autosave_slot_count;
     pending.requested = false;
-    pending.worker = Some(thread::spawn(move || {
-        scan_catalog_unvalidated(&SaveLoadConfig {
-            root_dir,
-            autosave_interval_ticks: 0,
-            autosave_slot_count: slot_count,
-        })
-        .map(|(entries, _)| entries)
-    }));
+    pending.requested_epoch = epoch;
+    pending.worker = Some(RunningCatalogScan {
+        epoch,
+        handle: thread::spawn(move || {
+            scan_catalog_unvalidated(&SaveLoadConfig {
+                root_dir,
+                autosave_interval_ticks: 0,
+                autosave_slot_count: slot_count,
+            })
+            .map(|(entries, _)| entries)
+        }),
+    });
 }
 
 /// Installs a finished background scan and queues bounded background payload
@@ -117,19 +131,19 @@ pub(crate) fn poll_catalog_scan(
     catalog: &mut SaveCatalog,
     status: &mut SaveLoadStatus,
 ) {
-    let Some(outcome) = pending.join_finished() else {
+    let Some((worker_epoch, outcome)) = pending.join_finished() else {
         return;
     };
     let mut follow_up = pending.requested;
     match outcome {
-        Ok(entries) if pending.requested_epoch == catalog.scan_epoch => {
+        Ok(entries) if worker_epoch == catalog.scan_epoch => {
             install_scan_entries(catalog, entries);
         }
         Ok(_) => {
-            // A catalog mutation (e.g. a deletion) landed while the scan
-            // was in flight: the snapshot predates it and may resurrect
-            // removed entries, so it is dropped unseen and a follow-up
-            // scan re-observes the directory.
+            // A catalog mutation (e.g. a deletion) landed while this
+            // specific worker was in flight: the snapshot predates it and
+            // may resurrect removed entries, so it is dropped unseen and a
+            // follow-up scan re-observes the directory.
             follow_up = true;
         }
         Err(error) => {
@@ -397,7 +411,11 @@ mod tests {
         let mut pending = PendingCatalogScan::default();
         let mut status = SaveLoadStatus::default();
         // A scan requested before the deletion lands after it.
-        pending.worker = Some(thread::spawn(|| Ok(vec![stale])));
+        pending.worker = Some(RunningCatalogScan {
+            epoch: 0,
+            handle: thread::spawn(|| Ok(vec![stale])),
+        });
+        pending.requested = false;
         pending.requested_epoch = 0;
         catalog.remove(&id);
         // The stale snapshot must never become visible, including while
@@ -419,16 +437,101 @@ mod tests {
     }
 
     #[test]
+    fn newer_request_never_relabels_running_scan() {
+        // Scan A starts at epoch 0; a deletion bumps to 1; a second request
+        // arrives while A is still running. A must still land as epoch 0
+        // (dropped unseen) instead of being relabeled to 1 and accepted.
+        let dir = std::env::temp_dir().join(format!(
+            "factory-scan-relabel-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let config = SaveLoadConfig {
+            root_dir: dir.clone(),
+            autosave_interval_ticks: 300,
+            autosave_slot_count: 5,
+        };
+        let id = SaveId::new("deleted");
+        let metadata = fallback_metadata(id.clone(), SaveKind::Named, "Deleted".into(), 0);
+        let path = dir.join("deleted.factsim");
+        let stale = SaveEntry {
+            id: id.clone(),
+            metadata: metadata.clone(),
+            compatibility: SaveCompatibility::Compatible,
+            metadata_available: true,
+            path: path.clone(),
+            inspected: None,
+        };
+        let mut catalog = SaveCatalog::default();
+        catalog.entries.push(SaveEntry {
+            id: id.clone(),
+            metadata,
+            compatibility: SaveCompatibility::ValidationPending,
+            metadata_available: true,
+            path,
+            inspected: None,
+        });
+        catalog.scan_epoch = 0;
+        let mut pending = PendingCatalogScan::default();
+        // Scan A starts at epoch 0 and blocks until released.
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        pending.worker = Some(RunningCatalogScan {
+            epoch: 0,
+            handle: thread::spawn(move || {
+                let _ = release_rx.recv();
+                Ok(vec![stale])
+            }),
+        });
+        pending.requested = false;
+        pending.requested_epoch = 0;
+        // Deletion bumps the epoch, then a second scan request arrives
+        // while A is still running: it must record only the follow-up.
+        catalog.remove(&id);
+        assert_eq!(catalog.scan_epoch, 1);
+        request_catalog_scan(&config, &mut pending, catalog.scan_epoch);
+        assert!(
+            pending.requested,
+            "a scan arriving during a running worker must queue a follow-up"
+        );
+        assert_eq!(
+            pending.worker.as_ref().map(|worker| worker.epoch),
+            Some(0),
+            "the running scan must keep its original epoch"
+        );
+        // Release A: its stale snapshot lands as epoch 0 vs live epoch 1,
+        // so it is dropped unseen and a follow-up re-observes.
+        drop(release_tx);
+        let mut status = SaveLoadStatus::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !pending.is_empty() {
+            poll_catalog_scan(&config, &mut pending, &mut catalog, &mut status);
+            assert!(
+                catalog.entries.is_empty(),
+                "a relabeled stale scan resurrected the deleted entry"
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "catalog scan did not settle"
+            );
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(catalog.entries.is_empty());
+    }
+
+    #[test]
     fn drop_detaches_unfinished_scan_without_waiting() {
         use std::time::{Duration, Instant};
         // The worker blocks until the test releases it, simulating a scan
         // stuck on a held artifact lock or a slow filesystem at shutdown.
         let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
         let mut pending = PendingCatalogScan::default();
-        pending.worker = Some(thread::spawn(move || {
-            let _ = release_rx.recv();
-            Ok(Vec::new())
-        }));
+        pending.worker = Some(RunningCatalogScan {
+            epoch: 0,
+            handle: thread::spawn(move || {
+                let _ = release_rx.recv();
+                Ok(Vec::new())
+            }),
+        });
         let start = Instant::now();
         drop(pending);
         // Teardown must not stall on the unfinished worker.

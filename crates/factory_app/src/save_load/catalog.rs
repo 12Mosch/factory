@@ -1213,6 +1213,77 @@ mod tests {
     }
 
     #[test]
+    fn unstable_corrupt_verdict_stays_pending() {
+        // A mixed-read decode can produce CorruptOrTruncated with no stable
+        // fingerprint while the path still names the same instance. It is
+        // payload-derived like a compatible verdict, so it must stay pending
+        // for retry instead of freezing as permanent corruption.
+        let dir = std::env::temp_dir().join(format!(
+            "factory-unstable-corrupt-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        let unstable = CatalogValidationOutcome {
+            path: path.clone(),
+            compatibility: SaveCompatibility::CorruptOrTruncated,
+            fingerprint: None,
+            attempt: MAX_CATALOG_VALIDATION_RETRIES,
+            path_confirmed_current: true,
+            commit_epoch: save_artifact_epoch(&path),
+        };
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+                inspected: None,
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: vec![CatalogValidationJob {
+                path: path.clone(),
+                metadata: SaveFileMetadataFingerprint {
+                    len: 0,
+                    modified: None,
+                    identity: None,
+                },
+                cancel: Arc::new(AtomicBool::new(false)),
+                handle: thread::spawn(|| unstable),
+            }],
+        };
+
+        drain_validation_jobs(&mut catalog);
+
+        assert_eq!(catalog.validation_jobs.len(), 0);
+        assert!(catalog.validation_queue.is_empty());
+        assert!(
+            !catalog.validation_cache.contains_key(&path),
+            "an unstable corruption verdict must not populate the cache"
+        );
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::ValidationPending,
+            "an unstable certified corruption verdict must keep the entry pending"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn writer_commit_after_certification_invalidates_outcome() {
         // A save committed by our own writer between worker certification
         // and frame installation bumps the artifact epoch. The verdict

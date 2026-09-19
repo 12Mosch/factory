@@ -1560,6 +1560,63 @@ fn stale_load_after_new_world_is_discarded() {
 }
 
 #[test]
+fn cancelled_latest_load_clears_loading_status() {
+    use factory_app::save_load::SaveLoadStatusKind;
+    let mut app = test_app(Duration::ZERO, "cancelled_load_status");
+    // Large payload so decoding spans frames: the new world lands while the
+    // worker is still in flight, exercising the cancellation path instead
+    // of a generation-mismatch on an already-finished worker.
+    generate_large_world(&mut app);
+    create_named_save(&mut app, "Base");
+    drain_persistence_jobs(&mut app);
+    let base_id = app
+        .world()
+        .resource::<SaveCatalog>()
+        .entries()
+        .iter()
+        .find(|entry| entry.metadata.display_name == "Base")
+        .unwrap()
+        .id
+        .clone();
+    app.world_mut().resource_mut::<SaveLoadWindowState>().open = true;
+    app.world_mut().resource_mut::<SaveLoadWindowState>().tab = SaveLoadTab::Load;
+    app.update();
+    press_entry(&mut app, &base_id, SaveEntryAction::Load);
+    app.update();
+    assert!(!app.world().resource::<PendingLoadJobs>().is_empty());
+    assert_eq!(
+        app.world().resource::<SaveLoadStatus>().message.as_deref(),
+        Some("Loading Base...")
+    );
+    // Start a new world while decoding: mirrors the world-setup system
+    // ordering (replace, then cancel pending loads).
+    let newer_seed = 918_273;
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .replace(factory_sim::Simulation::new_test_world(newer_seed))
+        .expect("new world should install");
+    app.world_mut()
+        .resource_mut::<PendingLoadJobs>()
+        .cancel_all();
+    app.update();
+    drain_load_jobs(&mut app);
+    assert_eq!(
+        app.world().resource::<SimResource>().read().seed(),
+        newer_seed,
+        "the cancelled load must not install over the new world"
+    );
+    let status = app.world().resource::<SaveLoadStatus>().clone();
+    assert!(
+        status
+            .message
+            .as_deref()
+            .is_none_or(|message| !message.contains("Loading")),
+        "a cancelled latest load must release its Loading status, got: {status:?}"
+    );
+    assert_ne!(status.kind, SaveLoadStatusKind::Error);
+}
+
+#[test]
 fn newest_queued_load_wins() {
     let mut app = test_app(Duration::ZERO, "newest_load_wins");
     // The first target is large so its worker spends many frames decoding.

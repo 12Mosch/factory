@@ -26,10 +26,12 @@
 //!
 //! * Saves to the same target serialize in FIFO request order, including
 //!   repeated named overwrites of one save.
-//! * Each save captures exactly one completed tick of the requested world. A
-//!   request queued while a different world is installed is discarded as
-//!   stale instead of capturing another world's bytes, so requested
-//!   completed-tick identity is never mixed across worlds.
+//! * Each save captures exactly one completed tick of the requested world,
+//!   pinned at admission. A request queued while a different world is
+//!   installed, or while the same world advances past the requested tick,
+//!   is discarded as stale instead of capturing another world's bytes or a
+//!   later tick, so requested completed-tick identity is never mixed across
+//!   worlds or ticks.
 //! * Each load result carries its request id and the world generation observed
 //!   when its worker started. A result installs only when its request is still
 //!   the newest and no newer world installation happened after the worker
@@ -49,6 +51,17 @@
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Save cancellation lifecycle for the atomic commit gate. The worker claims
+/// the commit point with a single compare-exchange, so either cancellation
+/// wins (the worker aborts before the rename) or the worker wins (a later
+/// `cancel` observes `COMMITTING` and cannot report successful cancellation
+/// for a save that is about to commit).
+pub const SAVE_CANCEL_ACTIVE: u8 = 0;
+/// Cancellation was requested before the commit point; the worker aborts.
+pub const SAVE_CANCEL_REQUESTED: u8 = 1;
+/// The worker claimed the commit point; cancellation is too late.
+pub const SAVE_CANCEL_COMMITTING: u8 = 2;
 
 /// At most one background save encoder at a time.
 pub const MAX_SAVE_WORKERS: usize = 1;
@@ -185,7 +198,8 @@ pub enum SaveJobError {
     Io(String),
     /// Cancelled before commit; never reported as committed.
     Cancelled,
-    /// A newer world was installed while waiting; result discarded.
+    /// A newer world was installed, or the same world ticked past the
+    /// requested tick, while waiting; result discarded.
     Stale,
 }
 
@@ -205,7 +219,7 @@ impl fmt::Display for SaveJobError {
             Self::Encode(detail) => write!(formatter, "{detail}"),
             Self::Io(detail) => write!(formatter, "save I/O failed: {detail}"),
             Self::Cancelled => write!(formatter, "save cancelled before commit"),
-            Self::Stale => write!(formatter, "save superseded by a newer world"),
+            Self::Stale => write!(formatter, "save superseded by a newer world or tick"),
         }
     }
 }

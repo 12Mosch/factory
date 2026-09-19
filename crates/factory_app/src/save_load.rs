@@ -356,6 +356,7 @@ pub(crate) fn poll_save_jobs(
                 // the requested world and tick.
                 debug_assert_eq!(outcome.request_id, job.request_id);
                 let _ = outcome.requested_generation;
+                let _ = outcome.requested_tick;
                 // Install the committed save directly so admission sees it
                 // before the next background scan lands: a repeated
                 // same-name request offers overwrite confirmation instead
@@ -409,8 +410,10 @@ pub(crate) fn poll_save_jobs(
             }
             Err(SaveJobError::Stale) => {
                 if job.explicit {
-                    status.message =
-                        Some(format!("{} superseded by a newer world.", job.display_name));
+                    status.message = Some(format!(
+                        "{} superseded by a newer world or tick.",
+                        job.display_name
+                    ));
                     status.kind = SaveLoadStatusKind::Info;
                     status.last_completed_id = None;
                 }
@@ -605,7 +608,10 @@ pub(crate) fn poll_load_jobs(
                     // A newer world was installed after this worker started
                     // (e.g. new-world creation). Discard without touching it.
                     // Load installs rebase queued observations, so a queued
-                    // newer load is not stale after an older install.
+                    // newer load is not stale after an older install. The
+                    // orphaned "Loading..." status is released when this was
+                    // the latest request and nothing remains.
+                    clear_loading_status_if_idle(&pending, &mut status, &completed.display_name);
                     continue;
                 }
                 let ready = loads::ReadyLoad {
@@ -621,7 +627,12 @@ pub(crate) fn poll_load_jobs(
             }
             Err(LoadJobError::Cancelled | LoadJobError::Stale) => {
                 // Cancellation and superseding never touch the world and
-                // never report success.
+                // never report success. A terminal cancellation of the
+                // latest request must still release its "Loading..."
+                // status, or the manager keeps reporting a load forever
+                // after all jobs finish (e.g. new-world creation via
+                // `cancel_all`). Only messages this load owns are cleared.
+                clear_loading_status_if_idle(&pending, &mut status, &completed.display_name);
             }
             Err(LoadJobError::TransientIo(detail)) => {
                 set_error(
@@ -648,6 +659,29 @@ pub(crate) fn poll_load_jobs(
                 );
             }
         }
+    }
+}
+
+/// Releases a finished load's "Loading..." status when nothing remains.
+/// Only clears messages the given load owns — its `Loading {name}...` or the
+/// generic install-wait message — with an `Info` kind, so a newer save or
+/// load message is never wiped. Without this, cancelling the latest load
+/// (e.g. starting a new world mid-decode) leaves the manager reporting a
+/// load forever after all jobs finish.
+fn clear_loading_status_if_idle(
+    pending: &PendingLoadJobs,
+    status: &mut SaveLoadStatus,
+    display_name: &str,
+) {
+    if !pending.is_empty() || status.kind != SaveLoadStatusKind::Info {
+        return;
+    }
+    let owned = status.message.as_deref() == Some(&format!("Loading {display_name}..."))
+        || status.message.as_deref()
+            == Some("Loading... waiting for the save to release the world.");
+    if owned {
+        status.message = None;
+        status.last_completed_id = None;
     }
 }
 
@@ -678,6 +712,13 @@ fn restart_overtaken_load(
 /// Attempts boundary installation of one validated candidate. Returns true
 /// when resolved (installed or terminally rejected) and false when the
 /// simulation was busy and the candidate was retained for retry.
+///
+/// The artifact lock is held across the overtaken check and the world
+/// installation, so a save commit cannot land between them: our writer bumps
+/// the artifact epoch only while holding that lock. When the lock itself is
+/// held (a save encoding or a scan in recovery), installation defers without
+/// blocking the frame and retries next frame, then rechecks freshness under
+/// the lock.
 fn install_ready_load(
     pending: &mut PendingLoadJobs,
     status: &mut SaveLoadStatus,
@@ -685,11 +726,24 @@ fn install_ready_load(
     state: &mut LoadState,
     ready: loads::ReadyLoad,
 ) -> bool {
+    let Some(_artifact_guard) = container::try_acquire_save_artifact_lock() else {
+        // A save may be about to commit: retain and recheck next frame
+        // instead of installing over it or stalling the frame.
+        let waiting = status.kind != SaveLoadStatusKind::Error;
+        pending.retain_ready(ready);
+        if waiting {
+            status.message = Some("Loading... waiting for the save to release the world.".into());
+            status.kind = SaveLoadStatusKind::Info;
+        }
+        return false;
+    };
     // A save committed after the worker opened its handle replaces the
     // target with bytes the candidate never decoded. Installing would roll
     // the world back, so restart the request instead: quickload converges
-    // on the committed bytes once saves settle.
+    // on the committed bytes once saves settle. Checked under the artifact
+    // lock, so no commit can land before the installation below.
     if ready.is_overtaken() {
+        drop(_artifact_guard);
         let observed = if state.sim.is_initialized() {
             state.sim.replacement_revision()
         } else {
@@ -733,11 +787,17 @@ fn install_ready_load(
     let candidate_player = candidate.player_tile;
     let candidate_path = candidate.path.clone();
     let candidate_epoch = candidate.artifact_epoch;
-    // One atomic step: `install` swaps the world and publishes the new
-    // generation under a single write guard, and returns the candidate on
-    // contention so a busy simulation retains it for retry instead of
+    // Two nested atomic steps: the artifact guard (held since the overtaken
+    // check) blocks our writer from committing between the check and this
+    // `install`, which itself swaps the world and publishes the new
+    // generation under a single write guard. Contention returns the
+    // candidate so a busy simulation retains it for retry instead of
     // dropping a validated world.
-    match state.sim.install(candidate.simulation) {
+    let installed = state.sim.install(candidate.simulation);
+    // The world is swapped (or the attempt resolved); presentation reset
+    // needs no artifact exclusion.
+    drop(_artifact_guard);
+    match installed {
         Ok(()) => {
             enter_swapped_world(state, candidate_tick, candidate_player);
             pending.note_installed(request_id);
@@ -929,6 +989,50 @@ mod tests {
         assert!(pending.latest_request().is_some());
         assert_eq!(status.message.as_deref(), Some("Loading Quicksave..."),);
         assert_eq!(status.kind, SaveLoadStatusKind::Info);
+    }
+
+    #[test]
+    fn cancelled_latest_load_releases_its_loading_status() {
+        let pending = PendingLoadJobs::default();
+        let mut status = SaveLoadStatus {
+            message: Some("Loading Base...".into()),
+            kind: SaveLoadStatusKind::Info,
+            last_completed_id: None,
+        };
+        clear_loading_status_if_idle(&pending, &mut status, "Base");
+        assert!(
+            status.message.is_none(),
+            "a terminal latest load must not leave its Loading status behind, got: {status:?}"
+        );
+    }
+
+    #[test]
+    fn loading_status_clearing_never_wipes_newer_messages() {
+        let pending = PendingLoadJobs::default();
+        // Another load's message is not owned by this completion.
+        let mut status = SaveLoadStatus {
+            message: Some("Loading Rescue...".into()),
+            kind: SaveLoadStatusKind::Info,
+            last_completed_id: None,
+        };
+        clear_loading_status_if_idle(&pending, &mut status, "Base");
+        assert_eq!(status.message.as_deref(), Some("Loading Rescue..."));
+        // Error statuses are never cleared.
+        let mut status = SaveLoadStatus {
+            message: Some("Loading Base...".into()),
+            kind: SaveLoadStatusKind::Error,
+            last_completed_id: None,
+        };
+        clear_loading_status_if_idle(&pending, &mut status, "Base");
+        assert_eq!(status.message.as_deref(), Some("Loading Base..."));
+        // Save messages are not loading messages.
+        let mut status = SaveLoadStatus {
+            message: Some("Saving Base...".into()),
+            kind: SaveLoadStatusKind::Info,
+            last_completed_id: None,
+        };
+        clear_loading_status_if_idle(&pending, &mut status, "Base");
+        assert_eq!(status.message.as_deref(), Some("Saving Base..."));
     }
 
     #[test]

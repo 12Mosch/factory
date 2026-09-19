@@ -1,3 +1,4 @@
+use super::lifecycle::{SAVE_CANCEL_ACTIVE, SAVE_CANCEL_COMMITTING};
 use super::{SaveId, SaveKind, SaveMetadata};
 use factory_sim::{
     RECORD_MAGIC, SAVE_HEADER_SIZE, SaveLimits, SaveLoadError, Simulation, SimulationSaveSnapshot,
@@ -6,7 +7,7 @@ use factory_sim::{
 use std::collections::BTreeMap;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Mutex, TryLockError};
 use std::time::{Duration, Instant};
 use std::{fs, str};
@@ -414,6 +415,20 @@ pub(crate) fn with_save_artifact_lock<T>(operation: impl FnOnce() -> T) -> T {
     operation()
 }
 
+/// Non-blocking acquisition for frame-side installation: returns `None` when
+/// the artifact lock is held (e.g. a save worker encoding or a scan worker
+/// in recovery) instead of stalling the frame. The caller retains its
+/// candidate and retries next frame. While the guard is held, no save commit
+/// can land, so the freshness check and the world installation under it are
+/// atomic with respect to our own writer.
+pub(crate) fn try_acquire_save_artifact_lock() -> Option<std::sync::MutexGuard<'static, ()>> {
+    match SAVE_ARTIFACT_LOCK.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(TryLockError::Poisoned(poison)) => Some(poison.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
+}
+
 /// Polling interval while waiting for the artifact lock with shutdown
 /// admission. Keeps teardown latency near-instant without busy-spinning
 /// against a holder doing real work.
@@ -464,7 +479,7 @@ pub(crate) fn write_save_snapshot(
     metadata: &SaveMetadata,
     snapshot: &SimulationSaveSnapshot,
     shutdown: &AtomicBool,
-    cancel: &AtomicBool,
+    cancel: &AtomicU8,
 ) -> Option<Result<StreamWriteMetrics, ContainerError>> {
     with_save_artifact_lock_shutdown_aware(shutdown, || {
         write_save_snapshot_locked(path, metadata, snapshot, SaveLimits::default(), cancel)
@@ -476,7 +491,7 @@ fn write_save_snapshot_locked(
     metadata: &SaveMetadata,
     snapshot: &SimulationSaveSnapshot,
     limits: SaveLimits,
-    cancel: &AtomicBool,
+    cancel: &AtomicU8,
 ) -> Result<StreamWriteMetrics, ContainerError> {
     let metadata_text = ron::ser::to_string(metadata)
         .map_err(|error| ContainerError::MetadataEncoding(error.to_string()))?;
@@ -531,7 +546,7 @@ fn write_save_bytes_locked(
 ) -> Result<(), ContainerError> {
     // The synchronous UI path is never cancelled; the worker path threads
     // its request flag through `write_save_snapshot_locked` instead.
-    let cancel = AtomicBool::new(false);
+    let cancel = AtomicU8::new(SAVE_CANCEL_ACTIVE);
     write_temporary_and_commit(
         path,
         |temp| {
@@ -559,7 +574,7 @@ fn write_save_bytes_locked(
 fn write_temporary_and_commit<T>(
     path: &Path,
     encode: impl FnOnce(&mut BufWriter<fs::File>) -> Result<T, ContainerError>,
-    cancel: &AtomicBool,
+    cancel: &AtomicU8,
 ) -> Result<T, ContainerError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -585,12 +600,24 @@ fn write_temporary_and_commit<T>(
         drop(temp);
         sync_parent_directory(path)?;
 
-        // The commit point: a cancel racing the encode is still honored
-        // here, before the rename makes the replacement visible. The
-        // error path below removes the temporary artifact, so a
-        // cancelled request leaves the previous save intact. Once the
-        // rename begins the operation counts as committed.
-        if cancel.load(Ordering::Relaxed) {
+        // The atomic commit point: the worker claims ACTIVE -> COMMITTING
+        // with a single compare-exchange before the rename makes the
+        // replacement visible. A cancel racing the encode wins
+        // (ACTIVE -> REQUESTED) and aborts here; once the worker claims
+        // committing, a later cancel observes COMMITTING and reports too
+        // late instead of a false success. The error path below removes
+        // the temporary artifact, so a cancelled request leaves the
+        // previous save intact. Once the rename begins the operation
+        // counts as committed.
+        if cancel
+            .compare_exchange(
+                SAVE_CANCEL_ACTIVE,
+                SAVE_CANCEL_COMMITTING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
             return Err(ContainerError::Cancelled);
         }
         let replaced = commit_temporary_file(path, &temp_path, &backup_path)?;
@@ -1209,7 +1236,7 @@ mod tests {
             &metadata,
             &snapshot,
             &AtomicBool::new(false),
-            &AtomicBool::new(false),
+            &AtomicU8::new(SAVE_CANCEL_ACTIVE),
         )
         .unwrap()
         .unwrap();
@@ -1244,7 +1271,7 @@ mod tests {
             &metadata("Copied"),
             &snapshot,
             &AtomicBool::new(false),
-            &AtomicBool::new(false),
+            &AtomicU8::new(SAVE_CANCEL_ACTIVE),
         )
         .unwrap()
         .unwrap();
@@ -1342,7 +1369,7 @@ mod tests {
             &metadata("Framing"),
             &snapshot,
             &AtomicBool::new(false),
-            &AtomicBool::new(false),
+            &AtomicU8::new(SAVE_CANCEL_ACTIVE),
         )
         .unwrap()
         .unwrap();
@@ -1354,7 +1381,7 @@ mod tests {
             ..SaveLimits::default()
         };
         let bounded = root.join("bounded.factsim");
-        let cancel = AtomicBool::new(false);
+        let cancel = AtomicU8::new(SAVE_CANCEL_ACTIVE);
         write_save_snapshot_locked(&bounded, &metadata("Framing"), &snapshot, exact, &cancel)
             .unwrap();
         assert_eq!(fs::read(&bounded).unwrap().len() as u64, total);
@@ -1445,7 +1472,7 @@ mod tests {
         let path = root.join("manual-test.factsim");
         write_save_bytes(&path, b"previous valid save").unwrap();
 
-        let cancel = AtomicBool::new(false);
+        let cancel = AtomicU8::new(SAVE_CANCEL_ACTIVE);
         let result: Result<(), ContainerError> = write_temporary_and_commit(
             &path,
             |writer| {
@@ -1476,14 +1503,15 @@ mod tests {
         ));
         let path = root.join("manual-test.factsim");
         let idle = AtomicBool::new(false);
-        write_save_snapshot(&path, &metadata("Original"), &snapshot, &idle, &idle)
+        let active = AtomicU8::new(SAVE_CANCEL_ACTIVE);
+        write_save_snapshot(&path, &metadata("Original"), &snapshot, &idle, &active)
             .unwrap()
             .unwrap();
         let previous = fs::read(&path).unwrap();
         // A cancel racing the encode is still honored at the commit point:
-        // the flag is already set here, which exercises the same check a
-        // mid-encode cancel hits before the rename.
-        let cancel = AtomicBool::new(true);
+        // the flag is already set here, which exercises the same atomic
+        // claim a mid-encode cancel hits before the rename.
+        let cancel = AtomicU8::new(crate::save_load::lifecycle::SAVE_CANCEL_REQUESTED);
         let result =
             write_save_snapshot(&path, &metadata("Replacement"), &snapshot, &idle, &cancel);
         assert!(matches!(result, Some(Err(ContainerError::Cancelled))));
@@ -1619,6 +1647,23 @@ mod tests {
         assert_eq!(decoded.schema_version, 1);
         assert_eq!(decoded.world_seed_label(), "Seed unknown");
         assert_eq!(payload, b"FACTSIM\0payload");
+    }
+
+    #[test]
+    fn try_acquire_defers_instead_of_blocking_on_held_lock() {
+        // Frame-side installation must never stall on the artifact lock:
+        // when a save worker or scan holds it, acquisition fails fast so
+        // the candidate is retained and rechecked next frame under the lock.
+        let _held = hold_save_artifact_lock_for_tests();
+        assert!(
+            try_acquire_save_artifact_lock().is_none(),
+            "installation must defer while the artifact lock is held"
+        );
+        drop(_held);
+        assert!(
+            try_acquire_save_artifact_lock().is_some(),
+            "installation must proceed once the artifact lock is free"
+        );
     }
 
     #[test]
