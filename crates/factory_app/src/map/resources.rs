@@ -117,6 +117,7 @@ pub(crate) struct MapDetailCacheKey {
     pub chunk_cursor: Option<ChunkCoord>,
     pub overlay_bits: u64,
     pub debug_reveal_all: bool,
+    pub world_seed: u64,
     pub reveal_revision: u64,
     pub topology_revision: u64,
     pub pollution_revision: u64,
@@ -303,6 +304,7 @@ mod tests {
             chunk_cursor: None,
             overlay_bits: overlays.enabled_bits(),
             debug_reveal_all: false,
+            world_seed: 0,
             reveal_revision: 0,
             topology_revision: 0,
             pollution_revision: 0,
@@ -504,6 +506,10 @@ pub struct MapLayerTextureCache {
     pub pixels: Option<Vec<u8>>,
     pub dirty_regions: MapTextureDirtyRegions,
     pub painted_chunks: BTreeMap<ChunkCoord, MapChunkPaintState>,
+    /// World seed painted into this layer. Fresh worlds share revision
+    /// counters, so the seed is the only signal that distinguishes a new
+    /// world from the previous one.
+    pub last_seed: Option<u64>,
     pub last_chunk_revision: u64,
     pub last_resource_revision: u64,
     /// Last terrain-write revision painted into this layer, so runtime tile

@@ -125,6 +125,7 @@ fn radar_reveal_marks_one_in_bounds_chunk_and_matches_full_render() {
         pixels: Some(initial.data),
         dirty_regions: Default::default(),
         painted_chunks: Default::default(),
+        last_seed: Some(sim.seed()),
         last_chunk_revision: sim.world().chunk_revision(),
         last_resource_revision: sim.world().resource_revision(),
         last_terrain_revision: sim.world().terrain_revision(),
@@ -257,6 +258,7 @@ fn assert_incremental_update_matches_full_render_after_streaming_chunk(
             pixels: Some(initial.data),
             dirty_regions: Default::default(),
             painted_chunks: Default::default(),
+            last_seed: Some(sim.seed()),
             last_chunk_revision: sim.world().chunk_revision(),
             last_resource_revision: sim.world().resource_revision(),
             last_terrain_revision: sim.world().terrain_revision(),
@@ -336,6 +338,7 @@ fn terrain_rewrite_repaints_only_the_changed_surface_tile() {
         pixels: Some(initial.data),
         dirty_regions: Default::default(),
         painted_chunks: Default::default(),
+        last_seed: Some(sim.seed()),
         last_chunk_revision: sim.world().chunk_revision(),
         last_resource_revision: sim.world().resource_revision(),
         last_terrain_revision: sim.world().terrain_revision(),
@@ -400,6 +403,7 @@ fn changed_chunk_queues_chunk_rect_upload() {
         pixels: Some(initial.data),
         dirty_regions: Default::default(),
         painted_chunks: Default::default(),
+        last_seed: Some(sim.seed()),
         last_chunk_revision: sim.world().chunk_revision(),
         last_resource_revision: sim.world().resource_revision(),
         last_terrain_revision: sim.world().terrain_revision(),
@@ -440,6 +444,76 @@ fn changed_chunk_queues_chunk_rect_upload() {
         images
             .get(handle.id())
             .is_some_and(|image| image.data.is_none())
+    );
+}
+
+#[test]
+fn seed_change_rebuilds_minimap_even_when_revisions_match() {
+    let settings = MapDisplaySettings::default();
+    let layer = MapTextureLayer::Surface;
+    let sim_old = Simulation::new_test_world(123);
+    let sim_new = Simulation::new_test_world(987654321);
+    // Fresh worlds start from identical revision counters, so a seed-blind
+    // cache would consider the old minimap fresh.
+    assert_eq!(
+        sim_old.world().chunk_revision(),
+        sim_new.world().chunk_revision()
+    );
+    assert_eq!(
+        sim_old.world().resource_revision(),
+        sim_new.world().resource_revision()
+    );
+    assert_eq!(
+        sim_old.world().terrain_revision(),
+        sim_new.world().terrain_revision()
+    );
+    assert_eq!(sim_old.revealed_revision(), sim_new.revealed_revision());
+    assert_eq!(sim_old.tick_count(), sim_new.tick_count());
+
+    let initial = generate_map_pixels_for_layer(&sim_old, &settings, layer);
+    let fresh_new = generate_map_pixels_for_layer(&sim_new, &settings, layer);
+    assert_ne!(
+        initial.data, fresh_new.data,
+        "test seeds must render different minimaps"
+    );
+
+    let mut images = Assets::<Image>::default();
+    let handle = images.add(image_asset(
+        initial.bounds.width,
+        initial.bounds.height,
+        Some(initial.data.clone()),
+    ));
+    let mut cache = MapLayerTextureCache {
+        handle: Some(handle),
+        bounds: Some(initial.bounds),
+        pixels: Some(initial.data),
+        dirty_regions: Default::default(),
+        painted_chunks: Default::default(),
+        last_seed: Some(sim_old.seed()),
+        last_chunk_revision: sim_old.world().chunk_revision(),
+        last_resource_revision: sim_old.world().resource_revision(),
+        last_terrain_revision: sim_old.world().terrain_revision(),
+        last_revealed_revision: sim_old.revealed_revision(),
+        last_debug_flags: (settings.debug_reveal_all, settings.show_chunk_grid),
+        last_texture_update_tick: sim_old.tick_count(),
+    };
+    let rasterizer = MapRasterizer::new(&sim_old, &settings, layer);
+    refresh_painted_chunks(&rasterizer, &mut cache);
+
+    let mut uploads = MapTextureUploadQueue::default();
+    super::update_layer_map_texture(
+        &sim_new,
+        &settings,
+        layer,
+        &mut cache,
+        &mut images,
+        &mut uploads,
+    );
+
+    assert_eq!(
+        cache.pixels.as_deref(),
+        Some(fresh_new.data.as_slice()),
+        "minimap must rebuild for a new seed even when revisions match"
     );
 }
 
@@ -577,6 +651,7 @@ fn bench_incremental_update_on_bounds_growth() {
         pixels: Some(initial.data.clone()),
         dirty_regions: Default::default(),
         painted_chunks: Default::default(),
+        last_seed: Some(base_sim.seed()),
         last_chunk_revision: base_sim.world().chunk_revision(),
         last_resource_revision: base_sim.world().resource_revision(),
         last_terrain_revision: base_sim.world().terrain_revision(),
@@ -596,6 +671,7 @@ fn bench_incremental_update_on_bounds_growth() {
             pixels: Some(initial.data.clone()),
             dirty_regions: Default::default(),
             painted_chunks: base_cache.painted_chunks.clone(),
+            last_seed: base_cache.last_seed,
             last_chunk_revision: base_cache.last_chunk_revision,
             last_resource_revision: base_cache.last_resource_revision,
             last_terrain_revision: base_cache.last_terrain_revision,
@@ -664,6 +740,7 @@ fn bench_resource_tile_partial_upload_vs_full_buffer_upload() {
         pixels: Some(initial.data),
         dirty_regions: Default::default(),
         painted_chunks: Default::default(),
+        last_seed: Some(sim.seed()),
         last_chunk_revision: sim.world().chunk_revision(),
         last_resource_revision: sim.world().resource_revision(),
         last_terrain_revision: sim.world().terrain_revision(),

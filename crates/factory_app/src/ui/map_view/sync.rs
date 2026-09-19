@@ -346,6 +346,7 @@ pub(super) fn map_detail_cache_key(
         chunk_cursor,
         overlay_bits: settings.overlays.enabled_bits(),
         debug_reveal_all: settings.debug_reveal_all,
+        world_seed: sim.seed(),
         reveal_revision: sim.revealed_revision(),
         topology_revision: sim.entity_topology_revision(),
         pollution_revision: sim.pollution_map_revision(),
