@@ -65,8 +65,16 @@ impl PendingCatalogScan {
 
 impl Drop for PendingCatalogScan {
     fn drop(&mut self) {
-        // A scan only reads; joining at shutdown cannot lose a save.
-        if let Some(worker) = self.worker.take() {
+        // A finished scan is joined so a worker panic still surfaces its
+        // payload. A still-running worker is detached instead of stalling
+        // teardown on a held artifact lock or a slow filesystem: at
+        // shutdown no consumer remains for its snapshot, and recovery
+        // mutations are atomic renames designed to survive interruption —
+        // abandoning them equals a crash mid-recovery, which the next
+        // startup's recovery handles.
+        if let Some(worker) = self.worker.take()
+            && worker.is_finished()
+        {
             let _ = worker.join();
         }
     }
@@ -181,8 +189,9 @@ pub fn refresh_catalog_blocking(
 /// Recovers interrupted saves and returns all recognized canonical entries.
 /// Recovery always takes the artifact lock blocking-style; interactive
 /// refreshes run it on the background scan worker (see
-/// [`request_catalog_scan`]), so frames never wait on it. Shutdown joins the
-/// worker, which only reads — it cannot lose a save by waiting.
+/// [`request_catalog_scan`]), so frames never wait on it. Shutdown joins a
+/// finished scan worker and detaches a still-running one instead of
+/// stalling teardown — see [`PendingCatalogScan`].
 pub fn scan_catalog(config: &SaveLoadConfig) -> Result<Vec<SaveEntry>, String> {
     let (mut entries, current_hash) = scan_catalog_unvalidated(config)?;
     let mut cache = BTreeMap::new();
@@ -407,5 +416,27 @@ mod tests {
             thread::sleep(std::time::Duration::from_millis(1));
         }
         assert!(catalog.entries.is_empty());
+    }
+
+    #[test]
+    fn drop_detaches_unfinished_scan_without_waiting() {
+        use std::time::{Duration, Instant};
+        // The worker blocks until the test releases it, simulating a scan
+        // stuck on a held artifact lock or a slow filesystem at shutdown.
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let mut pending = PendingCatalogScan::default();
+        pending.worker = Some(thread::spawn(move || {
+            let _ = release_rx.recv();
+            Ok(Vec::new())
+        }));
+        let start = Instant::now();
+        drop(pending);
+        // Teardown must not stall on the unfinished worker.
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "shutdown join waited for an unfinished scan worker"
+        );
+        // Release the detached worker so it can exit on its own.
+        drop(release_tx);
     }
 }
