@@ -754,6 +754,32 @@ mod tests {
             deferred.dropped_name.is_none(),
             "freshness re-established by a successful scan expires the context"
         );
+        // A failure after the expiry must be generic: no stale dropped
+        // save may be re-reported once its context is gone.
+        pending.worker = Some(RunningCatalogScan {
+            epoch: 0,
+            handle: thread::spawn(|| Err("permission denied".into())),
+        });
+        while pending.worker.is_some() {
+            poll_catalog_scan(
+                &config,
+                &mut pending,
+                &mut catalog,
+                &mut status,
+                &mut deferred,
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "post-recovery scan did not settle"
+            );
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(
+            status.message.as_deref(),
+            Some("Cannot refresh save catalog: permission denied"),
+            "with no dropped context a failure must stay generic, got: {status:?}"
+        );
+        assert!(pending.is_empty());
     }
 
     #[test]

@@ -201,11 +201,11 @@ pub fn request_named_save(
 pub struct DeferredNamedSave {
     pub(crate) name: Option<String>,
     /// A request dropped by a failed scan, retained until a later scan
-    /// installs successfully. A follow-up (or any later) scan that also
-    /// fails re-reports this failure instead of replacing it with a
-    /// generic refresh error, so the settled status stays connected to
-    /// the lost user action. Never re-admitted: the drain only consumes
-    /// the parked `name`.
+    /// installs successfully or the user admits a new request. A
+    /// follow-up (or any later) scan that also fails re-reports this
+    /// failure instead of replacing it with a generic refresh error, so
+    /// the settled status stays connected to the lost user action. Never
+    /// re-admitted: the drain only consumes the parked `name`.
     pub(crate) dropped_name: Option<String>,
 }
 
@@ -248,6 +248,13 @@ pub fn request_named_save_guarded(
         status.last_completed_id = None;
         return false;
     }
+    // A new admission supersedes any dropped-request context: the user
+    // re-issued (or redirected) their intent, so a later scan failure
+    // must not re-report the older dropped save as uncreated. Without
+    // this, retrying a dropped name whose write then commits would see
+    // its success replaced by a false failure — inviting a further retry
+    // that mints a duplicate.
+    deferred.dropped_name = None;
     request_named_save(
         name,
         sim,
@@ -1464,6 +1471,28 @@ mod tests {
             matches!(fixture.confirmation, PendingSaveConfirmation::Overwrite(_)),
             "a listed name must ask for overwrite instead, got: {:?}",
             fixture.confirmation
+        );
+    }
+
+    #[test]
+    fn readmitting_name_expires_dropped_failure_context() {
+        // Review follow-up: a dropped request whose name the user retries
+        // must not haunt later failures. Retrying admits a new request
+        // that supersedes the old context; a later scan failure must be
+        // generic instead of falsely reporting the (meanwhile committed)
+        // save as uncreated.
+        let mut fixture = DeferredFixture::with_outstanding_scan();
+        fixture.settle_scan();
+        // Stale context from failures that have since settled.
+        fixture.deferred.dropped_name = Some("Base".into());
+        assert!(fixture.guarded("Base"));
+        assert!(
+            fixture.deferred.dropped_name.is_none(),
+            "admitting the retried name must expire the dropped context"
+        );
+        assert!(
+            !fixture.pending.is_empty(),
+            "the retried request must be admitted"
         );
     }
 
