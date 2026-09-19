@@ -194,7 +194,9 @@ pub fn request_named_save(
 /// Admission validates uniqueness against the in-memory catalog, so a save
 /// admitted from a stale catalog could duplicate a display name that an
 /// external actor added mid-scan. The validated name waits here until the
-/// scan lands and is then re-validated against the fresh catalog.
+/// scan lands and is then re-validated against the fresh catalog. A scan
+/// that fails instead fails the parked request explicitly: freshness was
+/// never established, so draining against the stale catalog is forbidden.
 #[derive(Resource, Default)]
 pub struct DeferredNamedSave {
     pub(crate) name: Option<String>,
@@ -1373,11 +1375,12 @@ mod tests {
                 catalog,
                 pending_scan,
                 status,
+                deferred,
                 ..
             } = self;
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             while !pending_scan.is_empty() {
-                poll_catalog_scan(config, pending_scan, catalog, status);
+                poll_catalog_scan(config, pending_scan, catalog, status, deferred);
                 assert!(
                     std::time::Instant::now() < deadline,
                     "catalog scan did not settle"

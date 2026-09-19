@@ -8,9 +8,9 @@
 
 use super::super::container::{fallback_metadata, with_save_artifact_lock};
 use super::super::{
-    CachedSaveValidation, CatalogValidationRequest, SaveCatalog, SaveCompatibility, SaveEntry,
-    SaveId, SaveKind, SaveLoadConfig, SaveLoadStatus, SaveLoadStatusKind,
-    local_datetime_from_unix_ms,
+    CachedSaveValidation, CatalogValidationRequest, DeferredNamedSave, SaveCatalog,
+    SaveCompatibility, SaveEntry, SaveId, SaveKind, SaveLoadConfig, SaveLoadStatus,
+    SaveLoadStatusKind, local_datetime_from_unix_ms,
 };
 use super::inspect::{file_timestamp_ms, inspect_file};
 use super::recovery::recover_interrupted_saves;
@@ -130,6 +130,7 @@ pub(crate) fn poll_catalog_scan(
     pending: &mut PendingCatalogScan,
     catalog: &mut SaveCatalog,
     status: &mut SaveLoadStatus,
+    deferred: &mut DeferredNamedSave,
 ) {
     let Some((worker_epoch, outcome)) = pending.join_finished() else {
         return;
@@ -150,6 +151,21 @@ pub(crate) fn poll_catalog_scan(
             status.message = Some(format!("Cannot refresh save catalog: {error}"));
             status.kind = SaveLoadStatusKind::Error;
             status.last_completed_id = None;
+            if let Some(name) = deferred.name.take() {
+                // Freshness was never established: the catalog is still
+                // stale, so the parked request must not drain against it
+                // once the (now empty) scan state settles. Fail it
+                // explicitly — naming the save and preserving the refresh
+                // failure — instead of minting a possible duplicate. One
+                // follow-up scan is requested so a manual retry usually
+                // meets a fresh catalog; its own failure does not chain
+                // (nothing is parked then), so a persistent failure
+                // settles instead of spinning.
+                status.message = Some(format!(
+                    "Cannot refresh save catalog: {error}; {name} was not created."
+                ));
+                follow_up = true;
+            }
         }
     }
     if follow_up {
@@ -162,8 +178,15 @@ pub(crate) fn poll_catalog_scan_system(
     mut pending: ResMut<PendingCatalogScan>,
     mut catalog: ResMut<SaveCatalog>,
     mut status: ResMut<SaveLoadStatus>,
+    mut deferred: ResMut<DeferredNamedSave>,
 ) {
-    poll_catalog_scan(&config, &mut pending, &mut catalog, &mut status);
+    poll_catalog_scan(
+        &config,
+        &mut pending,
+        &mut catalog,
+        &mut status,
+        &mut deferred,
+    );
 }
 
 fn install_scan_entries(catalog: &mut SaveCatalog, mut entries: Vec<SaveEntry>) {
@@ -410,6 +433,7 @@ mod tests {
         catalog.scan_epoch = 0;
         let mut pending = PendingCatalogScan::default();
         let mut status = SaveLoadStatus::default();
+        let mut deferred = DeferredNamedSave::default();
         // A scan requested before the deletion lands after it.
         pending.worker = Some(RunningCatalogScan {
             epoch: 0,
@@ -422,7 +446,13 @@ mod tests {
         // the follow-up scan is still in flight.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !pending.is_empty() {
-            poll_catalog_scan(&config, &mut pending, &mut catalog, &mut status);
+            poll_catalog_scan(
+                &config,
+                &mut pending,
+                &mut catalog,
+                &mut status,
+                &mut deferred,
+            );
             assert!(
                 catalog.entries.is_empty(),
                 "a scan overtaken by a deletion resurrected the entry"
@@ -502,9 +532,16 @@ mod tests {
         // so it is dropped unseen and a follow-up re-observes.
         drop(release_tx);
         let mut status = SaveLoadStatus::default();
+        let mut deferred = DeferredNamedSave::default();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !pending.is_empty() {
-            poll_catalog_scan(&config, &mut pending, &mut catalog, &mut status);
+            poll_catalog_scan(
+                &config,
+                &mut pending,
+                &mut catalog,
+                &mut status,
+                &mut deferred,
+            );
             assert!(
                 catalog.entries.is_empty(),
                 "a relabeled stale scan resurrected the deleted entry"
@@ -516,6 +553,80 @@ mod tests {
             thread::sleep(std::time::Duration::from_millis(1));
         }
         assert!(catalog.entries.is_empty());
+    }
+
+    #[test]
+    fn failed_scan_fails_parked_named_save_explicitly() {
+        // Review scenario: a named-save request parks while a refresh is
+        // outstanding, then the refresh fails (e.g. read_dir errors). The
+        // park must be failed explicitly — naming the save and preserving
+        // the refresh failure — instead of draining against the still-stale
+        // catalog once the empty scan state settles.
+        let dir = std::env::temp_dir().join(format!(
+            "factory-scan-error-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let config = SaveLoadConfig {
+            root_dir: dir,
+            autosave_interval_ticks: 300,
+            autosave_slot_count: 5,
+        };
+        let mut catalog = SaveCatalog::default();
+        let mut pending = PendingCatalogScan::default();
+        pending.worker = Some(RunningCatalogScan {
+            epoch: 0,
+            handle: thread::spawn(|| Err("read_dir failed".into())),
+        });
+        let mut deferred = DeferredNamedSave {
+            name: Some("Base".into()),
+        };
+        let mut status = SaveLoadStatus::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // Poll until the failing worker is joined and the error branch
+        // runs; earlier polls no-op while it is still in flight.
+        while deferred.name.is_some() {
+            poll_catalog_scan(
+                &config,
+                &mut pending,
+                &mut catalog,
+                &mut status,
+                &mut deferred,
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "catalog scan did not settle"
+            );
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(status.kind, SaveLoadStatusKind::Error);
+        assert_eq!(
+            status.message.as_deref(),
+            Some("Cannot refresh save catalog: read_dir failed; Base was not created."),
+            "the failure must name the dropped save and preserve the refresh error, got: {status:?}"
+        );
+        assert!(
+            !pending.is_empty(),
+            "one follow-up scan must be requested so a manual retry meets a fresh catalog"
+        );
+        // The follow-up scans a missing directory and settles empty: the
+        // failure must not chain into a retry loop.
+        while !pending.is_empty() {
+            poll_catalog_scan(
+                &config,
+                &mut pending,
+                &mut catalog,
+                &mut status,
+                &mut deferred,
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "follow-up scan did not settle"
+            );
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(pending.is_empty());
+        assert!(deferred.name.is_none());
     }
 
     #[test]

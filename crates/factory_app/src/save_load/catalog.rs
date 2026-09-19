@@ -83,12 +83,19 @@ mod tests {
         let mut catalog = SaveCatalog::default();
         let mut pending = PendingCatalogScan::default();
         let mut status = super::super::SaveLoadStatus::default();
+        let mut deferred = super::super::DeferredNamedSave::default();
 
         // Filesystem work runs on the scan worker; the frame only installs.
         request_catalog_scan(&config, &mut pending, catalog.scan_epoch);
         let deadline = Instant::now() + Duration::from_secs(10);
         while !pending.is_empty() {
-            poll_catalog_scan(&config, &mut pending, &mut catalog, &mut status);
+            poll_catalog_scan(
+                &config,
+                &mut pending,
+                &mut catalog,
+                &mut status,
+                &mut deferred,
+            );
             assert!(Instant::now() < deadline, "catalog scan did not land");
             thread::sleep(Duration::from_millis(1));
         }
