@@ -1354,6 +1354,59 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    fn committed_save_is_admitted_before_scan_lands() {
+        // A just-committed save must be visible to admission immediately:
+        // a repeated same-name request offers overwrite confirmation
+        // instead of minting a duplicate, without waiting for the scan.
+        let mut catalog = SaveCatalog::default();
+        assert!(catalog.named_case_insensitive("Base").is_none());
+        catalog.upsert_committed_save(SaveEntry {
+            id: SaveId::new("manual-abc"),
+            metadata: fallback_metadata(
+                SaveId::new("manual-abc"),
+                SaveKind::Named,
+                "Base".into(),
+                0,
+            ),
+            compatibility: SaveCompatibility::ValidationPending,
+            metadata_available: true,
+            path: std::path::PathBuf::from("/tmp/base.factsim"),
+            inspected: None,
+        });
+        let existing = catalog
+            .named_case_insensitive("base")
+            .expect("a committed save must be admitted before the scan lands");
+        assert_eq!(existing.id.as_str(), "manual-abc");
+        assert_eq!(catalog.scan_epoch, 1);
+    }
+
+    #[test]
+    fn committed_autosave_occupies_its_slot_before_scan_lands() {
+        // Autosave rotation must account for a committed but unscanned
+        // slot instead of reusing it for the next generation fill.
+        let mut catalog = SaveCatalog::default();
+        assert_eq!(super::super::choose_autosave_generation(&catalog, 5), 1);
+        catalog.upsert_committed_save(SaveEntry {
+            id: SaveId::new("autosave-1"),
+            metadata: fallback_metadata(
+                SaveId::new("autosave-1"),
+                SaveKind::Autosave { generation: 1 },
+                "Autosave 1".into(),
+                0,
+            ),
+            compatibility: SaveCompatibility::ValidationPending,
+            metadata_available: true,
+            path: std::path::PathBuf::from("/tmp/autosave-1.factsim"),
+            inspected: None,
+        });
+        assert_eq!(
+            super::super::choose_autosave_generation(&catalog, 5),
+            2,
+            "rotation must skip the committed slot"
+        );
+    }
+
     fn drain_validation_jobs(catalog: &mut SaveCatalog) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !catalog.validation_jobs.is_empty() {

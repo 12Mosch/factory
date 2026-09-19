@@ -66,7 +66,9 @@ struct QueuedSave {
 struct RunningSave {
     request_id: PersistenceRequestId,
     id: SaveId,
+    kind: SaveKind,
     display_name: String,
+    path: PathBuf,
     normalized_name: Option<String>,
     explicit: bool,
     phase: Arc<AtomicU8>,
@@ -233,7 +235,9 @@ impl PendingSaveJobs {
         self.running = Some(RunningSave {
             request_id,
             id,
+            kind,
             display_name,
+            path,
             normalized_name,
             explicit,
             phase,
@@ -255,7 +259,9 @@ impl Drop for PendingSaveJobs {
 
 pub(crate) struct CompletedJob {
     pub id: SaveId,
+    pub kind: SaveKind,
     pub display_name: String,
+    pub path: PathBuf,
     pub explicit: bool,
     pub request_id: PersistenceRequestId,
     pub result: Result<SaveJobOutcome, SaveJobError>,
@@ -450,7 +456,9 @@ pub(crate) fn take_completed(pending: &mut PendingSaveJobs) -> Vec<CompletedJob>
             let result = join_job(job.handle);
             completed.push(CompletedJob {
                 id: job.id,
+                kind: job.kind,
                 display_name: job.display_name,
+                path: job.path,
                 explicit: job.explicit,
                 request_id: job.request_id,
                 result,
@@ -500,7 +508,9 @@ mod tests {
         let running = RunningSave {
             request_id: PersistenceRequestId::next(),
             id: SaveId::new(id),
+            kind: SaveKind::Quicksave,
             display_name: id.into(),
+            path: PathBuf::from("test.factsim"),
             normalized_name: Some(id.into()),
             explicit: true,
             phase: Arc::new(AtomicU8::new(SaveJobPhase::Capturing.encode())),

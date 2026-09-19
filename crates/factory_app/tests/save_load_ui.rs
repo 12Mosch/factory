@@ -1703,6 +1703,64 @@ fn obsolete_load_failure_never_overwrites_status() {
 }
 
 #[test]
+fn repeated_named_save_offers_overwrite_before_scan_lands() {
+    let mut app = test_app(Duration::ZERO, "commit_admit");
+    create_named_save(&mut app, "Base");
+    // Run frames until the commit is reaped; the entry must be admitted
+    // synchronously in that same poll, without waiting for the
+    // background scan.
+    let root = app.world().resource::<SaveLoadConfig>().root_dir.clone();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        app.update();
+        if app.world().resource::<PendingSaveJobs>().is_empty() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "named save did not commit");
+    }
+    let first_id = {
+        let catalog = app.world().resource::<SaveCatalog>();
+        catalog
+            .entries()
+            .iter()
+            .find(|entry| entry.metadata.display_name == "Base")
+            .expect("a committed save must be admitted before the scan lands")
+            .id
+            .clone()
+    };
+    // Re-requesting the same name offers overwrite confirmation for the
+    // committed target instead of minting a duplicate save.
+    {
+        let mut window = app.world_mut().resource_mut::<SaveLoadWindowState>();
+        window.open = true;
+        window.tab = SaveLoadTab::Save;
+        window.name_buffer = "Base".into();
+        window.refresh_on_open = true;
+    }
+    app.update();
+    let mut query = app
+        .world_mut()
+        .query_filtered::<&mut Interaction, With<SaveCreateButton>>();
+    *query.single_mut(app.world_mut()).unwrap() = Interaction::Pressed;
+    app.update();
+    assert_eq!(
+        app.world().resource::<PendingSaveConfirmation>().clone(),
+        PendingSaveConfirmation::Overwrite(first_id),
+        "a repeated name must confirm overwrite of the committed save"
+    );
+    let saves: Vec<PathBuf> = fs::read_dir(&root)
+        .unwrap()
+        .filter_map(|item| item.ok().map(|item| item.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "factsim"))
+        .collect();
+    assert_eq!(
+        saves.len(),
+        1,
+        "no duplicate save may be minted before confirmation: {saves:?}"
+    );
+}
+
+#[test]
 fn commands_around_load_apply_once_and_continue() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0), "commands_around_load");
     run_until_tick(&mut app, 3);

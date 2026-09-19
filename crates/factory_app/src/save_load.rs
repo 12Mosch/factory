@@ -7,6 +7,7 @@ mod loads;
 mod timestamp;
 mod types;
 
+pub(crate) use catalog::inspect::now_unix_ms;
 pub(crate) use catalog::poll_catalog_validation_jobs;
 pub use catalog::{PendingCatalogScan, refresh_catalog_blocking, scan_catalog};
 pub(crate) use catalog::{poll_catalog_scan_system, request_catalog_scan};
@@ -355,7 +356,28 @@ pub(crate) fn poll_save_jobs(
                 // the requested world and tick.
                 debug_assert_eq!(outcome.request_id, job.request_id);
                 let _ = outcome.requested_generation;
-                catalog.invalidate_validation(&job.id);
+                // Install the committed save directly so admission sees it
+                // before the next background scan lands: a repeated
+                // same-name request offers overwrite confirmation instead
+                // of minting a duplicate, and autosave rotation accounts
+                // for the occupied slot. The follow-up scan re-observes
+                // the file and queues validation for the pending entry.
+                catalog.upsert_committed_save(SaveEntry {
+                    id: job.id.clone(),
+                    metadata: SaveMetadata {
+                        schema_version: METADATA_SCHEMA_VERSION,
+                        id: job.id.clone(),
+                        display_name: job.display_name.clone(),
+                        kind: job.kind.clone(),
+                        completed_at_unix_ms: now_unix_ms(),
+                        application_version: env!("CARGO_PKG_VERSION").into(),
+                        world_seed: None,
+                    },
+                    compatibility: SaveCompatibility::ValidationPending,
+                    metadata_available: true,
+                    path: job.path.clone(),
+                    inspected: None,
+                });
                 metrics.last_snapshot_world_generation = outcome.snapshot_world_generation;
                 metrics.last_snapshot_capture_ms = outcome.snapshot_capture_ms;
                 metrics.last_snapshot_tick = outcome.snapshot_tick;

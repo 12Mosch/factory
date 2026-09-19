@@ -1,11 +1,14 @@
 //! Bounded asynchronous persistence lifecycle.
 //!
-//! One explicit state machine covers save and load jobs. Frame schedules only
-//! enqueue requests and collect finished workers; snapshot capture, encoding,
-//! disk I/O, file inspection, recovery, decoding, and validation run on
-//! bounded background workers. World installation happens at a controlled
-//! application boundary ([`crate::save_load::enter_swapped_world`]) through
-//! the shared presentation/input reset.
+//! One explicit lifecycle contract covers save and load jobs: shared phases
+//! and errors, frame schedules that only enqueue requests and collect
+//! finished workers, and world installation at a controlled application
+//! boundary ([`crate::save_load::enter_swapped_world`]) through the shared
+//! presentation/input reset. Queue transitions stay separate per direction
+//! by design — saves serialize FIFO while loads are newest-wins — so each
+//! lives with its queue in `jobs` and `loads` instead of a single merged
+//! machine. Snapshot capture, encoding, disk I/O, file inspection,
+//! recovery, decoding, and validation run on bounded background workers.
 //!
 //! # Bounds
 //!

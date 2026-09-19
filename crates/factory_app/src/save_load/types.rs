@@ -266,11 +266,23 @@ impl SaveCatalog {
         self.scan_epoch = self.scan_epoch.wrapping_add(1);
     }
 
-    pub(crate) fn invalidate_validation(&mut self, id: &SaveId) {
-        if let Some(path) = self.get(id).map(|entry| entry.path.clone()) {
-            self.validation_cache.remove(&path);
-            self.validation_queue.retain(|request| request.path != path);
+    /// Installs a just-committed save directly so admission (overwrite
+    /// confirmation, autosave rotation) sees it before the next background
+    /// scan lands. Replaces any same-id entry, drops stale validation
+    /// state for the path, and bumps the scan epoch so an in-flight
+    /// pre-commit scan is dropped instead of clobbering the entry. The
+    /// follow-up scan re-observes the file and queues validation.
+    pub(crate) fn upsert_committed_save(&mut self, entry: SaveEntry) {
+        self.validation_cache.remove(&entry.path);
+        self.validation_queue
+            .retain(|request| request.path != entry.path);
+        if let Some(existing) = self.entries.iter_mut().find(|each| each.id == entry.id) {
+            *existing = entry;
+        } else {
+            self.entries.push(entry);
         }
+        self.revision = self.revision.wrapping_add(1);
+        self.scan_epoch = self.scan_epoch.wrapping_add(1);
     }
 
     pub fn named_case_insensitive(&self, name: &str) -> Option<&SaveEntry> {
