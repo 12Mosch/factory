@@ -2161,7 +2161,7 @@ fn commands_around_load_apply_once_and_continue() {
 #[test]
 fn repeated_named_overwrites_serialize_fifo() {
     use bevy::ecs::system::RunSystemOnce;
-    use factory_app::save_load::request_overwrite;
+    use factory_app::save_load::{DeferredNamedSave, request_overwrite};
     let mut app = test_app(Duration::ZERO, "named_overwrite_fifo");
     create_named_save(&mut app, "Overwrite Target");
     drain_persistence_jobs(&mut app);
@@ -2185,8 +2185,17 @@ fn repeated_named_overwrites_serialize_fifo() {
                   catalog: bevy::prelude::Res<SaveCatalog>,
                   mut pending: bevy::prelude::ResMut<PendingSaveJobs>,
                   mut status: bevy::prelude::ResMut<SaveLoadStatus>,
-                  mut metrics: bevy::prelude::ResMut<SaveLoadMetrics>| {
-                request_overwrite(&id, &sim, &catalog, &mut pending, &mut status, &mut metrics)
+                  mut metrics: bevy::prelude::ResMut<SaveLoadMetrics>,
+                  mut deferred: bevy::prelude::ResMut<DeferredNamedSave>| {
+                request_overwrite(
+                    &id,
+                    &sim,
+                    &catalog,
+                    &mut pending,
+                    &mut status,
+                    &mut metrics,
+                    &mut deferred,
+                )
             },
         )
         .expect("overwrite system should run");
@@ -2198,7 +2207,8 @@ fn repeated_named_overwrites_serialize_fifo() {
                   catalog: bevy::prelude::Res<SaveCatalog>,
                   mut pending: bevy::prelude::ResMut<PendingSaveJobs>,
                   mut status: bevy::prelude::ResMut<SaveLoadStatus>,
-                  mut metrics: bevy::prelude::ResMut<SaveLoadMetrics>| {
+                  mut metrics: bevy::prelude::ResMut<SaveLoadMetrics>,
+                  mut deferred: bevy::prelude::ResMut<DeferredNamedSave>| {
                 request_overwrite(
                     &id2,
                     &sim,
@@ -2206,6 +2216,7 @@ fn repeated_named_overwrites_serialize_fifo() {
                     &mut pending,
                     &mut status,
                     &mut metrics,
+                    &mut deferred,
                 )
             },
         )

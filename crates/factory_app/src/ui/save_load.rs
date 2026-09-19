@@ -147,6 +147,7 @@ pub(crate) fn handle_save_load_buttons(
     mut pending_loads: ResMut<PendingLoadJobs>,
     mut confirmation: ResMut<PendingSaveConfirmation>,
     mut status: ResMut<SaveLoadStatus>,
+    mut deferred: ResMut<DeferredNamedSave>,
     mut load_state: LoadState,
     mut pause: ResMut<PauseMenuState>,
     mut sounds: MessageWriter<SoundEvent>,
@@ -219,6 +220,7 @@ pub(crate) fn handle_save_load_buttons(
                     &mut pending,
                     &mut status,
                     &mut load_state.metrics,
+                    &mut deferred,
                 );
             }
             PendingSaveConfirmation::Delete(id) => {

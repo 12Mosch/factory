@@ -280,6 +280,7 @@ pub fn request_overwrite(
     pending: &mut PendingSaveJobs,
     status: &mut SaveLoadStatus,
     metrics: &mut SaveLoadMetrics,
+    deferred: &mut DeferredNamedSave,
 ) -> bool {
     let Some(entry) = catalog
         .get(id)
@@ -291,7 +292,7 @@ pub fn request_overwrite(
         );
         return false;
     };
-    jobs::queue_save(
+    let admitted = jobs::queue_save(
         entry.id.clone(),
         SaveKind::Named,
         entry.metadata.display_name.clone(),
@@ -302,7 +303,15 @@ pub fn request_overwrite(
         pending,
         status,
         metrics,
-    )
+    );
+    // A confirmed overwrite supersedes any dropped-request context, same
+    // as a new admission: the replacement was accepted, so a later scan
+    // failure must not re-report the older dropped save as uncreated. A
+    // failed queueing leaves the context intact.
+    if admitted {
+        deferred.dropped_name = None;
+    }
+    admitted
 }
 
 pub fn request_system_save(
@@ -1389,6 +1398,19 @@ mod tests {
             )
         }
 
+        fn overwrite(&mut self, id: &SaveId) -> bool {
+            let Self {
+                sim,
+                catalog,
+                pending,
+                status,
+                metrics,
+                deferred,
+                ..
+            } = self;
+            request_overwrite(id, sim, catalog, pending, status, metrics, deferred)
+        }
+
         fn settle_scan(&mut self) {
             let Self {
                 config,
@@ -1536,6 +1558,44 @@ mod tests {
             fixture.deferred.dropped_name.as_deref(),
             Some("Base"),
             "an overwrite routing must not discard the dropped context"
+        );
+    }
+
+    #[test]
+    fn confirmed_overwrite_clears_dropped_failure_context() {
+        // Review follow-up: overwrite routing preserves the dropped
+        // context while the dialog is pending, but confirming queues a
+        // replacement that supersedes it. A later scan failure must not
+        // report the replaced save as uncreated.
+        let mut fixture = DeferredFixture::with_outstanding_scan();
+        fixture.settle_scan();
+        fixture.catalog.entries.push(named_entry("Base"));
+        let id = fixture.catalog.entries[0].id.clone();
+        fixture.deferred.dropped_name = Some("Base".into());
+        assert!(fixture.overwrite(&id));
+        assert!(
+            fixture.deferred.dropped_name.is_none(),
+            "a confirmed overwrite must expire the dropped context"
+        );
+        assert!(
+            !fixture.pending.is_empty(),
+            "the replacement overwrite must be queued"
+        );
+        // A rejected overwrite leaves the context intact: another entry
+        // normalizing to the same name is already saving under a
+        // different id, so queueing refuses and nothing is accepted.
+        fixture.deferred.dropped_name = Some("Base".into());
+        fixture.catalog.entries.push(named_entry("BASE"));
+        let other = fixture.catalog.entries[1].id.clone();
+        assert!(!fixture.overwrite(&other));
+        assert_eq!(
+            fixture.status.message.as_deref(),
+            Some("BASE is already being saved.")
+        );
+        assert_eq!(
+            fixture.deferred.dropped_name.as_deref(),
+            Some("Base"),
+            "a rejected overwrite must not discard the dropped context"
         );
     }
 
