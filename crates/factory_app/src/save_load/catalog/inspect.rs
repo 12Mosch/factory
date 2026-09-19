@@ -181,24 +181,6 @@ pub(crate) fn classify_inspection(header: &[u8], current_hash: u64) -> SaveCompa
     }
 }
 
-/// Opens the file currently on disk and returns its identity together with the
-/// header compatibility derived from that same handle. Retries queue this
-/// pair so a classification is never bound to a different file instance.
-pub(crate) fn inspect_current_file(
-    path: &Path,
-    kind: &SaveKind,
-) -> Option<(SaveFileMetadataFingerprint, SaveCompatibility)> {
-    let mut file = fs::File::open(path).ok()?;
-    let metadata = save_file_metadata_fingerprint(&file);
-    if metadata.len > factory_sim::SaveLimits::default().max_encoded_bytes {
-        return Some((metadata, SaveCompatibility::ExceedsCurrentLimits));
-    }
-    let current_hash =
-        factory_sim::prototype_hash(&factory_data::PrototypeCatalog::load_base().ok()?);
-    let compatibility = classify_open_save(&mut file, kind, current_hash);
-    Some((metadata, compatibility))
-}
-
 /// Returns a best-effort file modification timestamp for fallback metadata.
 pub(crate) fn file_timestamp_ms(path: &Path) -> u64 {
     fs::metadata(path)

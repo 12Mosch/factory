@@ -5,10 +5,10 @@ use bevy::text::{EditableText, TextCursorStyle};
 use crate::audio::SoundEvent;
 use crate::resources::SimResource;
 use crate::save_load::{
-    LoadState, PendingSaveConfirmation, PendingSaveJobs, SaveCatalog, SaveEntry, SaveId, SaveKind,
-    SaveLoadConfig, SaveLoadStatus, SaveLoadStatusKind, SaveLoadTab, SaveLoadWindowState,
-    delete_save, format_world_seed, load_save, local_datetime_from_unix_ms, request_named_save,
-    request_overwrite,
+    LoadState, PendingLoadJobs, PendingSaveConfirmation, PendingSaveJobs, SaveCatalog, SaveEntry,
+    SaveId, SaveKind, SaveLoadConfig, SaveLoadStatus, SaveLoadStatusKind, SaveLoadTab,
+    SaveLoadWindowState, delete_save_with_loads, format_world_seed, load_save,
+    local_datetime_from_unix_ms, request_named_save, request_overwrite,
 };
 use crate::ui::layout::scroll_column;
 use crate::ui::pause_menu::PauseMenuState;
@@ -76,6 +76,7 @@ pub(crate) struct SaveLoadSnapshot {
     status: SaveLoadStatus,
     entries: Vec<SaveEntry>,
     pending: Vec<SaveId>,
+    loading: Vec<SaveId>,
     confirmation: PendingSaveConfirmation,
     current_seed: Option<u64>,
 }
@@ -87,6 +88,7 @@ impl PartialEq for SaveLoadSnapshot {
             && self.status == other.status
             && self.entries == other.entries
             && self.pending == other.pending
+            && self.loading == other.loading
             && self.confirmation == other.confirmation
             && self.current_seed == other.current_seed
     }
@@ -141,6 +143,7 @@ pub(crate) fn handle_save_load_buttons(
     config: Res<SaveLoadConfig>,
     mut catalog: ResMut<SaveCatalog>,
     mut pending: ResMut<PendingSaveJobs>,
+    mut pending_loads: ResMut<PendingLoadJobs>,
     mut confirmation: ResMut<PendingSaveConfirmation>,
     mut status: ResMut<SaveLoadStatus>,
     mut load_state: LoadState,
@@ -184,8 +187,13 @@ pub(crate) fn handle_save_load_buttons(
                 *confirmation = PendingSaveConfirmation::Delete(button.id.clone())
             }
             SaveEntryAction::Load => {
-                if load_save(&button.id, &catalog, &pending, &mut status, &mut load_state)
-                    && load_state.app_pause.is_paused()
+                if load_save(
+                    &button.id,
+                    &catalog,
+                    &mut pending_loads,
+                    &mut status,
+                    &load_state,
+                ) && load_state.app_pause.is_paused()
                 {
                     pause.open = true;
                 }
@@ -213,7 +221,14 @@ pub(crate) fn handle_save_load_buttons(
                 );
             }
             PendingSaveConfirmation::Delete(id) => {
-                delete_save(&id, &config, &mut catalog, &pending, &mut status);
+                delete_save_with_loads(
+                    &id,
+                    &config,
+                    &mut catalog,
+                    &pending,
+                    Some(&pending_loads),
+                    &mut status,
+                );
             }
             PendingSaveConfirmation::None => {}
         }
@@ -377,6 +392,7 @@ pub(crate) fn sync_save_load_window(
     state: Res<SaveLoadWindowState>,
     catalog: Res<SaveCatalog>,
     pending: Res<PendingSaveJobs>,
+    pending_loads: Res<PendingLoadJobs>,
     status: Res<SaveLoadStatus>,
     confirmation: Res<PendingSaveConfirmation>,
     sim: Res<SimResource>,
@@ -392,6 +408,7 @@ pub(crate) fn sync_save_load_window(
     let replacement_changed = (*last_replacement).replace(replacement) != Some(replacement);
     let contents_changed = catalog.is_changed()
         || pending.is_changed()
+        || pending_loads.is_changed()
         || status.is_changed()
         || confirmation.is_changed()
         || replacement_changed;
@@ -412,6 +429,7 @@ pub(crate) fn sync_save_load_window(
                     &state,
                     &catalog,
                     &pending,
+                    &pending_loads,
                     &status,
                     &confirmation,
                     current_world_seed(&sim),
@@ -426,6 +444,7 @@ pub(crate) fn sync_save_load_window(
                 &state,
                 &catalog,
                 &pending,
+                &pending_loads,
                 &status,
                 &confirmation,
                 current_world_seed(&sim),
@@ -444,6 +463,7 @@ fn save_load_snapshot(
     state: &SaveLoadWindowState,
     catalog: &SaveCatalog,
     pending: &PendingSaveJobs,
+    pending_loads: &PendingLoadJobs,
     status: &SaveLoadStatus,
     confirmation: &PendingSaveConfirmation,
     current_seed: Option<u64>,
@@ -453,6 +473,7 @@ fn save_load_snapshot(
         status: status.clone(),
         entries: catalog.entries().to_vec(),
         pending: pending.pending_ids(),
+        loading: pending_loads.pending_ids(),
         confirmation: confirmation.clone(),
         current_seed,
     }
@@ -703,6 +724,7 @@ fn spawn_entry_row(
     snapshot: &SaveLoadSnapshot,
 ) {
     let pending = snapshot.pending.contains(&entry.id);
+    let loading = snapshot.loading.contains(&entry.id);
     parent
         .spawn((
             Node {
@@ -762,6 +784,11 @@ fn spawn_entry_row(
             if pending {
                 spawn_badge(row, "SAVING");
                 return;
+            }
+            if loading {
+                // A second Load press is still accepted (newest wins), so
+                // the row keeps its buttons alongside the badge.
+                spawn_badge(row, "LOADING");
             }
             match snapshot.window.tab {
                 SaveLoadTab::Save if entry.metadata.kind == SaveKind::Named => {

@@ -6,15 +6,21 @@ pub(crate) mod validation;
 
 pub(crate) use inspect::now_unix_ms;
 pub(crate) use polling::poll_catalog_validation_jobs;
-pub use scan::{refresh_catalog, scan_catalog};
+#[cfg(test)]
+pub(crate) use scan::poll_catalog_scan;
+pub use scan::{PendingCatalogScan, refresh_catalog_blocking, scan_catalog};
+pub(crate) use scan::{poll_catalog_scan_system, request_catalog_scan};
 
 #[cfg(test)]
-use super::container::{ContainerError, fallback_metadata, load_simulation_from_reader};
+use super::container::{
+    ContainerError, bump_save_artifact_epoch, fallback_metadata, load_simulation_from_reader,
+    save_artifact_epoch,
+};
 #[cfg(test)]
 use super::{
     CachedSaveValidation, CatalogValidationJob, CatalogValidationOutcome, CatalogValidationRequest,
-    SaveCatalog, SaveCompatibility, SaveEntry, SaveFileMetadataFingerprint, SaveId, SaveKind,
-    SaveLoadConfig,
+    ConfirmingValidation, SaveCatalog, SaveCompatibility, SaveEntry, SaveFileMetadataFingerprint,
+    SaveId, SaveKind, SaveLoadConfig,
 };
 #[cfg(test)]
 use factory_sim::{SaveLimits, load_from_bytes};
@@ -23,13 +29,13 @@ pub(crate) use inspect::{
     inspect_file, recognized_file, save_file_fingerprint, save_file_metadata_fingerprint,
 };
 #[cfg(test)]
-pub(crate) use polling::poll_catalog_validation_jobs_inner;
+pub(crate) use polling::{poll_catalog_validation_jobs_inner, rescan_stale_pending};
 #[cfg(test)]
 pub(crate) use recovery::{
     PrimaryState, RecoveryBackup, classify_backup_result, classify_simulation_result,
 };
 #[cfg(test)]
-pub(crate) use scan::{inspect_entry, prepare_entry_validation};
+pub(crate) use scan::{inspect_entry, plan_entry_validation};
 #[cfg(test)]
 use std::collections::BTreeMap;
 #[cfg(test)]
@@ -75,8 +81,17 @@ mod tests {
             autosave_slot_count: 5,
         };
         let mut catalog = SaveCatalog::default();
+        let mut pending = PendingCatalogScan::default();
+        let mut status = super::super::SaveLoadStatus::default();
 
-        refresh_catalog(&config, &mut catalog).unwrap();
+        // Filesystem work runs on the scan worker; the frame only installs.
+        request_catalog_scan(&config, &mut pending, catalog.scan_epoch);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !pending.is_empty() {
+            poll_catalog_scan(&config, &mut pending, &mut catalog, &mut status);
+            assert!(Instant::now() < deadline, "catalog scan did not land");
+            thread::sleep(Duration::from_millis(1));
+        }
 
         assert_eq!(catalog.entries.len(), 1);
         assert_eq!(
@@ -235,9 +250,14 @@ mod tests {
         let stale = CatalogValidationOutcome {
             path: path.clone(),
             compatibility: migratable.clone(),
-            observed_metadata: Some(metadata_a.clone()),
             fingerprint: Some(fingerprint_a),
             attempt: 0,
+            // The on-disk file was replaced after this outcome was produced;
+            // a real worker would observe the new instance and decline to
+            // certify.
+            path_confirmed_current: false,
+            commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: None,
         };
         // Simulate the old worker finishing after the replacement + refresh.
         let mut catalog = SaveCatalog {
@@ -256,7 +276,9 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
             validation_queue: VecDeque::from([CatalogValidationRequest {
                 path: path.clone(),
                 kind: SaveKind::Quicksave,
@@ -324,9 +346,14 @@ mod tests {
         let stale = CatalogValidationOutcome {
             path: path.clone(),
             compatibility: migratable,
-            observed_metadata: Some(metadata_a.clone()),
             fingerprint: Some(fingerprint_a),
             attempt: 0,
+            // The on-disk file was replaced after this outcome was produced;
+            // a real worker would observe the new instance and decline to
+            // certify.
+            path_confirmed_current: false,
+            commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: None,
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -344,7 +371,9 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -406,14 +435,32 @@ mod tests {
 
         let cache = BTreeMap::new();
         let mut requests = Vec::new();
-        prepare_entry_validation(&mut entry, current_hash, &cache, &mut requests);
+        let stale_compat = entry.compatibility.clone();
+        let stale_inspected = entry.inspected.clone();
+        plan_entry_validation(&mut entry, &cache, &mut requests);
 
         assert_eq!(entry.compatibility, SaveCompatibility::ValidationPending);
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].compatibility, SaveCompatibility::Compatible);
+        // The frame never re-opens the file: the request carries the stale
+        // classification and identity for the worker to re-derive.
+        assert_eq!(requests[0].compatibility, stale_compat);
+        assert_eq!(
+            requests[0].metadata,
+            stale_inspected.expect("header inspection observed an identity")
+        );
         assert_eq!(requests[0].kind, SaveKind::Quicksave);
-        let current_metadata = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
-        assert_eq!(requests[0].metadata, current_metadata);
+        // The validation worker observes the replacement and settles the
+        // current classification from its own handle.
+        let request = requests.pop().expect("one request");
+        let outcome = validate_loadable_path(
+            request.path,
+            request.kind,
+            request.compatibility,
+            Some(request.metadata),
+            0,
+            Arc::new(AtomicBool::new(false)),
+        );
+        assert_eq!(outcome.compatibility, SaveCompatibility::Compatible);
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -483,16 +530,17 @@ mod tests {
         let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
             .expect("current save should encode");
         fs::write(&path, &current).unwrap();
-        let metadata = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
 
         // The first validation and its retry both hit transient I/O
         // failures. Loading must not stay disabled.
         let transient = CatalogValidationOutcome {
             path: path.clone(),
             compatibility: SaveCompatibility::ValidationPending,
-            observed_metadata: Some(metadata),
             fingerprint: None,
             attempt: 1,
+            path_confirmed_current: false,
+            commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: None,
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -510,7 +558,9 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -549,9 +599,11 @@ mod tests {
         let transient = CatalogValidationOutcome {
             path: path.clone(),
             compatibility: SaveCompatibility::ValidationPending,
-            observed_metadata: Some(metadata_before.clone()),
             fingerprint: None,
             attempt: 0,
+            path_confirmed_current: false,
+            commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: None,
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -569,7 +621,9 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -626,13 +680,14 @@ mod tests {
         let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
             .expect("current save should encode");
         fs::write(&path, &current).unwrap();
-        let metadata = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
         let transient = CatalogValidationOutcome {
             path: path.clone(),
             compatibility: SaveCompatibility::ValidationPending,
-            observed_metadata: Some(metadata),
             fingerprint: None,
             attempt: MAX_CATALOG_VALIDATION_RETRIES,
+            path_confirmed_current: false,
+            commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: None,
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -650,7 +705,9 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -698,12 +755,10 @@ mod tests {
             path: path.clone(),
             inspected: None,
         };
-        let current_hash =
-            factory_sim::prototype_hash(&factory_data::PrototypeCatalog::load_base().unwrap());
 
         let cache = BTreeMap::new();
         let mut requests = Vec::new();
-        prepare_entry_validation(&mut entry, current_hash, &cache, &mut requests);
+        plan_entry_validation(&mut entry, &cache, &mut requests);
 
         assert_eq!(entry.compatibility, SaveCompatibility::ValidationPending);
         assert_eq!(requests.len(), 1);
@@ -746,7 +801,9 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: None,
+            scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: Vec::new(),
         };
@@ -810,7 +867,9 @@ mod tests {
             entries: Vec::new(),
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -821,12 +880,15 @@ mod tests {
                 },
                 cancel,
                 handle: thread::spawn(move || {
+                    let commit_epoch = save_artifact_epoch(&path);
                     let outcome = CatalogValidationOutcome {
                         path,
                         compatibility: SaveCompatibility::ValidationPending,
-                        observed_metadata: None,
                         fingerprint: None,
                         attempt: 0,
+                        path_confirmed_current: false,
+                        commit_epoch,
+                        observed_metadata: None,
                     };
                     let mut spins = 0u32;
                     loop {
@@ -908,11 +970,10 @@ mod tests {
         let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
             .expect("current save should encode");
         fs::write(&path, &current).unwrap();
-        let current_hash =
-            factory_sim::prototype_hash(&factory_data::PrototypeCatalog::load_base().unwrap());
 
-        // Inspection failed transiently, so no classification exists, but the
-        // file is readable now.
+        // Inspection failed transiently, so no classification exists. The
+        // frame still never opens the file: the blind retry carries no
+        // classification and the worker derives it from its own handle.
         let mut entry = SaveEntry {
             id: SaveId::new("quicksave"),
             metadata: fallback_metadata(
@@ -928,11 +989,14 @@ mod tests {
         };
         let cache = BTreeMap::new();
         let mut requests = Vec::new();
-        prepare_entry_validation(&mut entry, current_hash, &cache, &mut requests);
+        plan_entry_validation(&mut entry, &cache, &mut requests);
 
         assert_eq!(entry.compatibility, SaveCompatibility::ValidationPending);
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].compatibility, SaveCompatibility::Compatible);
+        assert_eq!(
+            requests[0].compatibility,
+            SaveCompatibility::ValidationPending
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -961,7 +1025,9 @@ mod tests {
             }],
             revision: 7,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: Vec::new(),
         };
@@ -995,9 +1061,13 @@ mod tests {
         let outcome = CatalogValidationOutcome {
             path: path.clone(),
             compatibility: SaveCompatibility::Compatible,
-            observed_metadata: Some(metadata.clone()),
             fingerprint: Some(fingerprint),
             attempt: 0,
+            // The file is untouched since fingerprinting, matching what a
+            // real worker certifies for an unmodified path.
+            path_confirmed_current: true,
+            commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: Some(metadata.clone()),
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -1015,7 +1085,9 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -1026,16 +1098,16 @@ mod tests {
         };
 
         // A published outcome schedules no retry; the loop ends once the
-        // single job is consumed.
+        // single job is consumed and its parked confirmation installs.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut mutated = false;
-        while !catalog.validation_jobs.is_empty() {
+        while !catalog.validation_jobs.is_empty() || !catalog.confirming.is_empty() {
             assert!(
                 std::time::Instant::now() < deadline,
                 "validation job did not finish"
             );
             mutated |= poll_catalog_validation_jobs_inner(&mut catalog);
-            if !catalog.validation_jobs.is_empty() {
+            if !catalog.validation_jobs.is_empty() || !catalog.confirming.is_empty() {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }
@@ -1072,7 +1144,9 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: None,
+            scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: Vec::new(),
         };
@@ -1083,15 +1157,546 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    fn unstable_certified_verdict_stays_pending() {
+        // A certified outcome without a stable fingerprint describes a
+        // mixed read (e.g. an in-place rewrite between the worker's two
+        // observations). Publishing it would freeze a possibly bogus
+        // payload verdict and stop pending retries, so it must not
+        // install even though the path still names the same instance.
+        let dir = std::env::temp_dir().join(format!(
+            "factory-unstable-verdict-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        let unstable = CatalogValidationOutcome {
+            path: path.clone(),
+            compatibility: SaveCompatibility::Compatible,
+            fingerprint: None,
+            attempt: MAX_CATALOG_VALIDATION_RETRIES,
+            path_confirmed_current: true,
+            commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: None,
+        };
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+                inspected: None,
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
+            next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: vec![CatalogValidationJob {
+                path: path.clone(),
+                metadata: SaveFileMetadataFingerprint {
+                    len: 0,
+                    modified: None,
+                    identity: None,
+                },
+                cancel: Arc::new(AtomicBool::new(false)),
+                handle: thread::spawn(|| unstable),
+            }],
+        };
+
+        drain_validation_jobs(&mut catalog);
+
+        assert_eq!(catalog.validation_jobs.len(), 0);
+        assert!(catalog.validation_queue.is_empty());
+        assert!(
+            !catalog.validation_cache.contains_key(&path),
+            "an unstable verdict must not populate the cache"
+        );
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::ValidationPending,
+            "an unstable certified verdict must keep the entry pending for retry"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unstable_corrupt_verdict_stays_pending() {
+        // A mixed-read decode can produce CorruptOrTruncated with no stable
+        // fingerprint while the path still names the same instance. It is
+        // payload-derived like a compatible verdict, so it must stay pending
+        // for retry instead of freezing as permanent corruption.
+        let dir = std::env::temp_dir().join(format!(
+            "factory-unstable-corrupt-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        let unstable = CatalogValidationOutcome {
+            path: path.clone(),
+            compatibility: SaveCompatibility::CorruptOrTruncated,
+            fingerprint: None,
+            attempt: MAX_CATALOG_VALIDATION_RETRIES,
+            path_confirmed_current: true,
+            commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: None,
+        };
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+                inspected: None,
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
+            next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: vec![CatalogValidationJob {
+                path: path.clone(),
+                metadata: SaveFileMetadataFingerprint {
+                    len: 0,
+                    modified: None,
+                    identity: None,
+                },
+                cancel: Arc::new(AtomicBool::new(false)),
+                handle: thread::spawn(|| unstable),
+            }],
+        };
+
+        drain_validation_jobs(&mut catalog);
+
+        assert_eq!(catalog.validation_jobs.len(), 0);
+        assert!(catalog.validation_queue.is_empty());
+        assert!(
+            !catalog.validation_cache.contains_key(&path),
+            "an unstable corruption verdict must not populate the cache"
+        );
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::ValidationPending,
+            "an unstable certified corruption verdict must keep the entry pending"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn writer_commit_after_certification_invalidates_outcome() {
+        // A save committed by our own writer between worker certification
+        // and frame installation bumps the artifact epoch. The verdict
+        // describes replaced bytes and must not install, even though the
+        // certification itself was valid when observed.
+        let dir = std::env::temp_dir().join(format!(
+            "factory-commit-epoch-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        let mut open = fs::File::open(&path).unwrap();
+        let metadata = save_file_metadata_fingerprint(&open);
+        let fingerprint = save_file_fingerprint(&mut open, metadata).unwrap();
+        drop(open);
+        let certified_epoch = save_artifact_epoch(&path);
+        // The writer commit landing before the frame consumes the outcome.
+        bump_save_artifact_epoch(&path);
+        let overtaken = CatalogValidationOutcome {
+            path: path.clone(),
+            compatibility: SaveCompatibility::Compatible,
+            fingerprint: Some(fingerprint),
+            attempt: MAX_CATALOG_VALIDATION_RETRIES,
+            path_confirmed_current: true,
+            commit_epoch: certified_epoch,
+            observed_metadata: None,
+        };
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+                inspected: None,
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
+            next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: vec![CatalogValidationJob {
+                path: path.clone(),
+                metadata: SaveFileMetadataFingerprint {
+                    len: 0,
+                    modified: None,
+                    identity: None,
+                },
+                cancel: Arc::new(AtomicBool::new(false)),
+                handle: thread::spawn(|| overtaken),
+            }],
+        };
+
+        drain_validation_jobs(&mut catalog);
+
+        assert_eq!(catalog.validation_jobs.len(), 0);
+        assert!(catalog.validation_queue.is_empty());
+        assert!(
+            !catalog.validation_cache.contains_key(&path),
+            "an overtaken verdict must not populate the cache"
+        );
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::ValidationPending,
+            "a verdict overtaken by a writer commit must keep the entry pending"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn certified_header_only_verdict_installs_without_fingerprint() {
+        // Oversized payloads never decode, so no stable fingerprint exists;
+        // the header-observed verdict still installs when certified.
+        let dir = std::env::temp_dir().join(format!(
+            "factory-header-only-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        // The file is untouched since observation, matching what a real
+        // worker binds a header-only verdict to.
+        let observed = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
+        let header_only = CatalogValidationOutcome {
+            path: path.clone(),
+            compatibility: SaveCompatibility::ExceedsCurrentLimits,
+            fingerprint: None,
+            attempt: 0,
+            path_confirmed_current: true,
+            commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: Some(observed),
+        };
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+                inspected: None,
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
+            next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: vec![CatalogValidationJob {
+                path: path.clone(),
+                metadata: SaveFileMetadataFingerprint {
+                    len: 0,
+                    modified: None,
+                    identity: None,
+                },
+                cancel: Arc::new(AtomicBool::new(false)),
+                handle: thread::spawn(|| header_only),
+            }],
+        };
+
+        drain_validation_jobs(&mut catalog);
+
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::ExceedsCurrentLimits,
+            "a certified header-only verdict must install"
+        );
+        assert!(catalog.validation_queue.is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn replaced_file_between_certification_and_install_keeps_entry_pending() {
+        // Finding 3: the worker certifies instance A as corrupt, but an
+        // external actor replaces the path with a valid save before the
+        // frame consumes the outcome. The parked verdict must not install
+        // for the replacement; the entry stays pending and converges on a
+        // fresh verdict through the pending rescan.
+        let dir = std::env::temp_dir().join(format!(
+            "factory-cert-install-race-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        fs::write(&path, b"truncated-payload").unwrap();
+        let mut open_a = fs::File::open(&path).unwrap();
+        let metadata_a = save_file_metadata_fingerprint(&open_a);
+        let fingerprint_a = save_file_fingerprint(&mut open_a, metadata_a.clone()).unwrap();
+        drop(open_a);
+        // Certified against instance A, as a real worker would produce for
+        // bytes that fail decoding with a stable fingerprint.
+        let certified = CatalogValidationOutcome {
+            path: path.clone(),
+            compatibility: SaveCompatibility::CorruptOrTruncated,
+            fingerprint: Some(fingerprint_a),
+            attempt: 0,
+            path_confirmed_current: true,
+            commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: Some(metadata_a),
+        };
+        // External replacement with a valid save before frame consumption.
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        let metadata_b = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
+        assert_ne!(
+            metadata_b,
+            certified.observed_metadata.clone().unwrap(),
+            "the replacement must change file identity for the test"
+        );
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+                inspected: None,
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            // The pending rescan is disabled: the stale verdict must not
+            // install even before any re-observation runs.
+            confirming: Vec::new(),
+            next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: vec![CatalogValidationJob {
+                path: path.clone(),
+                metadata: metadata_b.clone(),
+                cancel: Arc::new(AtomicBool::new(false)),
+                handle: thread::spawn(|| certified),
+            }],
+        };
+
+        drain_validation_jobs(&mut catalog);
+
+        assert_eq!(catalog.validation_jobs.len(), 0);
+        assert!(
+            catalog.confirming.is_empty(),
+            "the mismatched confirmation must be consumed, not parked"
+        );
+        assert!(
+            !catalog.validation_cache.contains_key(&path),
+            "the old corruption verdict must not populate the cache for the replacement"
+        );
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::ValidationPending,
+            "the replaced file must stay pending instead of inheriting corruption"
+        );
+
+        // Enabling the pending rescan converges on a fresh verdict for the
+        // replacement without any further refresh. Prime one poll so the
+        // rescan (which is what schedules work here) can run.
+        catalog.next_pending_rescan = None;
+        poll_catalog_validation_jobs_inner(&mut catalog);
+        drain_validation_jobs(&mut catalog);
+
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::Compatible,
+            "the replacement must converge on its own verdict"
+        );
+        assert_eq!(
+            catalog.validation_cache[&path].fingerprint.metadata,
+            metadata_b
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rescan_skips_paths_with_parked_confirmations() {
+        use super::super::freshness::spawn_path_confirmation;
+        // A certified outcome parks for confirmation with the rescan due:
+        // the rescan must treat the confirming path as active work instead
+        // of queueing a duplicate full payload validation for large saves.
+        let dir = std::env::temp_dir().join(format!(
+            "factory-confirm-rescan-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        let metadata = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
+        let mut open = fs::File::open(&path).unwrap();
+        let fingerprint = save_file_fingerprint(&mut open, metadata.clone()).unwrap();
+        drop(open);
+        let outcome = CatalogValidationOutcome {
+            path: path.clone(),
+            compatibility: SaveCompatibility::Compatible,
+            fingerprint: Some(fingerprint),
+            attempt: 0,
+            path_confirmed_current: true,
+            commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: Some(metadata.clone()),
+        };
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+                inspected: None,
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            confirming: vec![ConfirmingValidation {
+                outcome,
+                confirm: spawn_path_confirmation(path.clone(), metadata),
+            }],
+            next_pending_rescan: None,
+            scan_epoch: 0,
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: Vec::new(),
+        };
+
+        // The rescan only filters paths; it never touches the confirmation
+        // worker, so this is deterministic regardless of worker timing.
+        assert!(!rescan_stale_pending(&mut catalog));
+        assert!(
+            catalog.validation_queue.is_empty() && catalog.validation_jobs.is_empty(),
+            "a confirming path must not queue a duplicate validation"
+        );
+
+        // The parked verdict still installs without any validation running.
+        drain_validation_jobs(&mut catalog);
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::Compatible,
+            "the parked verdict must install once confirmed"
+        );
+        assert!(catalog.validation_cache.contains_key(&path));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn committed_save_is_admitted_before_scan_lands() {
+        // A just-committed save must be visible to admission immediately:
+        // a repeated same-name request offers overwrite confirmation
+        // instead of minting a duplicate, without waiting for the scan.
+        let mut catalog = SaveCatalog::default();
+        assert!(catalog.named_case_insensitive("Base").is_none());
+        catalog.upsert_committed_save(SaveEntry {
+            id: SaveId::new("manual-abc"),
+            metadata: fallback_metadata(
+                SaveId::new("manual-abc"),
+                SaveKind::Named,
+                "Base".into(),
+                0,
+            ),
+            compatibility: SaveCompatibility::ValidationPending,
+            metadata_available: true,
+            path: std::path::PathBuf::from("/tmp/base.factsim"),
+            inspected: None,
+        });
+        let existing = catalog
+            .named_case_insensitive("base")
+            .expect("a committed save must be admitted before the scan lands");
+        assert_eq!(existing.id.as_str(), "manual-abc");
+        assert_eq!(catalog.scan_epoch, 1);
+    }
+
+    #[test]
+    fn committed_autosave_occupies_its_slot_before_scan_lands() {
+        // Autosave rotation must account for a committed but unscanned
+        // slot instead of reusing it for the next generation fill.
+        let mut catalog = SaveCatalog::default();
+        assert_eq!(super::super::choose_autosave_generation(&catalog, 5), 1);
+        catalog.upsert_committed_save(SaveEntry {
+            id: SaveId::new("autosave-1"),
+            metadata: fallback_metadata(
+                SaveId::new("autosave-1"),
+                SaveKind::Autosave { generation: 1 },
+                "Autosave 1".into(),
+                0,
+            ),
+            compatibility: SaveCompatibility::ValidationPending,
+            metadata_available: true,
+            path: std::path::PathBuf::from("/tmp/autosave-1.factsim"),
+            inspected: None,
+        });
+        assert_eq!(
+            super::super::choose_autosave_generation(&catalog, 5),
+            2,
+            "rotation must skip the committed slot"
+        );
+    }
+
     fn drain_validation_jobs(catalog: &mut SaveCatalog) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !catalog.validation_jobs.is_empty() {
+        // Certified outcomes park for same-round confirmation before
+        // installing, so draining covers parked confirmations too.
+        while !catalog.validation_jobs.is_empty() || !catalog.confirming.is_empty() {
             assert!(
                 std::time::Instant::now() < deadline,
                 "validation job did not finish"
             );
             poll_catalog_validation_jobs_inner(catalog);
-            if !catalog.validation_jobs.is_empty() {
+            if !catalog.validation_jobs.is_empty() || !catalog.confirming.is_empty() {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }

@@ -95,11 +95,16 @@ pub(crate) fn collect_sim_commands(
     }
 }
 
-/// Applies retained commands and ticks when no save worker is capturing a snapshot.
+/// Applies retained commands and ticks when no accepted save is waiting for
+/// its snapshot.
 ///
-/// Snapshot capture only holds a read lock while cloning durable state. Skipping
-/// fixed steps during that interval keeps frame-side presentation responsive and
-/// preserves commands in FIFO order for the next completed tick.
+/// An accepted save preserves its admission tick exactly: fixed steps defer
+/// while any admission snapshot capture is in flight, so the world cannot
+/// tick out from under the requested completed-tick identity between
+/// admission and capture. The window covers only the capture — once every
+/// admitted snapshot is parked, ticks resume while encoding and disk I/O
+/// proceed in the background. Deferred commands stay queued in FIFO order
+/// for the next completed tick.
 pub(crate) fn tick_sim(
     mut sim: ResMut<SimResource>,
     mut backlog: ResMut<SimCommandBacklog>,
@@ -108,6 +113,15 @@ pub(crate) fn tick_sim(
     mut profile_stats: ResMut<SimProfileStats>,
     mut catch_up_stats: ResMut<FixedStepCatchUpStats>,
 ) {
+    if sim.admission_captures_in_flight() > 0 {
+        // Bounded by capture duration: each claim releases when its snapshot
+        // is parked (or its task panics), so ticks resume as soon as no
+        // admitted snapshot is at risk.
+        sim.note_snapshot_blocked_fixed_tick();
+        profile_stats.save_blocked_fixed_ticks =
+            profile_stats.save_blocked_fixed_ticks.saturating_add(1);
+        return;
+    }
     let Some(mut simulation) = sim.try_write() else {
         sim.note_snapshot_blocked_fixed_tick();
         profile_stats.save_blocked_fixed_ticks =
@@ -120,6 +134,7 @@ pub(crate) fn tick_sim(
         results.write(SimCommandResult { command, result });
     }
     let profile = simulation.profiled_tick();
+    sim.publish_completed_tick(simulation.tick_count());
     drop(simulation);
     sim.set_changed();
     let tick_ms = profile.total.as_secs_f64() * 1000.0;
@@ -280,7 +295,7 @@ mod tests {
         assert_eq!(
             app.world()
                 .resource::<SimResource>()
-                .snapshot_source()
+                .capture_source()
                 .blocked_fixed_ticks
                 .load(Ordering::Relaxed),
             0,
