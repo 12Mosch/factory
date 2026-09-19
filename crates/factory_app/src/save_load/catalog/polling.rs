@@ -5,6 +5,7 @@
 //! changed; pure timer bookkeeping does not count, so an idle catalog never
 //! trips Bevy change detection.
 
+use super::super::container::save_artifact_epoch;
 use super::super::{CachedSaveValidation, SaveCatalog, SaveCompatibility, SaveKind};
 use super::validation::{
     MAX_CATALOG_VALIDATION_RETRIES, blind_retry_request, queue_catalog_validation,
@@ -59,9 +60,12 @@ pub(crate) fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) -> b
         // means the pre/post decode observations disagreed (e.g. an
         // in-place rewrite mid-validation), so the verdict is not tied to
         // one stable byte sequence. Header-only verdicts (oversized or
-        // unloadable headers, which never decode) install certified.
+        // unloadable headers, which never decode) install certified. The
+        // writer epoch rejects verdicts overtaken by our own save commits
+        // between certification and installation.
         let payload_stable = outcome.fingerprint.is_some() || !outcome.compatibility.can_load();
         if outcome.path_confirmed_current
+            && outcome.commit_epoch == save_artifact_epoch(&outcome.path)
             && outcome.compatibility != SaveCompatibility::ValidationPending
             && payload_stable
         {

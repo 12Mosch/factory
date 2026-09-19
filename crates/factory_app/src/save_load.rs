@@ -564,16 +564,16 @@ pub(crate) fn poll_load_jobs(
         }
     }
     for completed in loads::take_completed_loads(&mut pending) {
+        // Newest wins covers the whole request, including failure
+        // reporting: an obsolete completion — success or error — is
+        // discarded without touching the world or the shared status, so a
+        // superseded failure can never overwrite the current request's
+        // "Loading..." message while it still runs.
+        if pending.completion_superseded(completed.request_id) {
+            continue;
+        }
         match completed.result {
             Ok(candidate) => {
-                // Any completion that is not the latest accepted request is
-                // superseded, even when workers finish out of order: the
-                // newest request stays authoritative after its worker
-                // finishes, so an older completion must never install over
-                // it and poison its generation check.
-                if pending.completion_superseded(completed.request_id) {
-                    continue;
-                }
                 let current = if state.sim.is_initialized() {
                     state.sim.replacement_revision()
                 } else {

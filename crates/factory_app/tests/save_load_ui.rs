@@ -1621,6 +1621,88 @@ fn newest_queued_load_wins() {
 }
 
 #[test]
+fn obsolete_load_failure_never_overwrites_status() {
+    use factory_app::save_load::{SaveLoadStatus, SaveLoadStatusKind};
+    let mut app = test_app(Duration::ZERO, "obsolete_load_error");
+    // The doomed save is large, so its worker spends many frames decoding;
+    // truncating only the tail keeps a valid header (staying loadable in
+    // the UI) while guaranteeing a slow failure after the rescue request
+    // is accepted.
+    generate_large_world(&mut app);
+    create_named_save(&mut app, "Doomed Load Target");
+    drain_persistence_jobs(&mut app);
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .replace(factory_sim::Simulation::new_test_world(424_242))
+        .expect("test world replacement must succeed");
+    let first_tick = sim_tick_and_hash(&app).0;
+    app.world_mut()
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+    run_until_tick(&mut app, first_tick + 2);
+    create_named_save(&mut app, "Rescue Load Target");
+    drain_persistence_jobs(&mut app);
+    let (doomed_id, rescue_id, doomed_path, rescue_tick) = {
+        let catalog = app.world().resource::<SaveCatalog>();
+        let doomed = catalog
+            .entries()
+            .iter()
+            .find(|entry| entry.metadata.display_name == "Doomed Load Target")
+            .unwrap();
+        let rescue = catalog
+            .entries()
+            .iter()
+            .find(|entry| entry.metadata.display_name == "Rescue Load Target")
+            .unwrap();
+        // The install resets the live tick to the file's captured tick.
+        let bytes = fs::read(rescue.path()).unwrap();
+        let (_, payload) = decode_container(&bytes).unwrap();
+        let rescue_tick = load_from_bytes(payload).unwrap().tick_count();
+        (
+            doomed.id.clone(),
+            rescue.id.clone(),
+            doomed.path().to_path_buf(),
+            rescue_tick,
+        )
+    };
+    run_until_tick(&mut app, rescue_tick + 2);
+    app.world_mut().resource_mut::<SaveLoadWindowState>().open = true;
+    app.world_mut().resource_mut::<SaveLoadWindowState>().tab = SaveLoadTab::Load;
+    app.update();
+    press_entry(&mut app, &doomed_id, SaveEntryAction::Load);
+    // Truncate only the tail after the Load button was produced but before
+    // any frame queues the request: the header stays valid while the
+    // worker is guaranteed to fail long after the rescue request is
+    // accepted.
+    let doomed_bytes = fs::read(&doomed_path).unwrap();
+    fs::write(&doomed_path, &doomed_bytes[..doomed_bytes.len() - 1024]).unwrap();
+    app.update();
+    press_entry(&mut app, &rescue_id, SaveEntryAction::Load);
+    app.update();
+    // Step frames until the rescue install lands: the obsolete failure must
+    // never surface in the shared status meanwhile.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(Instant::now() < deadline, "rescue load did not install");
+        app.update();
+        if app.world().resource::<SimResource>().read().tick_count() == rescue_tick {
+            break;
+        }
+        let status = app.world().resource::<SaveLoadStatus>().clone();
+        assert!(
+            status.kind != SaveLoadStatusKind::Error,
+            "an obsolete load failure overwrote the status: {status:?}"
+        );
+    }
+    assert_eq!(
+        app.world().resource::<SimResource>().read().tick_count(),
+        rescue_tick,
+        "the rescue load must install"
+    );
+}
+
+#[test]
 fn commands_around_load_apply_once_and_continue() {
     let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0), "commands_around_load");
     run_until_tick(&mut app, 3);

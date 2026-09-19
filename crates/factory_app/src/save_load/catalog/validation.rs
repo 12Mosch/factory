@@ -6,7 +6,7 @@
 //! bounded retries. [`validate_loadable_file`] is the synchronous counterpart
 //! for explicit callers such as recovery tests.
 
-use super::super::container::{ContainerError, load_simulation_from_reader};
+use super::super::container::{ContainerError, load_simulation_from_reader, save_artifact_epoch};
 use super::super::{
     CachedSaveValidation, CatalogValidationJob, CatalogValidationOutcome, CatalogValidationRequest,
     SaveCatalog, SaveCompatibility, SaveFileMetadataFingerprint, SaveKind,
@@ -188,20 +188,24 @@ pub(crate) fn validate_loadable_file(
 }
 
 /// Re-observes the path on the worker after classification and reports
-/// whether it still resolves to the classified file instance, so the frame
-/// can install the outcome without touching the filesystem. Stable identity
-/// (device, inode, change time) defeats same-length replacements that
-/// preserve mtime; without a stable identity this falls back to
-/// length/mtime equality.
-fn confirm_path_unchanged(path: &Path, observed: &SaveFileMetadataFingerprint) -> bool {
-    let Ok(file) = fs::File::open(path) else {
-        return false;
-    };
-    let current = save_file_metadata_fingerprint(&file);
-    match (&observed.identity, &current.identity) {
-        (Some(expected), Some(actual)) => expected == actual,
-        _ => current.len == observed.len && current.modified == observed.modified,
-    }
+/// whether it still resolves to the classified file instance, plus the
+/// writer epoch bracketing the check. The frame installs the outcome only
+/// when the epoch is unchanged since, so a save committed by our own
+/// writer between certification and installation invalidates the verdict
+/// without any frame-side filesystem call. Stable identity (device, inode,
+/// change time) defeats same-length replacements that preserve mtime;
+/// without a stable identity this falls back to length/mtime equality.
+fn confirm_path_current(path: &Path, observed: &SaveFileMetadataFingerprint) -> (bool, u64) {
+    let before = save_artifact_epoch(path);
+    let confirmed = fs::File::open(path).is_ok_and(|file| {
+        let current = save_file_metadata_fingerprint(&file);
+        match (&observed.identity, &current.identity) {
+            (Some(expected), Some(actual)) => expected == actual,
+            _ => current.len == observed.len && current.modified == observed.modified,
+        }
+    });
+    let after = save_artifact_epoch(path);
+    (confirmed && before == after, after)
 }
 
 pub(crate) fn validate_loadable_path(
@@ -215,23 +219,28 @@ pub(crate) fn validate_loadable_path(
     let mut file = match fs::File::open(&path) {
         Ok(file) => file,
         Err(_) => {
+            // Uncertified without an observation; the epoch is recorded for
+            // structural completeness only.
+            let commit_epoch = save_artifact_epoch(&path);
             return CatalogValidationOutcome {
                 path,
                 compatibility: SaveCompatibility::ValidationPending,
                 fingerprint: None,
                 attempt,
+                commit_epoch,
                 path_confirmed_current: false,
             };
         }
     };
     let metadata = save_file_metadata_fingerprint(&file);
     if metadata.len > SaveLimits::default().max_encoded_bytes {
-        let path_confirmed_current = confirm_path_unchanged(&path, &metadata);
+        let (path_confirmed_current, commit_epoch) = confirm_path_current(&path, &metadata);
         return CatalogValidationOutcome {
             path,
             compatibility: SaveCompatibility::ExceedsCurrentLimits,
             fingerprint: None,
             attempt,
+            commit_epoch,
             path_confirmed_current,
         };
     }
@@ -252,24 +261,26 @@ pub(crate) fn validate_loadable_path(
         {
             Some(current_hash) => classify_open_save(&mut file, &kind, current_hash),
             None => {
-                let path_confirmed_current = confirm_path_unchanged(&path, &metadata);
+                let (path_confirmed_current, commit_epoch) = confirm_path_current(&path, &metadata);
                 return CatalogValidationOutcome {
                     path,
                     compatibility: SaveCompatibility::ValidationPending,
                     fingerprint: None,
                     attempt,
+                    commit_epoch,
                     path_confirmed_current,
                 };
             }
         },
     };
     if !source_compatibility.can_load() {
-        let path_confirmed_current = confirm_path_unchanged(&path, &metadata);
+        let (path_confirmed_current, commit_epoch) = confirm_path_current(&path, &metadata);
         return CatalogValidationOutcome {
             path,
             compatibility: source_compatibility,
             fingerprint: None,
             attempt,
+            commit_epoch,
             path_confirmed_current,
         };
     }
@@ -282,22 +293,24 @@ pub(crate) fn validate_loadable_path(
     let fingerprint = match save_file_fingerprint(&mut file, metadata.clone()) {
         Ok(fingerprint) => fingerprint,
         Err(ContainerError::TooLarge) => {
-            let path_confirmed_current = confirm_path_unchanged(&path, &metadata);
+            let (path_confirmed_current, commit_epoch) = confirm_path_current(&path, &metadata);
             return CatalogValidationOutcome {
                 path,
                 compatibility: SaveCompatibility::ExceedsCurrentLimits,
                 fingerprint: None,
                 attempt,
+                commit_epoch,
                 path_confirmed_current,
             };
         }
         Err(_) => {
-            let path_confirmed_current = confirm_path_unchanged(&path, &metadata);
+            let (path_confirmed_current, commit_epoch) = confirm_path_current(&path, &metadata);
             return CatalogValidationOutcome {
                 path,
                 compatibility: SaveCompatibility::ValidationPending,
                 fingerprint: None,
                 attempt,
+                commit_epoch,
                 path_confirmed_current,
             };
         }
@@ -321,12 +334,13 @@ pub(crate) fn validate_loadable_path(
     };
     // Final freshness observation stays on the worker: the frame installs
     // certified outcomes without any filesystem call.
-    let path_confirmed_current = confirm_path_unchanged(&path, &after_metadata);
+    let (path_confirmed_current, commit_epoch) = confirm_path_current(&path, &after_metadata);
     CatalogValidationOutcome {
         path,
         compatibility,
         fingerprint: stable_fingerprint,
         attempt,
+        commit_epoch,
         path_confirmed_current,
     }
 }
@@ -347,7 +361,7 @@ mod tests {
         fs::write(&path, vec![0x41u8; 1024]).unwrap();
         let observed = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
         assert!(
-            confirm_path_unchanged(&path, &observed),
+            confirm_path_current(&path, &observed).0,
             "an unmodified path must confirm"
         );
         // Same-length replacement with the mtime restored: length and mtime
@@ -368,7 +382,7 @@ mod tests {
             "the test must spoof the signals the old length/mtime check relied on"
         );
         assert!(
-            !confirm_path_unchanged(&path, &observed),
+            !confirm_path_current(&path, &observed).0,
             "a same-length mtime-preserving replacement must not inherit the old verdict"
         );
         fs::remove_dir_all(dir).unwrap();

@@ -12,7 +12,10 @@ pub use scan::{PendingCatalogScan, refresh_catalog_blocking, scan_catalog};
 pub(crate) use scan::{poll_catalog_scan_system, request_catalog_scan};
 
 #[cfg(test)]
-use super::container::{ContainerError, fallback_metadata, load_simulation_from_reader};
+use super::container::{
+    ContainerError, bump_save_artifact_epoch, fallback_metadata, load_simulation_from_reader,
+    save_artifact_epoch,
+};
 #[cfg(test)]
 use super::{
     CachedSaveValidation, CatalogValidationJob, CatalogValidationOutcome, CatalogValidationRequest,
@@ -253,6 +256,7 @@ mod tests {
             // a real worker would observe the new instance and decline to
             // certify.
             path_confirmed_current: false,
+            commit_epoch: save_artifact_epoch(&path),
         };
         // Simulate the old worker finishing after the replacement + refresh.
         let mut catalog = SaveCatalog {
@@ -346,6 +350,7 @@ mod tests {
             // a real worker would observe the new instance and decline to
             // certify.
             path_confirmed_current: false,
+            commit_epoch: save_artifact_epoch(&path),
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -530,6 +535,7 @@ mod tests {
             fingerprint: None,
             attempt: 1,
             path_confirmed_current: false,
+            commit_epoch: save_artifact_epoch(&path),
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -590,6 +596,7 @@ mod tests {
             fingerprint: None,
             attempt: 0,
             path_confirmed_current: false,
+            commit_epoch: save_artifact_epoch(&path),
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -671,6 +678,7 @@ mod tests {
             fingerprint: None,
             attempt: MAX_CATALOG_VALIDATION_RETRIES,
             path_confirmed_current: false,
+            commit_epoch: save_artifact_epoch(&path),
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -860,12 +868,14 @@ mod tests {
                 },
                 cancel,
                 handle: thread::spawn(move || {
+                    let commit_epoch = save_artifact_epoch(&path);
                     let outcome = CatalogValidationOutcome {
                         path,
                         compatibility: SaveCompatibility::ValidationPending,
                         fingerprint: None,
                         attempt: 0,
                         path_confirmed_current: false,
+                        commit_epoch,
                     };
                     let mut spins = 0u32;
                     loop {
@@ -1042,6 +1052,7 @@ mod tests {
             // The file is untouched since fingerprinting, matching what a
             // real worker certifies for an unmodified path.
             path_confirmed_current: true,
+            commit_epoch: save_artifact_epoch(&path),
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -1152,6 +1163,7 @@ mod tests {
             fingerprint: None,
             attempt: MAX_CATALOG_VALIDATION_RETRIES,
             path_confirmed_current: true,
+            commit_epoch: save_artifact_epoch(&path),
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -1201,6 +1213,84 @@ mod tests {
     }
 
     #[test]
+    fn writer_commit_after_certification_invalidates_outcome() {
+        // A save committed by our own writer between worker certification
+        // and frame installation bumps the artifact epoch. The verdict
+        // describes replaced bytes and must not install, even though the
+        // certification itself was valid when observed.
+        let dir = std::env::temp_dir().join(format!(
+            "factory-commit-epoch-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        let mut open = fs::File::open(&path).unwrap();
+        let metadata = save_file_metadata_fingerprint(&open);
+        let fingerprint = save_file_fingerprint(&mut open, metadata).unwrap();
+        drop(open);
+        let certified_epoch = save_artifact_epoch(&path);
+        // The writer commit landing before the frame consumes the outcome.
+        bump_save_artifact_epoch(&path);
+        let overtaken = CatalogValidationOutcome {
+            path: path.clone(),
+            compatibility: SaveCompatibility::Compatible,
+            fingerprint: Some(fingerprint),
+            attempt: MAX_CATALOG_VALIDATION_RETRIES,
+            path_confirmed_current: true,
+            commit_epoch: certified_epoch,
+        };
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+                inspected: None,
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: vec![CatalogValidationJob {
+                path: path.clone(),
+                metadata: SaveFileMetadataFingerprint {
+                    len: 0,
+                    modified: None,
+                    identity: None,
+                },
+                cancel: Arc::new(AtomicBool::new(false)),
+                handle: thread::spawn(|| overtaken),
+            }],
+        };
+
+        drain_validation_jobs(&mut catalog);
+
+        assert_eq!(catalog.validation_jobs.len(), 0);
+        assert!(catalog.validation_queue.is_empty());
+        assert!(
+            !catalog.validation_cache.contains_key(&path),
+            "an overtaken verdict must not populate the cache"
+        );
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::ValidationPending,
+            "a verdict overtaken by a writer commit must keep the entry pending"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn certified_header_only_verdict_installs_without_fingerprint() {
         // Oversized payloads never decode, so no stable fingerprint exists;
         // the header-observed verdict still installs when certified.
@@ -1220,6 +1310,7 @@ mod tests {
             fingerprint: None,
             attempt: 0,
             path_confirmed_current: true,
+            commit_epoch: save_artifact_epoch(&path),
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {

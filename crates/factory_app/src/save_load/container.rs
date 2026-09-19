@@ -3,6 +3,7 @@ use factory_sim::{
     RECORD_MAGIC, SAVE_HEADER_SIZE, SaveLimits, SaveLoadError, Simulation, SimulationSaveSnapshot,
     load_from_reader_with_limits, save_snapshot_records_to_writer_with_limits,
 };
+use std::collections::BTreeMap;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -12,6 +13,28 @@ use std::{fs, str};
 
 static SAVE_ARTIFACT_COUNTER: AtomicU64 = AtomicU64::new(0);
 static SAVE_ARTIFACT_LOCK: Mutex<()> = Mutex::new(());
+/// Per-path mutation epochs for canonical save artifacts. Bumped after
+/// every committed replacement or removal (save commits, recovery
+/// promotions, deletions). Catalog validation outcomes record the epoch
+/// alongside worker certification so the frame can reject verdicts
+/// overtaken by our own writer without any filesystem call. Per-path (not
+/// global) so a save to one slot never invalidates another path's
+/// in-flight validation.
+static SAVE_ARTIFACT_EPOCHS: Mutex<BTreeMap<PathBuf, u64>> = Mutex::new(BTreeMap::new());
+
+pub(crate) fn save_artifact_epoch(path: &Path) -> u64 {
+    SAVE_ARTIFACT_EPOCHS
+        .lock()
+        .map(|epochs| epochs.get(path).copied().unwrap_or(0))
+        .unwrap_or(0)
+}
+
+pub(crate) fn bump_save_artifact_epoch(path: &Path) {
+    if let Ok(mut epochs) = SAVE_ARTIFACT_EPOCHS.lock() {
+        let next = epochs.get(path).copied().unwrap_or(0).wrapping_add(1);
+        epochs.insert(path.to_path_buf(), next);
+    }
+}
 
 /// Magic bytes at the start of a Factory save container.
 pub const CONTAINER_MAGIC: [u8; 8] = *b"FACTSAVE";
@@ -514,6 +537,8 @@ fn write_temporary_and_commit<T>(
             let _ = fs::remove_file(&backup_path);
         }
         let _ = sync_parent_directory(path);
+    } else {
+        bump_save_artifact_epoch(path);
     }
     result
 }
@@ -576,20 +601,25 @@ pub(crate) fn promote_backup(
     // Promotion has committed even if a post-rename durability barrier is not
     // available on this filesystem or is temporarily blocked by another handle.
     let _ = sync_installed_file(path);
+    bump_save_artifact_epoch(path);
     Ok(())
 }
 
 /// Removes a canonical save and all of its recovery artifacts as one serialized
 /// operation so an intentional deletion cannot be mistaken for a crashed write.
 pub(crate) fn remove_save_and_artifacts(path: &Path) -> io::Result<()> {
-    with_save_artifact_lock(|| {
+    let result = with_save_artifact_lock(|| {
         for artifact in save_artifacts_for(path)? {
             discard_save_artifact(&artifact)?;
         }
         sync_parent_directory(path)?;
         fs::remove_file(path)?;
         sync_parent_directory(path)
-    })
+    });
+    if result.is_ok() {
+        bump_save_artifact_epoch(path);
+    }
+    result
 }
 
 /// Durably removes an artifact, first retiring a backup so cleanup failure can

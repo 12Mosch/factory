@@ -5,9 +5,9 @@ use factory_data::PrototypeCatalog;
 use factory_sim::{EnemyDifficultyPreset, Simulation, SimulationConfig};
 
 use crate::save_load::{
-    LoadState, PendingLoadJobs, PendingSaveConfirmation, PendingSaveJobs, SaveCatalog, SaveId,
-    SaveKind, SaveLoadConfig, SaveLoadStatus, delete_save_with_loads, enter_swapped_world,
-    load_save, refresh_catalog_blocking,
+    LoadState, PendingCatalogScan, PendingLoadJobs, PendingSaveConfirmation, PendingSaveJobs,
+    SaveCatalog, SaveId, SaveKind, SaveLoadConfig, SaveLoadStatus, delete_save_with_loads,
+    enter_swapped_world, load_save, request_catalog_scan,
 };
 use crate::ui::layout::scroll_column;
 use crate::ui::save_load::format_timestamp;
@@ -90,18 +90,19 @@ pub fn build_world_setup_ui(
     mut commands: Commands,
     existing: Query<Entity, With<WorldSetupRoot>>,
     saves: Res<SaveLoadConfig>,
-    mut catalog: ResMut<SaveCatalog>,
-    mut status: ResMut<SaveLoadStatus>,
+    catalog: Res<SaveCatalog>,
     confirmation: Res<PendingSaveConfirmation>,
     mut list_state: ResMut<WorldSetupSaveListState>,
     setup: Res<WorldSetupState>,
+    mut pending_scan: ResMut<PendingCatalogScan>,
 ) {
-    // One-time screen build: scan synchronously so the save list is settled
-    // before the first frame. Frame-driven refreshes go through the
-    // background scan worker instead.
-    if let Err(error) = refresh_catalog_blocking(&saves, &mut catalog) {
-        status.message = Some(format!("Cannot refresh save catalog: {error}"));
-    }
+    // Screen build never blocks on the filesystem — not at startup and not
+    // on New World transitions from an active session. The background scan
+    // worker settles recovery and the directory listing; the previously
+    // listed entries stay visible until it lands, and
+    // `sync_world_setup_save_list` repopulates the list from
+    // `catalog.revision` when it does.
+    request_catalog_scan(&saves, &mut pending_scan, catalog.scan_epoch);
     list_state.revision = catalog.revision;
     list_state.confirmation = confirmation.clone();
     for entity in &existing {

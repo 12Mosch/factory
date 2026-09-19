@@ -223,6 +223,10 @@ pub(crate) struct CatalogValidationOutcome {
     /// outcomes without any filesystem call; uncertified outcomes always
     /// take the retry path.
     pub(crate) path_confirmed_current: bool,
+    /// Writer epoch bracketing the worker's final path check. The frame
+    /// installs only when the epoch is unchanged since, so a save
+    /// committed by our own writer in between invalidates the verdict.
+    pub(crate) commit_epoch: u64,
 }
 
 #[derive(Debug)]
