@@ -118,6 +118,7 @@ fn overlay_reconciliation_preserves_player_entity() {
                 Vec2::splat(176.0),
                 (player_position, None, None),
                 &sim,
+                1,
                 &settings,
                 &markers,
             ),
@@ -186,6 +187,7 @@ fn minimap_overlay_reconcile_benchmark() {
                     Vec2::splat(176.0),
                     (Vec2::ZERO, None, None),
                     sim,
+                    1,
                     &settings,
                     &markers,
                 ),
@@ -252,6 +254,7 @@ fn corpse_markers_invalidate_map_cache_without_player_motion() {
             Vec2::splat(176.0),
             (Vec2::ZERO, None, None),
             sim,
+            1,
             &settings,
             &markers,
         )

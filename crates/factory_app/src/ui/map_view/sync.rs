@@ -109,12 +109,14 @@ pub(crate) fn sync_minimap(mut commands: Commands, mut params: MinimapSyncParams
         if !is_descendant_of(overlay_root, root, &params.parents) {
             continue;
         }
+        let world_generation = params.sim.replacement_revision();
         let sim = params.sim.read();
         let key = map_detail_cache_key(
             crop_bounds,
             Vec2::splat(MINIMAP_CONTENT_SIZE),
             (Vec2::new(player_x, player_y), camera_rect, None),
             &sim,
+            world_generation,
             &params.settings,
             &params.markers,
         );
@@ -267,12 +269,14 @@ pub(crate) fn sync_full_map_view(mut commands: Commands, mut params: FullMapSync
         if !is_descendant_of(overlay_root, root, &params.parents) {
             continue;
         }
+        let world_generation = params.sim.replacement_revision();
         let sim = params.sim.read();
         let key = map_detail_cache_key(
             crop_bounds,
             display_size,
             (Vec2::new(player_x, player_y), camera_rect, chunk_cursor),
             &sim,
+            world_generation,
             &params.settings,
             &params.markers,
         );
@@ -327,6 +331,7 @@ pub(super) fn map_detail_cache_key(
         Option<factory_sim::ChunkCoord>,
     ),
     sim: &factory_sim::Simulation,
+    world_generation: u64,
     settings: &MapDisplaySettings,
     markers: &MapOverlayMarkers,
 ) -> MapDetailCacheKey {
@@ -346,7 +351,7 @@ pub(super) fn map_detail_cache_key(
         chunk_cursor,
         overlay_bits: settings.overlays.enabled_bits(),
         debug_reveal_all: settings.debug_reveal_all,
-        world_seed: sim.seed(),
+        world_generation,
         reveal_revision: sim.revealed_revision(),
         topology_revision: sim.entity_topology_revision(),
         pollution_revision: sim.pollution_map_revision(),

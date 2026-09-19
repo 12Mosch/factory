@@ -117,7 +117,7 @@ pub(crate) struct MapDetailCacheKey {
     pub chunk_cursor: Option<ChunkCoord>,
     pub overlay_bits: u64,
     pub debug_reveal_all: bool,
-    pub world_seed: u64,
+    pub world_generation: u64,
     pub reveal_revision: u64,
     pub topology_revision: u64,
     pub pollution_revision: u64,
@@ -181,6 +181,12 @@ impl MapDetailCache {
         let Some(previous) = entry.key.replace(key) else {
             return [true; MapOverlayLayer::COUNT];
         };
+
+        // A new world admits the same revisions, camera, and markers as the
+        // previous one, so world identity alone must invalidate every layer.
+        if previous.world_generation != key.world_generation {
+            return [true; MapOverlayLayer::COUNT];
+        }
 
         let geometry_changed = previous.crop_bounds != key.crop_bounds
             || previous.image_size_bits != key.image_size_bits;
@@ -304,7 +310,7 @@ mod tests {
             chunk_cursor: None,
             overlay_bits: overlays.enabled_bits(),
             debug_reveal_all: false,
-            world_seed: 0,
+            world_generation: 0,
             reveal_revision: 0,
             topology_revision: 0,
             pollution_revision: 0,
@@ -374,6 +380,38 @@ mod tests {
         for (index, layer) in MapOverlayLayer::ALL.into_iter().enumerate() {
             assert_eq!(changed[index], layer == MapOverlayLayer::Enemies);
         }
+    }
+
+    #[test]
+    fn detail_cache_invalidates_every_layer_on_world_change() {
+        let mut cache = MapDetailCache::default();
+        let root = bevy::prelude::Entity::PLACEHOLDER;
+        let key = detail_key(MapOverlaySettings::default());
+        assert!(
+            cache
+                .changed_layers(root, key)
+                .into_iter()
+                .all(|changed| changed)
+        );
+
+        // An otherwise identical key from a newly installed world must still
+        // invalidate, since fresh worlds share revision counters.
+        let mut next_world = key;
+        next_world.world_generation = key.world_generation.wrapping_add(1);
+        assert!(
+            cache
+                .changed_layers(root, next_world)
+                .into_iter()
+                .all(|changed| changed),
+            "a world change alone must refresh every overlay layer"
+        );
+        assert!(
+            cache
+                .changed_layers(root, next_world)
+                .into_iter()
+                .all(|changed| !changed),
+            "repeating the same world must stay quiet"
+        );
     }
 
     #[test]
@@ -506,10 +544,10 @@ pub struct MapLayerTextureCache {
     pub pixels: Option<Vec<u8>>,
     pub dirty_regions: MapTextureDirtyRegions,
     pub painted_chunks: BTreeMap<ChunkCoord, MapChunkPaintState>,
-    /// World seed painted into this layer. Fresh worlds share revision
-    /// counters, so the seed is the only signal that distinguishes a new
-    /// world from the previous one.
-    pub last_seed: Option<u64>,
+    /// World identity painted into this layer. Fresh worlds share revision
+    /// counters, so only the replacement generation distinguishes a newly
+    /// installed world from the previous one.
+    pub last_world_generation: Option<u64>,
     pub last_chunk_revision: u64,
     pub last_resource_revision: u64,
     /// Last terrain-write revision painted into this layer, so runtime tile

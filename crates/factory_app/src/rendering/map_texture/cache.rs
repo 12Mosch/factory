@@ -30,12 +30,14 @@ pub(crate) fn update_map_texture(
         return;
     };
 
+    let world_generation = sim.replacement_revision();
     let sim = sim.read();
     // The surface layer also backs the minimap, so it stays fresh even while
     // the fullscreen map is closed. Other layers only update while displayed.
     let surface_cache = cache.layer_mut(MapTextureLayer::Surface);
     update_layer_map_texture(
         &sim,
+        world_generation,
         &settings,
         MapTextureLayer::Surface,
         surface_cache,
@@ -50,6 +52,7 @@ pub(crate) fn update_map_texture(
         let layer_cache = cache.layer_mut(MapTextureLayer::Resources);
         update_layer_map_texture(
             &sim,
+            world_generation,
             &settings,
             MapTextureLayer::Resources,
             layer_cache,
@@ -61,6 +64,7 @@ pub(crate) fn update_map_texture(
 
 fn update_layer_map_texture(
     sim: &Simulation,
+    world_generation: u64,
     settings: &MapDisplaySettings,
     layer: MapTextureLayer,
     cache: &mut MapLayerTextureCache,
@@ -70,8 +74,7 @@ fn update_layer_map_texture(
     let revealed_revision = sim.revealed_revision();
     let debug_flags = (settings.debug_reveal_all, settings.show_chunk_grid);
     let tick_count = sim.tick_count();
-    let seed = sim.seed();
-    let seed_changed = cache.last_seed != Some(seed);
+    let world_changed = cache.last_world_generation != Some(world_generation);
     let chunk_changed = cache.last_chunk_revision != sim.world().chunk_revision();
     let resource_changed = cache.last_resource_revision != sim.world().resource_revision();
     let terrain_changed = cache.last_terrain_revision != sim.world().terrain_revision();
@@ -85,7 +88,7 @@ fn update_layer_map_texture(
     // Only the surface layer paints terrain; the resource layer draws resource
     // cells, which a terrain rewrite leaves alone.
     let needs_update = cache.handle.is_none()
-        || seed_changed
+        || world_changed
         || map_changed
         || debug_changed
         || (layer == MapTextureLayer::Surface && terrain_changed)
@@ -96,10 +99,10 @@ fn update_layer_map_texture(
     }
 
     let rasterizer = MapRasterizer::new(sim, settings, layer);
-    // A seed change invalidates every cached pixel and the bounded change
+    // A world change invalidates every cached pixel and the bounded change
     // histories that incremental updates rely on, so it always rebuilds.
     let full_rebuild =
-        cache.bounds.is_none() || cache.pixels.is_none() || debug_changed || seed_changed;
+        cache.bounds.is_none() || cache.pixels.is_none() || debug_changed || world_changed;
     if full_rebuild {
         let map = rasterizer.generate();
         cache.bounds = Some(map.bounds);
@@ -112,7 +115,7 @@ fn update_layer_map_texture(
 
     upload_layer_texture(cache, images, uploads);
 
-    cache.last_seed = Some(seed);
+    cache.last_world_generation = Some(world_generation);
     cache.last_chunk_revision = sim.world().chunk_revision();
     cache.last_resource_revision = sim.world().resource_revision();
     cache.last_terrain_revision = sim.world().terrain_revision();
