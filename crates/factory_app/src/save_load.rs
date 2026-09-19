@@ -113,12 +113,13 @@ pub(crate) fn initialize_save_state(
 pub(crate) fn refresh_catalog_on_manager_open(
     mut window: ResMut<SaveLoadWindowState>,
     config: Res<SaveLoadConfig>,
+    catalog: Res<SaveCatalog>,
     mut pending_scan: ResMut<PendingCatalogScan>,
 ) {
     if window.open && window.refresh_on_open {
         // The previously listed entries stay visible until the background
         // scan lands; no filesystem work happens on this frame.
-        request_catalog_scan(&config, &mut pending_scan);
+        request_catalog_scan(&config, &mut pending_scan, catalog.scan_epoch);
         window.refresh_on_open = false;
     }
 }
@@ -296,7 +297,9 @@ pub fn delete_save_with_loads(
     }
     // Drop the entry in-memory for immediate list consistency, including
     // validation cache pruning. No scan is needed: the artifacts are gone
-    // and the remaining entries are untouched.
+    // and the remaining entries are untouched. The removal bumps the scan
+    // epoch, so a background scan requested before the deletion is dropped
+    // on landing instead of resurrecting the entry.
     catalog.remove(id);
     status.message = Some(format!("{} deleted.", entry.metadata.display_name));
     status.kind = SaveLoadStatusKind::Success;
@@ -371,7 +374,7 @@ pub(crate) fn poll_save_jobs(
                 }
                 // The new file lands in the list via a background scan;
                 // validation for it is re-queued on install.
-                request_catalog_scan(&config, &mut pending_scan);
+                request_catalog_scan(&config, &mut pending_scan, catalog.scan_epoch);
             }
             Err(SaveJobError::Cancelled) => {
                 // A pre-commit cancellation is never reported as committed.

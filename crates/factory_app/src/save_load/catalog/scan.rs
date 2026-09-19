@@ -34,6 +34,10 @@ use std::thread::{self, JoinHandle};
 pub struct PendingCatalogScan {
     worker: Option<JoinHandle<Result<Vec<SaveEntry>, String>>>,
     requested: bool,
+    /// Catalog mutation epoch observed by the latest request. A scan that
+    /// lands after a mutation (e.g. a deletion) is dropped unseen so its
+    /// snapshot cannot resurrect removed entries.
+    requested_epoch: u64,
 }
 
 impl PendingCatalogScan {
@@ -71,7 +75,14 @@ impl Drop for PendingCatalogScan {
 /// Requests a background catalog scan. Coalesces while a scan is running —
 /// the running scan already observes the latest directory state, and a
 /// follow-up scan starts when it lands if anything requested one meanwhile.
-pub(crate) fn request_catalog_scan(config: &SaveLoadConfig, pending: &mut PendingCatalogScan) {
+/// Records the catalog mutation epoch so a scan overtaken by a deletion is
+/// dropped on landing instead of resurrecting the entry.
+pub(crate) fn request_catalog_scan(
+    config: &SaveLoadConfig,
+    pending: &mut PendingCatalogScan,
+    epoch: u64,
+) {
+    pending.requested_epoch = epoch;
     if pending.worker.is_some() {
         pending.requested = true;
         return;
@@ -101,16 +112,26 @@ pub(crate) fn poll_catalog_scan(
     let Some(outcome) = pending.join_finished() else {
         return;
     };
+    let mut follow_up = pending.requested;
     match outcome {
-        Ok(entries) => install_scan_entries(catalog, entries),
+        Ok(entries) if pending.requested_epoch == catalog.scan_epoch => {
+            install_scan_entries(catalog, entries);
+        }
+        Ok(_) => {
+            // A catalog mutation (e.g. a deletion) landed while the scan
+            // was in flight: the snapshot predates it and may resurrect
+            // removed entries, so it is dropped unseen and a follow-up
+            // scan re-observes the directory.
+            follow_up = true;
+        }
         Err(error) => {
             status.message = Some(format!("Cannot refresh save catalog: {error}"));
             status.kind = SaveLoadStatusKind::Error;
             status.last_completed_id = None;
         }
     }
-    if pending.requested {
-        request_catalog_scan(config, pending);
+    if follow_up {
+        request_catalog_scan(config, pending, catalog.scan_epoch);
     }
 }
 
@@ -322,5 +343,69 @@ fn autosave_generation(kind: &SaveKind) -> usize {
     match kind {
         SaveKind::Autosave { generation } => *generation,
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scan_landing_after_delete_is_dropped_unseen() {
+        let dir = std::env::temp_dir().join(format!(
+            "factory-scan-epoch-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        // The directory does not exist, so the follow-up scan lands
+        // immediately with nothing to install.
+        let config = SaveLoadConfig {
+            root_dir: dir.clone(),
+            autosave_interval_ticks: 300,
+            autosave_slot_count: 5,
+        };
+        let id = SaveId::new("deleted");
+        let metadata = fallback_metadata(id.clone(), SaveKind::Named, "Deleted".into(), 0);
+        let path = dir.join("deleted.factsim");
+        let stale = SaveEntry {
+            id: id.clone(),
+            metadata: metadata.clone(),
+            compatibility: SaveCompatibility::Compatible,
+            metadata_available: true,
+            path: path.clone(),
+            inspected: None,
+        };
+        let mut catalog = SaveCatalog::default();
+        catalog.entries.push(SaveEntry {
+            id: id.clone(),
+            metadata,
+            compatibility: SaveCompatibility::ValidationPending,
+            metadata_available: true,
+            path,
+            inspected: None,
+        });
+        catalog.scan_epoch = 0;
+        let mut pending = PendingCatalogScan::default();
+        let mut status = SaveLoadStatus::default();
+        // A scan requested before the deletion lands after it.
+        pending.worker = Some(thread::spawn(|| Ok(vec![stale])));
+        pending.requested_epoch = 0;
+        catalog.remove(&id);
+        // The stale snapshot must never become visible, including while
+        // the follow-up scan is still in flight.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !pending.is_empty() {
+            poll_catalog_scan(&config, &mut pending, &mut catalog, &mut status);
+            assert!(
+                catalog.entries.is_empty(),
+                "a scan overtaken by a deletion resurrected the entry"
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "catalog scan did not settle"
+            );
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(catalog.entries.is_empty());
     }
 }

@@ -170,6 +170,10 @@ pub struct SaveCatalog {
     /// scheduled validation are re-observed. Monotonic so a backward wall-
     /// clock jump cannot suspend rescans; `None` means a rescan is due.
     pub(crate) next_pending_rescan: Option<Instant>,
+    /// Structural mutation counter (entry removal). Background scans record
+    /// the epoch at request time; a scan landing after a mutation is
+    /// dropped unseen so it cannot resurrect deleted entries.
+    pub(crate) scan_epoch: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -244,7 +248,9 @@ impl SaveCatalog {
     }
 
     /// Removes one entry with its validation cache and queued work, keeping
-    /// the list consistent without a disk scan.
+    /// the list consistent without a disk scan. Bumps the scan epoch so a
+    /// background scan requested before the removal is dropped on landing
+    /// instead of resurrecting the entry.
     pub(crate) fn remove(&mut self, id: &SaveId) {
         if let Some(entry) = self.entries.iter().find(|entry| &entry.id == id) {
             let path = entry.path.clone();
@@ -253,6 +259,7 @@ impl SaveCatalog {
         }
         self.entries.retain(|entry| &entry.id != id);
         self.revision = self.revision.wrapping_add(1);
+        self.scan_epoch = self.scan_epoch.wrapping_add(1);
     }
 
     pub(crate) fn invalidate_validation(&mut self, id: &SaveId) {

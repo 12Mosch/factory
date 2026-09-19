@@ -54,9 +54,16 @@ pub(crate) fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) -> b
         // the path after classifying and certified the outcome only when it
         // still resolved to the same file instance. Stable identity defeats
         // same-length replacements that preserve mtime; uncertified
-        // outcomes always take the retry path below.
+        // outcomes always take the retry path below. Payload-derived
+        // verdicts additionally require a stable fingerprint: a missing one
+        // means the pre/post decode observations disagreed (e.g. an
+        // in-place rewrite mid-validation), so the verdict is not tied to
+        // one stable byte sequence. Header-only verdicts (oversized or
+        // unloadable headers, which never decode) install certified.
+        let payload_stable = outcome.fingerprint.is_some() || !outcome.compatibility.can_load();
         if outcome.path_confirmed_current
             && outcome.compatibility != SaveCompatibility::ValidationPending
+            && payload_stable
         {
             if let Some(fingerprint) = outcome.fingerprint {
                 catalog.validation_cache.insert(

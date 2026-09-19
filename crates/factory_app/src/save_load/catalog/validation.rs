@@ -373,4 +373,19 @@ mod tests {
         );
         fs::remove_dir_all(dir).unwrap();
     }
+
+    #[test]
+    fn cancel_reader_aborts_reads_once_signalled() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut reader = CancelReader {
+            reader: &[0x41u8; 8][..],
+            cancel: Arc::clone(&cancel),
+        };
+        let mut byte = [0u8; 1];
+        assert_eq!(reader.read(&mut byte).unwrap(), 1);
+        assert_eq!(byte, [0x41]);
+        cancel.store(true, Ordering::Relaxed);
+        let error = reader.read(&mut byte).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionAborted);
+    }
 }

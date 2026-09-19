@@ -82,7 +82,7 @@ mod tests {
         let mut status = super::super::SaveLoadStatus::default();
 
         // Filesystem work runs on the scan worker; the frame only installs.
-        request_catalog_scan(&config, &mut pending);
+        request_catalog_scan(&config, &mut pending, catalog.scan_epoch);
         let deadline = Instant::now() + Duration::from_secs(10);
         while !pending.is_empty() {
             poll_catalog_scan(&config, &mut pending, &mut catalog, &mut status);
@@ -272,6 +272,7 @@ mod tests {
             revision: 0,
             validation_cache: BTreeMap::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
             validation_queue: VecDeque::from([CatalogValidationRequest {
                 path: path.clone(),
                 kind: SaveKind::Quicksave,
@@ -363,6 +364,7 @@ mod tests {
             revision: 0,
             validation_cache: BTreeMap::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -546,6 +548,7 @@ mod tests {
             revision: 0,
             validation_cache: BTreeMap::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -605,6 +608,7 @@ mod tests {
             revision: 0,
             validation_cache: BTreeMap::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -685,6 +689,7 @@ mod tests {
             revision: 0,
             validation_cache: BTreeMap::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -779,6 +784,7 @@ mod tests {
             revision: 0,
             validation_cache: BTreeMap::new(),
             next_pending_rescan: None,
+            scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: Vec::new(),
         };
@@ -843,6 +849,7 @@ mod tests {
             revision: 0,
             validation_cache: BTreeMap::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -996,6 +1003,7 @@ mod tests {
             revision: 7,
             validation_cache: BTreeMap::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: Vec::new(),
         };
@@ -1052,6 +1060,7 @@ mod tests {
             revision: 0,
             validation_cache: BTreeMap::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: vec![CatalogValidationJob {
                 path: path.clone(),
@@ -1109,6 +1118,7 @@ mod tests {
             revision: 0,
             validation_cache: BTreeMap::new(),
             next_pending_rescan: None,
+            scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
             validation_jobs: Vec::new(),
         };
@@ -1116,6 +1126,140 @@ mod tests {
         // The throttle advances but nothing observable changes.
         assert!(!poll_catalog_validation_jobs_inner(&mut catalog));
         assert!(catalog.next_pending_rescan.is_some());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unstable_certified_verdict_stays_pending() {
+        // A certified outcome without a stable fingerprint describes a
+        // mixed read (e.g. an in-place rewrite between the worker's two
+        // observations). Publishing it would freeze a possibly bogus
+        // payload verdict and stop pending retries, so it must not
+        // install even though the path still names the same instance.
+        let dir = std::env::temp_dir().join(format!(
+            "factory-unstable-verdict-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        let unstable = CatalogValidationOutcome {
+            path: path.clone(),
+            compatibility: SaveCompatibility::Compatible,
+            fingerprint: None,
+            attempt: MAX_CATALOG_VALIDATION_RETRIES,
+            path_confirmed_current: true,
+        };
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+                inspected: None,
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: vec![CatalogValidationJob {
+                path: path.clone(),
+                metadata: SaveFileMetadataFingerprint {
+                    len: 0,
+                    modified: None,
+                    identity: None,
+                },
+                cancel: Arc::new(AtomicBool::new(false)),
+                handle: thread::spawn(|| unstable),
+            }],
+        };
+
+        drain_validation_jobs(&mut catalog);
+
+        assert_eq!(catalog.validation_jobs.len(), 0);
+        assert!(catalog.validation_queue.is_empty());
+        assert!(
+            !catalog.validation_cache.contains_key(&path),
+            "an unstable verdict must not populate the cache"
+        );
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::ValidationPending,
+            "an unstable certified verdict must keep the entry pending for retry"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn certified_header_only_verdict_installs_without_fingerprint() {
+        // Oversized payloads never decode, so no stable fingerprint exists;
+        // the header-observed verdict still installs when certified.
+        let dir = std::env::temp_dir().join(format!(
+            "factory-header-only-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        let header_only = CatalogValidationOutcome {
+            path: path.clone(),
+            compatibility: SaveCompatibility::ExceedsCurrentLimits,
+            fingerprint: None,
+            attempt: 0,
+            path_confirmed_current: true,
+        };
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+                inspected: None,
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: vec![CatalogValidationJob {
+                path: path.clone(),
+                metadata: SaveFileMetadataFingerprint {
+                    len: 0,
+                    modified: None,
+                    identity: None,
+                },
+                cancel: Arc::new(AtomicBool::new(false)),
+                handle: thread::spawn(|| header_only),
+            }],
+        };
+
+        drain_validation_jobs(&mut catalog);
+
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::ExceedsCurrentLimits,
+            "a certified header-only verdict must install"
+        );
+        assert!(catalog.validation_queue.is_empty());
         fs::remove_dir_all(dir).unwrap();
     }
 

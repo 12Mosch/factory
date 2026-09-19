@@ -8,13 +8,16 @@
 //! install over a newer world.
 
 use super::SaveId;
-use super::container::{ContainerError, load_simulation};
+use super::catalog::validation::CancelReader;
+use super::container::{ContainerError, load_simulation_from_reader};
 use super::lifecycle::{
     LoadJobError, LoadJobPhase, MAX_LOAD_WORKERS, MAX_QUEUED_LOADS, PersistenceRequestId,
 };
-use factory_sim::Simulation;
+use factory_sim::{SaveLimits, Simulation};
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::fs;
+use std::io::BufReader;
+use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU8, Ordering},
@@ -295,6 +298,42 @@ pub(crate) fn queue_load(
     request_id
 }
 
+/// Decodes a save through a cancellation-aware reader so `cancel_all`
+/// (e.g. new-world installation) aborts a stale decode at the next read
+/// chunk instead of running it to completion. Reads fail with
+/// `ConnectionAborted` once the signal is set; see [`map_load_io_error`].
+fn load_simulation_cancellable(
+    path: &Path,
+    cancel: &Arc<AtomicBool>,
+) -> Result<Simulation, ContainerError> {
+    let file = fs::File::open(path)?;
+    let mut reader = BufReader::new(CancelReader {
+        reader: file,
+        cancel: Arc::clone(cancel),
+    });
+    load_simulation_from_reader(&mut reader, SaveLimits::default())
+}
+
+/// Maps decode I/O failures. A failure observed while the cancellation
+/// signal is set reports `Cancelled` — the result is unwanted either way,
+/// and silent cancellation must win over a transient-error status.
+/// Otherwise transient denials stay retryable and are never corruption.
+fn map_load_io_error(io_error: std::io::Error, cancel: &AtomicBool) -> LoadJobError {
+    if cancel.load(Ordering::Relaxed) {
+        return LoadJobError::Cancelled;
+    }
+    match io_error.kind() {
+        std::io::ErrorKind::NotFound
+        | std::io::ErrorKind::PermissionDenied
+        | std::io::ErrorKind::WouldBlock
+        | std::io::ErrorKind::TimedOut
+        | std::io::ErrorKind::Interrupted
+        | std::io::ErrorKind::ConnectionAborted
+        | std::io::ErrorKind::ConnectionReset => LoadJobError::TransientIo(io_error.to_string()),
+        _ => LoadJobError::Io(io_error.to_string()),
+    }
+}
+
 fn run_load_worker(
     request_id: PersistenceRequestId,
     path: PathBuf,
@@ -306,20 +345,8 @@ fn run_load_worker(
         return Err(LoadJobError::Cancelled);
     }
     phase.store(LoadJobPhase::Decoding.encode(), Ordering::Relaxed);
-    let simulation = load_simulation(&path).map_err(|error| match error {
-        ContainerError::Io(io_error) => match io_error.kind() {
-            // Transient denials stay retryable and are never corruption.
-            std::io::ErrorKind::NotFound
-            | std::io::ErrorKind::PermissionDenied
-            | std::io::ErrorKind::WouldBlock
-            | std::io::ErrorKind::TimedOut
-            | std::io::ErrorKind::Interrupted
-            | std::io::ErrorKind::ConnectionAborted
-            | std::io::ErrorKind::ConnectionReset => {
-                LoadJobError::TransientIo(io_error.to_string())
-            }
-            _ => LoadJobError::Io(io_error.to_string()),
-        },
+    let simulation = load_simulation_cancellable(&path, &cancel).map_err(|error| match error {
+        ContainerError::Io(io_error) => map_load_io_error(io_error, &cancel),
         ContainerError::TooLarge => LoadJobError::TooLarge,
         ContainerError::Simulation(error) => super::map_load_error(error),
         ContainerError::UnsupportedVersion(found) => {
@@ -512,5 +539,39 @@ mod tests {
             "the latest request stays authoritative once finished"
         );
         pending.join_running();
+    }
+
+    #[test]
+    fn cancelled_decode_reports_cancelled_not_transient() {
+        // A decode failure observed while the cancellation signal is set
+        // must report Cancelled (silently dropped) rather than a
+        // transient-error status nobody will retry.
+        let cancelled = AtomicBool::new(true);
+        let aborted = std::io::Error::new(
+            std::io::ErrorKind::ConnectionAborted,
+            "catalog validation cancelled",
+        );
+        assert!(matches!(
+            map_load_io_error(aborted, &cancelled),
+            LoadJobError::Cancelled
+        ));
+        let missing = std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "save is no longer in the catalog",
+        );
+        assert!(matches!(
+            map_load_io_error(missing, &cancelled),
+            LoadJobError::Cancelled
+        ));
+        // Without cancellation the mapping is unchanged: transient
+        // denials stay retryable, other I/O stays a hard error.
+        let live = AtomicBool::new(false);
+        let aborted = std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "reset");
+        assert!(matches!(
+            map_load_io_error(aborted, &live),
+            LoadJobError::TransientIo(_)
+        ));
+        let eof = std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "cut");
+        assert!(matches!(map_load_io_error(eof, &live), LoadJobError::Io(_)));
     }
 }
