@@ -1,3 +1,4 @@
+use super::freshness::PathConfirmationHandle;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
@@ -166,10 +167,17 @@ pub struct SaveCatalog {
     pub(crate) validation_cache: BTreeMap<PathBuf, CachedSaveValidation>,
     pub(crate) validation_queue: VecDeque<CatalogValidationRequest>,
     pub(crate) validation_jobs: Vec<CatalogValidationJob>,
+    /// Worker-certified verdicts parked for same-round path confirmation
+    /// before installation (see [`ConfirmingValidation`]).
+    pub(crate) confirming: Vec<ConfirmingValidation>,
     /// Earliest time at which entries stuck at `ValidationPending` with no
     /// scheduled validation are re-observed. Monotonic so a backward wall-
     /// clock jump cannot suspend rescans; `None` means a rescan is due.
     pub(crate) next_pending_rescan: Option<Instant>,
+    /// Structural mutation counter (entry removal). Background scans record
+    /// the epoch at request time; a scan landing after a mutation is
+    /// dropped unseen so it cannot resurrect deleted entries.
+    pub(crate) scan_epoch: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -212,9 +220,22 @@ pub(crate) struct CatalogValidationRequest {
 pub(crate) struct CatalogValidationOutcome {
     pub(crate) path: PathBuf,
     pub(crate) compatibility: SaveCompatibility,
-    pub(crate) observed_metadata: Option<SaveFileMetadataFingerprint>,
     pub(crate) fingerprint: Option<SaveFileFingerprint>,
     pub(crate) attempt: u8,
+    /// Whether the worker re-observed the path after validating and found
+    /// the same file instance it classified. The frame installs certified
+    /// outcomes without any filesystem call; uncertified outcomes always
+    /// take the retry path.
+    pub(crate) path_confirmed_current: bool,
+    /// Writer epoch bracketing the worker's final path check. The frame
+    /// installs only when the epoch is unchanged since, so a save
+    /// committed by our own writer in between invalidates the verdict.
+    pub(crate) commit_epoch: u64,
+    /// File observation the verdict is bound to. Consumption spawns a
+    /// same-round path confirmation against this instance before installing
+    /// (see [`super::freshness`]); `None` only when the worker never
+    /// observed the file, which never passes the install gates.
+    pub(crate) observed_metadata: Option<SaveFileMetadataFingerprint>,
 }
 
 #[derive(Debug)]
@@ -223,6 +244,20 @@ pub(crate) struct CatalogValidationJob {
     pub(crate) metadata: SaveFileMetadataFingerprint,
     pub(crate) cancel: Arc<AtomicBool>,
     pub(crate) handle: JoinHandle<CatalogValidationOutcome>,
+}
+
+/// A worker-certified validation verdict parked for same-round path
+/// confirmation (see [`super::freshness`]). Installed only when the
+/// confirmation still resolves the path to the certified instance in the
+/// same round with an unbroken writer-epoch chain; otherwise dropped while
+/// the entry stays pending, so a replaced file converges on a fresh verdict
+/// instead of inheriting this one. Dropping abandons at most one bounded
+/// confirmation worker, which exits alone after a single open plus
+/// metadata fingerprint.
+#[derive(Debug)]
+pub(crate) struct ConfirmingValidation {
+    pub outcome: CatalogValidationOutcome,
+    pub confirm: PathConfirmationHandle,
 }
 
 impl SaveCatalog {
@@ -237,13 +272,49 @@ impl SaveCatalog {
     pub(crate) fn replace(&mut self, entries: Vec<SaveEntry>) {
         self.entries = entries;
         self.revision = self.revision.wrapping_add(1);
+        // A fresh scan supersedes parked confirmations: their certified
+        // instances predate the scan's observations, and the scan's own
+        // validation planning re-covers every entry. Abandoned confirmation
+        // workers exit alone after one open plus fingerprint.
+        self.confirming.clear();
     }
 
-    pub(crate) fn invalidate_validation(&mut self, id: &SaveId) {
-        if let Some(path) = self.get(id).map(|entry| entry.path.clone()) {
+    /// Removes one entry with its validation cache and queued work, keeping
+    /// the list consistent without a disk scan. Bumps the scan epoch so a
+    /// background scan requested before the removal is dropped on landing
+    /// instead of resurrecting the entry.
+    pub(crate) fn remove(&mut self, id: &SaveId) {
+        if let Some(entry) = self.entries.iter().find(|entry| &entry.id == id) {
+            let path = entry.path.clone();
             self.validation_cache.remove(&path);
             self.validation_queue.retain(|request| request.path != path);
+            self.confirming
+                .retain(|confirming| confirming.outcome.path != path);
         }
+        self.entries.retain(|entry| &entry.id != id);
+        self.revision = self.revision.wrapping_add(1);
+        self.scan_epoch = self.scan_epoch.wrapping_add(1);
+    }
+
+    /// Installs a just-committed save directly so admission (overwrite
+    /// confirmation, autosave rotation) sees it before the next background
+    /// scan lands. Replaces any same-id entry, drops stale validation
+    /// state for the path, and bumps the scan epoch so an in-flight
+    /// pre-commit scan is dropped instead of clobbering the entry. The
+    /// follow-up scan re-observes the file and queues validation.
+    pub(crate) fn upsert_committed_save(&mut self, entry: SaveEntry) {
+        self.validation_cache.remove(&entry.path);
+        self.validation_queue
+            .retain(|request| request.path != entry.path);
+        self.confirming
+            .retain(|confirming| confirming.outcome.path != entry.path);
+        if let Some(existing) = self.entries.iter_mut().find(|each| each.id == entry.id) {
+            *existing = entry;
+        } else {
+            self.entries.push(entry);
+        }
+        self.revision = self.revision.wrapping_add(1);
+        self.scan_epoch = self.scan_epoch.wrapping_add(1);
     }
 
     pub fn named_case_insensitive(&self, name: &str) -> Option<&SaveEntry> {
@@ -260,13 +331,17 @@ impl Drop for SaveCatalog {
         // Signal cancellation first: workers abort at their next read chunk
         // instead of hashing and decoding the remainder, so shutdown does
         // not wait for large saves. Joining afterwards stays deterministic:
-        // no detached worker can outlive the catalog and hold save files.
+        // no detached decode worker can outlive the catalog and hold save
+        // files. Parked confirmations are simply dropped: their workers
+        // perform one open plus fingerprint with no locks or held files and
+        // exit alone.
         for job in &self.validation_jobs {
             job.cancel.store(true, Ordering::Relaxed);
         }
         for job in self.validation_jobs.drain(..) {
             let _ = job.handle.join();
         }
+        self.confirming.clear();
     }
 }
 

@@ -127,23 +127,36 @@ update both encoder/decoder policy, memory/load budgets and these stress tests.
 
 Keep the monolithic full-copy format for the measured supported sizes. No
 measurements here justify copy-on-write pages, chunked state, or incremental
-persistence yet. The application admits only one retained snapshot generation
-at a time. With no shared pages there are no worker-retained old pages or dirty
-page copies to add to the accounting; the measured owned snapshot is the whole
-retained generation. During encoding it coexists with one bounded payload
-buffer. The snapshot is dropped before allocating the similarly bounded app
-container, and the payload is dropped before writing. A second request is
-rejected without consuming a tick or input while that generation is retained.
+persistence yet. Each admitted save pins its own immutable admission snapshot:
+with `MAX_QUEUED_SAVES = 4`, the system retains up to four parked snapshots
+plus the running worker's generation concurrently. With no shared pages there
+are no worker-retained old pages or dirty page copies to add to the
+accounting; the derived peak is therefore `(MAX_QUEUED_SAVES + 1)` times the
+measured owned snapshot per generation from the table above, plus one bounded
+payload buffer for the encoding worker. Queued requests retain parameters
+plus the parked-snapshot handoff. During encoding the running snapshot
+coexists with its bounded payload buffer. The snapshot is dropped before
+allocating the similarly bounded app container, and the payload is dropped
+before writing. One save worker runs at a time; accepted manual saves wait in
+a bounded FIFO (same-target overwrites serialize in request order) while
+autosaves coalesce by target and drop under backpressure instead of queueing.
+Capture tasks, encoding, and disk I/O run off the frame schedule, so
+submission never blocks on the simulation lock. Fixed steps defer only while
+an admission capture is in flight (bounded by capture duration, not queue or
+I/O length); once every admitted snapshot is parked, ticks and inputs resume
+while the retained generations encode and write in the background.
 
 Before cloning, background capture walks the borrowed schema and enforces the
 same 64 MiB payload and collection limits as encoding. A world outside that
 budget therefore fails without allocating another whole-world generation and
-leaves the previous save intact. Capture still holds a read lock while
-preflighting and copying. Telemetry separates lock wait, lock hold, capture,
-blocked fixed steps, serialization, writing, and wire bytes. Fixed steps that
-meet the short read-lock interval remain queued with their commands, then run
-after release. Existing `save_load_ui` tests exercise this behavior and compare
-continuation hashes, including under capture contention.
+leaves the previous save intact. Each admission capture holds the read lock
+only while preflighting and copying its own snapshot. Telemetry separates
+lock wait, lock hold, capture, blocked fixed steps, serialization, writing,
+and wire bytes. Fixed steps defer while any admission capture is in flight so
+no save can tick out from under its requested tick identity, then run with
+their commands once every admitted snapshot is parked. Existing
+`save_load_ui` tests exercise this behavior and compare continuation hashes,
+including under capture contention.
 
 The large fixture exposed combat invalidating fluid/heat summaries after their
 normal tick phases. Completed ticks now rebuild those summaries when topology is

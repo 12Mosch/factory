@@ -1,17 +1,53 @@
+use super::lifecycle::{SAVE_CANCEL_ACTIVE, SAVE_CANCEL_COMMITTING};
 use super::{SaveId, SaveKind, SaveMetadata};
 use factory_sim::{
     RECORD_MAGIC, SAVE_HEADER_SIZE, SaveLimits, SaveLoadError, Simulation, SimulationSaveSnapshot,
     load_from_reader_with_limits, save_snapshot_records_to_writer_with_limits,
 };
+use std::collections::BTreeMap;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::{Mutex, TryLockError};
+use std::time::{Duration, Instant};
 use std::{fs, str};
 
 static SAVE_ARTIFACT_COUNTER: AtomicU64 = AtomicU64::new(0);
 static SAVE_ARTIFACT_LOCK: Mutex<()> = Mutex::new(());
+/// Per-path mutation epochs for canonical save artifacts, drawn from a
+/// process-wide commit sequence. Bumped after every committed replacement
+/// or removal (save commits, recovery promotions, deletions); deleted
+/// paths are reclaimed. Catalog validation outcomes and load candidates
+/// record the epoch alongside worker observations so the frame can reject
+/// results overtaken by our own writer without any filesystem call.
+/// Per-path (not global) so a save to one slot never invalidates another
+/// path's in-flight work. The sequence never reuses a value, so deleting
+/// (reclaim) then recreating a path cannot realign with an older recorded
+/// epoch — no ABA.
+static SAVE_ARTIFACT_EPOCHS: Mutex<BTreeMap<PathBuf, u64>> = Mutex::new(BTreeMap::new());
+static SAVE_COMMIT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+pub(crate) fn save_artifact_epoch(path: &Path) -> u64 {
+    SAVE_ARTIFACT_EPOCHS
+        .lock()
+        .map(|epochs| epochs.get(path).copied().unwrap_or(0))
+        .unwrap_or(0)
+}
+
+pub(crate) fn bump_save_artifact_epoch(path: &Path) {
+    if let Ok(mut epochs) = SAVE_ARTIFACT_EPOCHS.lock() {
+        epochs.insert(
+            path.to_path_buf(),
+            SAVE_COMMIT_SEQUENCE.fetch_add(1, Ordering::AcqRel),
+        );
+    }
+}
+
+pub(crate) fn reclaim_save_artifact_epoch(path: &Path) {
+    if let Ok(mut epochs) = SAVE_ARTIFACT_EPOCHS.lock() {
+        epochs.remove(path);
+    }
+}
 
 /// Magic bytes at the start of a Factory save container.
 pub const CONTAINER_MAGIC: [u8; 8] = *b"FACTSAVE";
@@ -47,6 +83,9 @@ pub enum ContainerError {
     Truncated,
     InvalidContainerMagic,
     Simulation(SaveLoadError),
+    /// The request was cancelled before the commit point. Nothing was
+    /// installed; temporary artifacts are removed by the writer.
+    Cancelled,
 }
 
 impl std::fmt::Display for ContainerError {
@@ -66,6 +105,7 @@ impl std::fmt::Display for ContainerError {
             Self::Truncated => write!(formatter, "save container is truncated"),
             Self::InvalidContainerMagic => write!(formatter, "invalid save container magic"),
             Self::Simulation(error) => write!(formatter, "simulation codec failed: {error:?}"),
+            Self::Cancelled => write!(formatter, "save cancelled before commit"),
         }
     }
 }
@@ -358,12 +398,67 @@ fn read_bounded_bytes(
     Ok(payload)
 }
 
+/// Test-only hook that holds the save-artifact lock across frames, letting
+/// responsiveness tests prove catalog refreshes never block on the writer.
+#[doc(hidden)]
+pub fn hold_save_artifact_lock_for_tests() -> std::sync::MutexGuard<'static, ()> {
+    SAVE_ARTIFACT_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Serializes save-directory mutations across the catalog and background writer.
 pub(crate) fn with_save_artifact_lock<T>(operation: impl FnOnce() -> T) -> T {
     let _guard = SAVE_ARTIFACT_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     operation()
+}
+
+/// Non-blocking acquisition for frame-side installation: returns `None` when
+/// the artifact lock is held (e.g. a save worker encoding or a scan worker
+/// in recovery) instead of stalling the frame. The caller retains its
+/// candidate and retries next frame. While the guard is held, no save commit
+/// can land, so the freshness check and the world installation under it are
+/// atomic with respect to our own writer.
+pub(crate) fn try_acquire_save_artifact_lock() -> Option<std::sync::MutexGuard<'static, ()>> {
+    match SAVE_ARTIFACT_LOCK.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(TryLockError::Poisoned(poison)) => Some(poison.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
+}
+
+/// Polling interval while waiting for the artifact lock with shutdown
+/// admission. Keeps teardown latency near-instant without busy-spinning
+/// against a holder doing real work.
+const ARTIFACT_LOCK_WAIT_POLL: Duration = Duration::from_millis(1);
+
+/// Like [`with_save_artifact_lock`], but stops waiting when `shutdown` is
+/// set (resource teardown racing a detached lock holder, e.g. a catalog
+/// scan worker detached at shutdown while holding the lock across
+/// recovery) instead of blocking indefinitely. Returns `None` when
+/// shutdown won the race; once the lock is held the operation still runs
+/// to completion.
+pub(crate) fn with_save_artifact_lock_shutdown_aware<T>(
+    shutdown: &AtomicBool,
+    operation: impl FnOnce() -> T,
+) -> Option<T> {
+    let guard = loop {
+        match SAVE_ARTIFACT_LOCK.try_lock() {
+            Ok(guard) => break guard,
+            Err(TryLockError::Poisoned(poison)) => break poison.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                if shutdown.load(Ordering::Relaxed) {
+                    return None;
+                }
+                std::thread::sleep(ARTIFACT_LOCK_WAIT_POLL);
+            }
+        }
+    };
+    let result = operation();
+    drop(guard);
+    Some(result)
 }
 
 /// Writes and durably installs a complete save without exposing partial contents.
@@ -373,13 +468,21 @@ pub(crate) fn write_save_bytes(path: &Path, bytes: &[u8]) -> Result<(), Containe
 
 /// Encodes a snapshot through a buffered temporary file and commits it only
 /// after the encoder has finished and the buffer has been flushed and synced.
+/// Admits `shutdown` while waiting for the artifact lock — which a detached
+/// scan worker may hold across recovery — instead of joining shutdown
+/// through it. Returns `None` when shutdown was signalled during the wait;
+/// the caller reports cancellation. Abandoning the wait never loses a
+/// save: nothing has committed yet, and leftover temp artifacts are
+/// recovered next startup.
 pub(crate) fn write_save_snapshot(
     path: &Path,
     metadata: &SaveMetadata,
     snapshot: &SimulationSaveSnapshot,
-) -> Result<StreamWriteMetrics, ContainerError> {
-    with_save_artifact_lock(|| {
-        write_save_snapshot_locked(path, metadata, snapshot, SaveLimits::default())
+    shutdown: &AtomicBool,
+    cancel: &AtomicU8,
+) -> Option<Result<StreamWriteMetrics, ContainerError>> {
+    with_save_artifact_lock_shutdown_aware(shutdown, || {
+        write_save_snapshot_locked(path, metadata, snapshot, SaveLimits::default(), cancel)
     })
 }
 
@@ -388,6 +491,7 @@ fn write_save_snapshot_locked(
     metadata: &SaveMetadata,
     snapshot: &SimulationSaveSnapshot,
     limits: SaveLimits,
+    cancel: &AtomicU8,
 ) -> Result<StreamWriteMetrics, ContainerError> {
     let metadata_text = ron::ser::to_string(metadata)
         .map_err(|error| ContainerError::MetadataEncoding(error.to_string()))?;
@@ -410,24 +514,28 @@ fn write_save_snapshot_locked(
         ..limits
     };
 
-    write_temporary_and_commit(path, |writer| {
-        writer.write_all(&CONTAINER_MAGIC)?;
-        writer.write_all(&CONTAINER_VERSION.to_le_bytes())?;
-        writer.write_all(&metadata_len.to_le_bytes())?;
-        writer.write_all(metadata_bytes)?;
-        let encode_start = Instant::now();
-        let simulation_bytes = {
-            let mut payload = LimitedWriter::new(writer, payload_maximum);
-            save_snapshot_records_to_writer_with_limits(snapshot, &mut payload, record_limits)
-                .map_err(map_simulation_error)?;
-            payload.written
-        };
-        Ok(StreamWriteMetrics {
-            total_bytes: overhead as usize + simulation_bytes,
-            simulation_bytes,
-            encode_ms: encode_start.elapsed().as_secs_f64() * 1000.0,
-        })
-    })
+    write_temporary_and_commit(
+        path,
+        |writer| {
+            writer.write_all(&CONTAINER_MAGIC)?;
+            writer.write_all(&CONTAINER_VERSION.to_le_bytes())?;
+            writer.write_all(&metadata_len.to_le_bytes())?;
+            writer.write_all(metadata_bytes)?;
+            let encode_start = Instant::now();
+            let simulation_bytes = {
+                let mut payload = LimitedWriter::new(writer, payload_maximum);
+                save_snapshot_records_to_writer_with_limits(snapshot, &mut payload, record_limits)
+                    .map_err(map_simulation_error)?;
+                payload.written
+            };
+            Ok(StreamWriteMetrics {
+                total_bytes: overhead as usize + simulation_bytes,
+                simulation_bytes,
+                encode_ms: encode_start.elapsed().as_secs_f64() * 1000.0,
+            })
+        },
+        cancel,
+    )
 }
 
 /// Implements save installation while the process-wide artifact lock is held.
@@ -436,29 +544,37 @@ fn write_save_bytes_locked(
     bytes: &[u8],
     limits: SaveLimits,
 ) -> Result<(), ContainerError> {
-    write_temporary_and_commit(path, |temp| {
-        check_size(bytes.len() as u64, limits.max_encoded_bytes)?;
-        if bytes.starts_with(&CONTAINER_MAGIC) {
-            let offset = container_payload_offset_with_limits(bytes, limits)?;
-            check_size(
-                (bytes.len() - offset) as u64,
-                simulation_payload_allowance(
-                    bytes.get(offset..).unwrap_or(&[]),
-                    offset as u64,
-                    limits,
-                ),
-            )?;
-        } else {
-            check_size(bytes.len() as u64, limits.max_simulation_bytes())?;
-        }
-        temp.write_all(bytes)?;
-        Ok(())
-    })
+    // The synchronous UI path is never cancelled; the worker path threads
+    // its request flag through `write_save_snapshot_locked` instead.
+    let cancel = AtomicU8::new(SAVE_CANCEL_ACTIVE);
+    write_temporary_and_commit(
+        path,
+        |temp| {
+            check_size(bytes.len() as u64, limits.max_encoded_bytes)?;
+            if bytes.starts_with(&CONTAINER_MAGIC) {
+                let offset = container_payload_offset_with_limits(bytes, limits)?;
+                check_size(
+                    (bytes.len() - offset) as u64,
+                    simulation_payload_allowance(
+                        bytes.get(offset..).unwrap_or(&[]),
+                        offset as u64,
+                        limits,
+                    ),
+                )?;
+            } else {
+                check_size(bytes.len() as u64, limits.max_simulation_bytes())?;
+            }
+            temp.write_all(bytes)?;
+            Ok(())
+        },
+        &cancel,
+    )
 }
 
 fn write_temporary_and_commit<T>(
     path: &Path,
     encode: impl FnOnce(&mut BufWriter<fs::File>) -> Result<T, ContainerError>,
+    cancel: &AtomicU8,
 ) -> Result<T, ContainerError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -484,6 +600,26 @@ fn write_temporary_and_commit<T>(
         drop(temp);
         sync_parent_directory(path)?;
 
+        // The atomic commit point: the worker claims ACTIVE -> COMMITTING
+        // with a single compare-exchange before the rename makes the
+        // replacement visible. A cancel racing the encode wins
+        // (ACTIVE -> REQUESTED) and aborts here; once the worker claims
+        // committing, a later cancel observes COMMITTING and reports too
+        // late instead of a false success. The error path below removes
+        // the temporary artifact, so a cancelled request leaves the
+        // previous save intact. Once the rename begins the operation
+        // counts as committed.
+        if cancel
+            .compare_exchange(
+                SAVE_CANCEL_ACTIVE,
+                SAVE_CANCEL_COMMITTING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return Err(ContainerError::Cancelled);
+        }
         let replaced = commit_temporary_file(path, &temp_path, &backup_path)?;
         installed = true;
         // Installation has committed. A durability-barrier failure must not be
@@ -505,6 +641,8 @@ fn write_temporary_and_commit<T>(
             let _ = fs::remove_file(&backup_path);
         }
         let _ = sync_parent_directory(path);
+    } else {
+        bump_save_artifact_epoch(path);
     }
     result
 }
@@ -567,20 +705,25 @@ pub(crate) fn promote_backup(
     // Promotion has committed even if a post-rename durability barrier is not
     // available on this filesystem or is temporarily blocked by another handle.
     let _ = sync_installed_file(path);
+    bump_save_artifact_epoch(path);
     Ok(())
 }
 
 /// Removes a canonical save and all of its recovery artifacts as one serialized
 /// operation so an intentional deletion cannot be mistaken for a crashed write.
 pub(crate) fn remove_save_and_artifacts(path: &Path) -> io::Result<()> {
-    with_save_artifact_lock(|| {
+    let result = with_save_artifact_lock(|| {
         for artifact in save_artifacts_for(path)? {
             discard_save_artifact(&artifact)?;
         }
         sync_parent_directory(path)?;
         fs::remove_file(path)?;
         sync_parent_directory(path)
-    })
+    });
+    if result.is_ok() {
+        reclaim_save_artifact_epoch(path);
+    }
+    result
 }
 
 /// Durably removes an artifact, first retiring a backup so cleanup failure can
@@ -1088,7 +1231,15 @@ mod tests {
         ));
         let path = root.join("manual-stream.factsim");
         let metadata = metadata("Streamed");
-        let metrics = write_save_snapshot(&path, &metadata, &snapshot).unwrap();
+        let metrics = write_save_snapshot(
+            &path,
+            &metadata,
+            &snapshot,
+            &AtomicBool::new(false),
+            &AtomicU8::new(SAVE_CANCEL_ACTIVE),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(metrics.simulation_bytes, expected_payload.len());
         let bytes = fs::read(&path).unwrap();
         let (decoded_metadata, payload) = decode_container(&bytes).unwrap();
@@ -1115,7 +1266,15 @@ mod tests {
         ));
         let path = root.join("manual-copy.factsim");
         let exported = root.join("exported-copy.factsim");
-        let metrics = write_save_snapshot(&path, &metadata("Copied"), &snapshot).unwrap();
+        let metrics = write_save_snapshot(
+            &path,
+            &metadata("Copied"),
+            &snapshot,
+            &AtomicBool::new(false),
+            &AtomicU8::new(SAVE_CANCEL_ACTIVE),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             metrics.simulation_bytes,
             save_snapshot_records_to_bytes(&snapshot).unwrap().len()
@@ -1205,7 +1364,15 @@ mod tests {
             SAVE_ARTIFACT_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         let reference = root.join("reference.factsim");
-        write_save_snapshot(&reference, &metadata("Framing"), &snapshot).unwrap();
+        write_save_snapshot(
+            &reference,
+            &metadata("Framing"),
+            &snapshot,
+            &AtomicBool::new(false),
+            &AtomicU8::new(SAVE_CANCEL_ACTIVE),
+        )
+        .unwrap()
+        .unwrap();
         let total = fs::read(&reference).unwrap().len() as u64;
         // The record header and manifest live inside the payload allowance,
         // so the exact artifact size must be accepted.
@@ -1214,7 +1381,9 @@ mod tests {
             ..SaveLimits::default()
         };
         let bounded = root.join("bounded.factsim");
-        write_save_snapshot_locked(&bounded, &metadata("Framing"), &snapshot, exact).unwrap();
+        let cancel = AtomicU8::new(SAVE_CANCEL_ACTIVE);
+        write_save_snapshot_locked(&bounded, &metadata("Framing"), &snapshot, exact, &cancel)
+            .unwrap();
         assert_eq!(fs::read(&bounded).unwrap().len() as u64, total);
         let short = SaveLimits {
             max_encoded_bytes: total - 1,
@@ -1225,7 +1394,8 @@ mod tests {
                 &root.join("short.factsim"),
                 &metadata("Framing"),
                 &snapshot,
-                short
+                short,
+                &cancel
             )
             .is_err()
         );
@@ -1269,6 +1439,30 @@ mod tests {
     }
 
     #[test]
+    fn deleted_paths_reclaim_epoch_entries() {
+        let root = std::env::temp_dir().join(format!(
+            "factory-epoch-reclaim-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("reclaimed.factsim");
+        write_save_bytes(&path, b"payload").unwrap();
+        assert!(SAVE_ARTIFACT_EPOCHS.lock().unwrap().contains_key(&path));
+        let committed = save_artifact_epoch(&path);
+        remove_save_and_artifacts(&path).unwrap();
+        assert!(
+            !SAVE_ARTIFACT_EPOCHS.lock().unwrap().contains_key(&path),
+            "deletion must reclaim the path entry"
+        );
+        // Recreating the path draws a fresh commit-sequence value that
+        // cannot realign with the pre-delete epoch: no ABA.
+        write_save_bytes(&path, b"payload").unwrap();
+        assert_ne!(committed, save_artifact_epoch(&path));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn failed_stream_never_replaces_the_previous_save() {
         let root = std::env::temp_dir().join(format!(
             "factory-container-failed-stream-{}-{}",
@@ -1278,15 +1472,59 @@ mod tests {
         let path = root.join("manual-test.factsim");
         write_save_bytes(&path, b"previous valid save").unwrap();
 
-        let result: Result<(), ContainerError> = write_temporary_and_commit(&path, |writer| {
-            writer.write_all(b"partial replacement")?;
-            Err(ContainerError::Io(io::Error::other(
-                "injected encoder failure",
-            )))
-        });
+        let cancel = AtomicU8::new(SAVE_CANCEL_ACTIVE);
+        let result: Result<(), ContainerError> = write_temporary_and_commit(
+            &path,
+            |writer| {
+                writer.write_all(b"partial replacement")?;
+                Err(ContainerError::Io(io::Error::other(
+                    "injected encoder failure",
+                )))
+            },
+            &cancel,
+        );
         assert!(matches!(result, Err(ContainerError::Io(_))));
         assert_eq!(fs::read(&path).unwrap(), b"previous valid save");
         assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancelled_stream_never_replaces_the_previous_save() {
+        let mut simulation = Simulation::new_test_world(78);
+        for _ in 0..12 {
+            simulation.tick();
+        }
+        let snapshot = try_capture_save_snapshot(&simulation, 3).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "factory-container-cancelled-stream-{}-{}",
+            std::process::id(),
+            SAVE_ARTIFACT_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let path = root.join("manual-test.factsim");
+        let idle = AtomicBool::new(false);
+        let active = AtomicU8::new(SAVE_CANCEL_ACTIVE);
+        write_save_snapshot(&path, &metadata("Original"), &snapshot, &idle, &active)
+            .unwrap()
+            .unwrap();
+        let previous = fs::read(&path).unwrap();
+        // A cancel racing the encode is still honored at the commit point:
+        // the flag is already set here, which exercises the same atomic
+        // claim a mid-encode cancel hits before the rename.
+        let cancel = AtomicU8::new(crate::save_load::lifecycle::SAVE_CANCEL_REQUESTED);
+        let result =
+            write_save_snapshot(&path, &metadata("Replacement"), &snapshot, &idle, &cancel);
+        assert!(matches!(result, Some(Err(ContainerError::Cancelled))));
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            previous,
+            "a cancelled save must leave the previous save intact"
+        );
+        assert_eq!(
+            fs::read_dir(&root).unwrap().count(),
+            1,
+            "a cancelled save must remove its temporary artifact"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1409,6 +1647,23 @@ mod tests {
         assert_eq!(decoded.schema_version, 1);
         assert_eq!(decoded.world_seed_label(), "Seed unknown");
         assert_eq!(payload, b"FACTSIM\0payload");
+    }
+
+    #[test]
+    fn try_acquire_defers_instead_of_blocking_on_held_lock() {
+        // Frame-side installation must never stall on the artifact lock:
+        // when a save worker or scan holds it, acquisition fails fast so
+        // the candidate is retained and rechecked next frame under the lock.
+        let _held = hold_save_artifact_lock_for_tests();
+        assert!(
+            try_acquire_save_artifact_lock().is_none(),
+            "installation must defer while the artifact lock is held"
+        );
+        drop(_held);
+        assert!(
+            try_acquire_save_artifact_lock().is_some(),
+            "installation must proceed once the artifact lock is free"
+        );
     }
 
     #[test]

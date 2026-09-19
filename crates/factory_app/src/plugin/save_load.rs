@@ -2,15 +2,16 @@ use bevy::prelude::*;
 
 use super::{AppSet, InGameSet};
 use crate::save_load::{
-    AutosaveState, PendingSaveConfirmation, PendingSaveJobs, PresentationReloadToken, SaveCatalog,
-    SaveLoadConfig, SaveLoadMetrics, SaveLoadStatus, SaveLoadWindowState,
-    handle_save_load_shortcuts, initialize_save_state, poll_catalog_validation_jobs,
-    poll_save_jobs, refresh_catalog_on_manager_open, run_autosave,
+    AutosaveState, DeferredNamedSave, PendingCatalogScan, PendingLoadJobs, PendingSaveConfirmation,
+    PendingSaveJobs, PresentationReloadToken, SaveCatalog, SaveLoadConfig, SaveLoadMetrics,
+    SaveLoadStatus, SaveLoadWindowState, handle_save_load_shortcuts, initialize_save_state,
+    poll_catalog_scan_system, poll_catalog_validation_jobs, poll_load_jobs, poll_save_jobs,
+    refresh_catalog_on_manager_open, run_autosave,
 };
 use crate::ui::save_load::{
     SaveCreateRequested, handle_copy_world_seed_button, handle_save_load_buttons,
-    submit_save_create_requests, submit_save_name_input, sync_save_load_window,
-    sync_save_name_from_state, sync_save_name_to_state,
+    submit_deferred_named_save, submit_save_create_requests, submit_save_name_input,
+    sync_save_load_window, sync_save_name_from_state, sync_save_name_to_state,
 };
 use crate::ui::text_input::TextInputSanitization;
 
@@ -26,6 +27,9 @@ impl Plugin for SaveLoadPlugin {
             .init_resource::<PendingSaveConfirmation>()
             .init_resource::<SaveLoadMetrics>()
             .init_resource::<PendingSaveJobs>()
+            .init_resource::<PendingLoadJobs>()
+            .init_resource::<PendingCatalogScan>()
+            .init_resource::<DeferredNamedSave>()
             .init_resource::<AutosaveState>()
             .init_resource::<PresentationReloadToken>()
             .add_message::<SaveCreateRequested>()
@@ -35,7 +39,11 @@ impl Plugin for SaveLoadPlugin {
                 (
                     // Surface completed results before admitting this frame's
                     // requests, so a finished target is immediately reusable.
+                    // Loads install at this controlled boundary through the
+                    // shared presentation reset, before map texture/render.
                     poll_save_jobs,
+                    poll_load_jobs,
+                    poll_catalog_scan_system,
                     poll_catalog_validation_jobs,
                     handle_save_load_shortcuts.in_set(InGameSet),
                     sync_save_name_from_state.in_set(InGameSet),
@@ -56,6 +64,7 @@ impl Plugin for SaveLoadPlugin {
                     sync_save_name_to_state,
                     submit_save_create_requests,
                     submit_save_name_input,
+                    submit_deferred_named_save,
                 )
                     .chain()
                     .after(TextInputSanitization)
