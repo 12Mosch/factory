@@ -1722,6 +1722,68 @@ fn newest_queued_load_wins() {
 }
 
 #[test]
+fn externally_replaced_load_never_installs_obsolete_bytes() {
+    use factory_app::save_load::{SaveLoadStatus, SaveLoadStatusKind};
+    let mut app = test_app(
+        Duration::from_secs_f64(1.0 / 60.0),
+        "externally_replaced_load",
+    );
+    // Write before the first update so the startup catalog refresh observes
+    // the quicksave, mirroring f9_reads_existing_raw_quicksave.
+    write_raw_quicksave(&app);
+    let saved_tick = sim_tick_and_hash(&app).0;
+    run_until_tick(&mut app, 6);
+    app.update();
+    tap_key(&mut app, KeyCode::F9);
+    // Hold the artifact lock so the first install phase parks the decoded
+    // candidate in the ready slot instead of consuming it: this opens the
+    // worker-certified-but-not-installed window deterministically. Decode
+    // workers never take the artifact lock, so the load still decodes.
+    let held = factory_app::save_load::hold_save_artifact_lock_for_tests();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !app
+        .world()
+        .resource::<PendingLoadJobs>()
+        .has_ready_candidate()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "load worker did not decode the quicksave"
+        );
+        app.update();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // Freeze ticks so the live world identity is stable across the drain.
+    freeze_time(&mut app);
+    let world_before = sim_tick_and_hash(&app);
+    assert!(
+        world_before.0 > saved_tick,
+        "the live world must have advanced past the saved tick"
+    );
+    // External replacement after certification, before installation. The
+    // lock is still held, so the candidate stays parked.
+    let path = app
+        .world()
+        .resource::<SaveLoadConfig>()
+        .root_dir
+        .join("quicksave.factsim");
+    fs::write(&path, b"not a factory save").unwrap();
+    drop(held);
+    drain_load_jobs(&mut app);
+    // The obsolete bytes must never install: the world is untouched, and
+    // the restart surfaces the replacement's decode failure as an error
+    // instead of reporting a successful load of stale bytes.
+    assert_eq!(
+        sim_tick_and_hash(&app),
+        world_before,
+        "a load replaced after certification must not install the obsolete bytes"
+    );
+    let status = app.world().resource::<SaveLoadStatus>().clone();
+    assert_eq!(status.kind, SaveLoadStatusKind::Error);
+    assert!(status.last_completed_id.is_none());
+}
+
+#[test]
 fn obsolete_load_failure_never_overwrites_status() {
     use factory_app::save_load::{SaveLoadStatus, SaveLoadStatusKind};
     let mut app = test_app(Duration::ZERO, "obsolete_load_error");
@@ -2064,32 +2126,32 @@ fn repeated_named_overwrites_serialize_fifo() {
 }
 
 #[test]
-fn queued_save_goes_stale_when_world_replaced_while_waiting() {
+fn queued_save_commits_pinned_snapshot_when_world_replaced_while_waiting() {
     use factory_app::save_load::SaveJobPhase;
+    use factory_app::save_load::{SaveLoadStatus, SaveLoadStatusKind};
     let mut app = test_app(Duration::ZERO, "save_stale_while_queued");
     generate_large_world(&mut app);
-    // First quicksave occupies the worker through a slow large capture.
+    // First quicksave occupies the worker through a slow large encode.
     tap_key(&mut app, KeyCode::F5);
     // Second quicksave queues behind it without any frame between the taps
-    // only if the worker is still busy; the large capture makes that certain
+    // only if the worker is still busy; the large encode makes that certain
     // enough to assert rather than assume.
     tap_key(&mut app, KeyCode::F5);
     assert_eq!(
         app.world().resource::<PendingSaveJobs>().queued_len(),
         1,
-        "the second save must wait behind the running large capture"
+        "the second save must wait behind the running large encode"
     );
-    // Wait until the running capture released the read lock (encoding or
-    // later) so world replacement can install without Busy. The large
-    // capture holds the lock for tens of milliseconds; the loop observes
-    // the phase transition within the first few frames.
+    // Wait until the running job secured its snapshot (encoding or later).
+    // Admission pins each request's snapshot immediately, so world
+    // replacement below cannot strand the queued request without state.
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         app.update();
         std::thread::sleep(Duration::from_millis(1));
         assert!(
             Instant::now() < deadline,
-            "large capture did not release the read lock"
+            "large encode did not leave the capture phase"
         );
         let phases = app.world().resource::<PendingSaveJobs>().progress();
         if phases.is_empty() {
@@ -2099,37 +2161,49 @@ fn queued_save_goes_stale_when_world_replaced_while_waiting() {
             break;
         }
     }
-    // The worker thread only advances phases; moving the queued job onto the
-    // worker happens in `poll_save_jobs` on the next `app.update`. With no
-    // update between the phase poll above and this install, the queued job
-    // cannot have started, so the first attempt deterministically succeeds.
+    // Replace the world while the second save waits: its admission snapshot
+    // is already pinned, so it still commits the requested world's bytes
+    // instead of going stale.
     app.world_mut()
         .resource_mut::<SimResource>()
         .replace(factory_sim::Simulation::new_test_world(424_242))
         .expect("replacement outside capture must succeed");
     drain_persistence_jobs(&mut app);
-    // The first save committed the requested world; the queued request was
-    // discarded as stale with the previous save intact, never committed.
+    // The committed quicksave decodes to the requested world, not the
+    // replacement: admission-tick identity is preserved across the wait.
     let metrics = *app.world().resource::<SaveLoadMetrics>();
     assert_eq!(
         metrics.last_snapshot_world_generation, 0,
         "the committed save must belong to the requested world"
     );
+    let committed = {
+        let path = app
+            .world()
+            .resource::<SaveLoadConfig>()
+            .root_dir
+            .join("quicksave.factsim");
+        assert!(path.exists(), "the queued save must still be committed");
+        let bytes = fs::read(&path).unwrap();
+        let (_, payload) = decode_container(&bytes).unwrap();
+        load_from_bytes(payload).unwrap()
+    };
+    assert_ne!(
+        committed.seed(),
+        424_242,
+        "the queued save must commit its pinned admission snapshot, not the replacement world"
+    );
     let status = app.world().resource::<SaveLoadStatus>().clone();
+    assert_eq!(
+        status.kind,
+        SaveLoadStatusKind::Success,
+        "the pinned queued save must report success, got: {status:?}"
+    );
     assert!(
         status
             .message
             .as_deref()
-            .is_some_and(|message| message.contains("superseded")),
-        "the stale queued save must report superseding, got: {status:?}"
-    );
-    assert!(
-        app.world()
-            .resource::<SaveLoadConfig>()
-            .root_dir
-            .join("quicksave.factsim")
-            .exists(),
-        "the first save must still be committed"
+            .is_none_or(|message| !message.contains("superseded")),
+        "the pinned queued save must not report superseding, got: {status:?}"
     );
 }
 

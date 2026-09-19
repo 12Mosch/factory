@@ -1,12 +1,16 @@
-//! Bevy polling: collect finished validation workers, schedule retries,
-//! and re-observe stale pending entries.
+//! Bevy polling: collect finished validation workers, confirm parked
+//! verdicts against same-round path observations, schedule retries, and
+//! re-observe stale pending entries.
 //!
 //! The inner poll returns whether externally relevant catalog state
 //! changed; pure timer bookkeeping does not count, so an idle catalog never
 //! trips Bevy change detection.
 
 use super::super::container::save_artifact_epoch;
-use super::super::{CachedSaveValidation, SaveCatalog, SaveCompatibility, SaveKind};
+use super::super::freshness::{ConfirmationPoll, spawn_path_confirmation};
+use super::super::{
+    CachedSaveValidation, ConfirmingValidation, SaveCatalog, SaveCompatibility, SaveKind,
+};
 use super::validation::{
     MAX_CATALOG_VALIDATION_RETRIES, blind_retry_request, queue_catalog_validation,
     start_catalog_validation_jobs,
@@ -76,25 +80,29 @@ pub(crate) fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) -> b
             && outcome.compatibility != SaveCompatibility::ValidationPending
             && payload_stable
         {
-            if let Some(fingerprint) = outcome.fingerprint {
-                catalog.validation_cache.insert(
-                    outcome.path.clone(),
-                    CachedSaveValidation {
-                        fingerprint,
-                        compatibility: outcome.compatibility.clone(),
-                    },
+            // Park for same-round confirmation instead of installing: an
+            // external replacement after the worker's certification must not
+            // inherit this verdict (see `super::super::freshness`). The
+            // confirmation worker re-observes the path against the bound
+            // instance below; installation happens in `consume_confirmations`
+            // only on its same-round verdict. Starting confirmation work
+            // counts as changed, like starting a validation job.
+            if let Some(certified) = outcome.observed_metadata.clone() {
+                let path = outcome.path.clone();
+                catalog.confirming.push(ConfirmingValidation {
+                    outcome,
+                    confirm: spawn_path_confirmation(path, certified),
+                });
+                changed = true;
+            } else {
+                // No bound observation (the worker never opened the file):
+                // without an instance to confirm against, the verdict cannot
+                // be installed. The entry stays pending and the rescan
+                // machinery re-observes it.
+                warn!(
+                    "catalog validation for {} has no bound observation; retrying",
+                    outcome.path.display()
                 );
-                changed = true;
-            }
-            if let Some(entry) = catalog
-                .entries
-                .iter_mut()
-                .find(|entry| entry.path == outcome.path)
-                && entry.compatibility == SaveCompatibility::ValidationPending
-            {
-                entry.compatibility = outcome.compatibility;
-                catalog.revision = catalog.revision.wrapping_add(1);
-                changed = true;
             }
         } else if outcome.attempt < MAX_CATALOG_VALIDATION_RETRIES
             && let Some(entry_index) = catalog
@@ -117,8 +125,76 @@ pub(crate) fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) -> b
             );
         }
     }
+    changed |= consume_confirmations(catalog);
     changed |= rescan_stale_pending(catalog);
     changed |= start_catalog_validation_jobs(catalog);
+    changed
+}
+
+/// Installs parked verdicts whose same-round path confirmation still
+/// resolves to the certified instance with an unbroken writer-epoch chain.
+/// A mismatch — external replacement or deletion after the validation
+/// worker's certification, or an own-writer commit in between — drops the
+/// verdict while the entry stays pending, so the file converges on a fresh
+/// verdict through the pending rescan instead of inheriting this one.
+/// Returns whether any verdict installed.
+///
+/// Residual bound: a replacement landing between the confirmation worker's
+/// final observation and the memory-only installation below still publishes
+/// the old verdict. That window holds no filesystem I/O or sleeps — the
+/// frame consumes the finished confirmation and installs in the same poll —
+/// and any verdict that survives it is re-checked against a fresh
+/// observation on the next refresh or rescan cycle.
+fn consume_confirmations(catalog: &mut SaveCatalog) -> bool {
+    let mut changed = false;
+    let mut index = 0;
+    while index < catalog.confirming.len() {
+        let confirmation = match catalog.confirming[index].confirm.poll() {
+            ConfirmationPoll::Pending => {
+                index += 1;
+                continue;
+            }
+            ConfirmationPoll::Ready(confirmation) => confirmation,
+            ConfirmationPoll::WorkerGone => {
+                // The confirmation worker died: without a same-round
+                // verdict the outcome cannot be installed. The entry stays
+                // pending and the rescan machinery re-observes it.
+                catalog.confirming.swap_remove(index);
+                continue;
+            }
+        };
+        let outcome = catalog.confirming.swap_remove(index).outcome;
+        // Unbroken freshness chain: no own-writer commit between the
+        // validation worker's final check, the confirmation's observation,
+        // and this installation, and the path still resolves to the
+        // certified instance.
+        if !confirmation.matched
+            || outcome.commit_epoch != confirmation.epoch
+            || confirmation.epoch != save_artifact_epoch(&outcome.path)
+        {
+            continue;
+        }
+        if let Some(fingerprint) = outcome.fingerprint {
+            catalog.validation_cache.insert(
+                outcome.path.clone(),
+                CachedSaveValidation {
+                    fingerprint,
+                    compatibility: outcome.compatibility.clone(),
+                },
+            );
+            changed = true;
+        }
+        if let Some(entry) = catalog
+            .entries
+            .iter_mut()
+            .find(|entry| entry.path == outcome.path)
+            && entry.compatibility == SaveCompatibility::ValidationPending
+        {
+            entry.compatibility = outcome.compatibility;
+            catalog.revision = catalog.revision.wrapping_add(1);
+            changed = true;
+        }
+    }
     changed
 }
 

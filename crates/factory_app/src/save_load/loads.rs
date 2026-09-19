@@ -12,6 +12,9 @@ use super::SaveId;
 use super::catalog::inspect::save_file_metadata_fingerprint;
 use super::catalog::validation::CancelReader;
 use super::container::{ContainerError, load_simulation_from_reader, save_artifact_epoch};
+use super::freshness::{
+    PathConfirmationHandle, path_resolves_to_instance, spawn_path_confirmation,
+};
 use super::lifecycle::{
     LoadJobError, LoadJobPhase, MAX_LOAD_WORKERS, MAX_QUEUED_LOADS, PersistenceRequestId,
 };
@@ -33,6 +36,7 @@ pub struct PendingLoadJobs {
     running: Option<RunningLoad>,
     queue: VecDeque<QueuedLoad>,
     ready: Option<ReadyLoad>,
+    recertifying: Option<RecertifyingLoad>,
     latest_request: Option<PersistenceRequestId>,
     last_installed: Option<PersistenceRequestId>,
 }
@@ -91,6 +95,28 @@ pub(crate) struct ReadyLoad {
     pub candidate: LoadCandidate,
 }
 
+/// A validated candidate parked while a confirmation worker re-observes its
+/// path. The decode worker's certification is stale by the time the frame
+/// consumes it whenever an external actor can replace the file in between,
+/// so installation proceeds only after this same-round confirmation still
+/// resolves the path to the decoded instance (see [`super::freshness`]).
+/// Dropping this abandons at most one bounded confirmation worker, which
+/// exits alone after a single open plus metadata fingerprint.
+pub(crate) struct RecertifyingLoad {
+    pub ready: ReadyLoad,
+    pub confirm: PathConfirmationHandle,
+}
+
+impl RecertifyingLoad {
+    pub(crate) fn begin(ready: ReadyLoad) -> Self {
+        let confirm = spawn_path_confirmation(
+            ready.path.clone(),
+            ready.candidate.observed_identity.clone(),
+        );
+        Self { ready, confirm }
+    }
+}
+
 impl ReadyLoad {
     /// Whether a save committed after the worker opened its handle,
     /// replacing the decoded bytes. Overtaken candidates must restart
@@ -110,7 +136,10 @@ pub(crate) struct CompletedLoad {
 
 impl PendingLoadJobs {
     pub fn is_empty(&self) -> bool {
-        self.running.is_none() && self.queue.is_empty() && self.ready.is_none()
+        self.running.is_none()
+            && self.queue.is_empty()
+            && self.ready.is_none()
+            && self.recertifying.is_none()
     }
 
     pub fn any_running(&self) -> bool {
@@ -124,7 +153,12 @@ impl PendingLoadJobs {
     }
 
     pub fn is_id_pending(&self, id: &SaveId) -> bool {
-        if self.ready.as_ref().is_some_and(|ready| &ready.id == id) {
+        if self.ready.as_ref().is_some_and(|ready| &ready.id == id)
+            || self
+                .recertifying
+                .as_ref()
+                .is_some_and(|recertifying| &recertifying.ready.id == id)
+        {
             return true;
         }
         if self
@@ -145,6 +179,9 @@ impl PendingLoadJobs {
         ids.extend(self.queue.iter().map(|queued| queued.id.clone()));
         if let Some(ready) = &self.ready {
             ids.push(ready.id.clone());
+        }
+        if let Some(recertifying) = &self.recertifying {
+            ids.push(recertifying.ready.id.clone());
         }
         ids
     }
@@ -170,6 +207,11 @@ impl PendingLoadJobs {
         if let Some(ready) = &self.ready {
             phases.push((ready.id.clone(), LoadJobPhase::ReadyToInstall));
         }
+        if let Some(recertifying) = &self.recertifying {
+            // One frame from installation: the path confirmation is the
+            // last step before the boundary.
+            phases.push((recertifying.ready.id.clone(), LoadJobPhase::ReadyToInstall));
+        }
         phases
     }
 
@@ -188,8 +230,10 @@ impl PendingLoadJobs {
             .is_some_and(|latest| request_id != latest)
     }
 
-    /// Cancels a queued or ready load and signals a running load when it
-    /// matches. Cancellation never mutates the active world.
+    /// Cancels a queued, ready, or recertifying load and signals a running
+    /// load when it matches. Cancellation never mutates the active world.
+    /// Dropping a recertifying load abandons its confirmation worker, which
+    /// exits alone after one open plus fingerprint.
     pub fn cancel(&mut self, id: &SaveId) -> bool {
         let mut cancelled = false;
         let before = self.queue.len();
@@ -197,6 +241,14 @@ impl PendingLoadJobs {
         cancelled |= self.queue.len() != before;
         if self.ready.as_ref().is_some_and(|ready| &ready.id == id) {
             self.ready = None;
+            cancelled = true;
+        }
+        if self
+            .recertifying
+            .as_ref()
+            .is_some_and(|recertifying| &recertifying.ready.id == id)
+        {
+            self.recertifying = None;
             cancelled = true;
         }
         if let Some(running) = &self.running
@@ -219,6 +271,7 @@ impl PendingLoadJobs {
     pub fn cancel_all(&mut self) {
         self.queue.clear();
         self.ready = None;
+        self.recertifying = None;
         self.latest_request = None;
         if let Some(running) = &self.running
             && !running.handle.is_finished()
@@ -233,6 +286,14 @@ impl PendingLoadJobs {
 
     pub(crate) fn retain_ready(&mut self, ready: ReadyLoad) {
         self.ready = Some(ready);
+    }
+
+    pub(crate) fn take_recertifying(&mut self) -> Option<RecertifyingLoad> {
+        self.recertifying.take()
+    }
+
+    pub(crate) fn retain_recertifying(&mut self, recertifying: RecertifyingLoad) {
+        self.recertifying = Some(recertifying);
     }
 
     pub(crate) fn note_installed(&mut self, request_id: PersistenceRequestId) {
@@ -324,6 +385,12 @@ pub(crate) fn queue_load(
     {
         pending.ready = None;
     }
+    // A newer request supersedes an in-flight path confirmation the same
+    // way: its send fails into the dropped channel and the bounded worker
+    // exits alone. Every `latest_request` change clears this slot, so an
+    // occupied slot always names the latest request and the install path
+    // needs no extra supersession check for it.
+    pending.recertifying = None;
     pending.queue.push_back(QueuedLoad {
         request_id,
         id,
@@ -454,23 +521,15 @@ fn run_load_worker(
     })
 }
 
-/// Whether the path still resolves to the decoded file instance: re-opens
-/// the path and compares against the open handle's fingerprint (stable file
-/// identity when available, length plus mtime otherwise). An unopenable
-/// path counts as changed so the caller restarts and surfaces the real
-/// failure instead of installing obsolete bytes.
+/// Whether the path still resolves to the decoded file instance. Shared
+/// predicate (see [`super::freshness`]): an unopenable path counts as
+/// changed so the caller restarts and surfaces the real failure instead of
+/// installing obsolete bytes.
 pub(crate) fn certify_path_unchanged(
     path: &Path,
     open_identity: &SaveFileMetadataFingerprint,
 ) -> bool {
-    let current = match fs::File::open(path) {
-        Ok(file) => save_file_metadata_fingerprint(&file),
-        Err(_) => return false,
-    };
-    match (&open_identity.identity, &current.identity) {
-        (Some(expected), Some(actual)) => expected == actual,
-        _ => current.len == open_identity.len && current.modified == open_identity.modified,
-    }
+    path_resolves_to_instance(path, open_identity)
 }
 
 pub(crate) fn take_completed_loads(pending: &mut PendingLoadJobs) -> Vec<CompletedLoad> {
@@ -705,6 +764,103 @@ mod tests {
         assert!(
             !certify_path_unchanged(&path, &observed),
             "a removed path must fail certification"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn await_confirmation(
+        confirm: &PathConfirmationHandle,
+    ) -> super::super::freshness::PathConfirmation {
+        use super::super::freshness::ConfirmationPoll;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match confirm.poll() {
+                ConfirmationPoll::Ready(confirmation) => return confirmation,
+                ConfirmationPoll::WorkerGone => panic!("confirmation worker died"),
+                ConfirmationPoll::Pending => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "confirmation worker did not report"
+                    );
+                    thread::yield_now();
+                }
+            }
+        }
+    }
+
+    fn recertifying_candidate(path: PathBuf) -> ReadyLoad {
+        let identity = save_file_metadata_fingerprint(&std::fs::File::open(&path).unwrap());
+        ReadyLoad {
+            id: SaveId::new("quicksave"),
+            display_name: "Quicksave".into(),
+            request_id: PersistenceRequestId::next(),
+            path: path.clone(),
+            candidate: LoadCandidate {
+                request_id: PersistenceRequestId::next(),
+                observed_generation: 0,
+                simulation: Simulation::new_test_world(11),
+                tick: 0,
+                player_tile: (0.0, 0.0),
+                path,
+                artifact_epoch: 0,
+                observed_identity: identity,
+                end_certified: true,
+            },
+        }
+    }
+
+    #[test]
+    fn same_round_confirmation_matches_untouched_path() {
+        // The install path consumes only same-round confirmations: an
+        // untouched path matches with an unbroken epoch chain, so the
+        // candidate may install.
+        let dir = std::env::temp_dir().join(format!(
+            "factory-load-recert-match-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        std::fs::write(&path, vec![0x41u8; 1024]).unwrap();
+        let ready = recertifying_candidate(path.clone());
+        let recertifying = RecertifyingLoad::begin(ready);
+        let confirmation = await_confirmation(&recertifying.confirm);
+        assert!(
+            confirmation.matched,
+            "an unmodified path must confirm in the same round"
+        );
+        assert_eq!(
+            confirmation.epoch,
+            save_artifact_epoch(&path),
+            "the confirmation must chain the current writer epoch"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn same_round_confirmation_rejects_replaced_path() {
+        // Finding 2: the decode worker certified instance A, but an external
+        // actor replaced the path before the frame consumed it. The
+        // same-round confirmation observes instance B and rejects, so the
+        // install path restarts instead of installing A's obsolete bytes.
+        let dir = std::env::temp_dir().join(format!(
+            "factory-load-recert-replace-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        std::fs::write(&path, vec![0x41u8; 1024]).unwrap();
+        let ready = recertifying_candidate(path.clone());
+        // External atomic replacement after the decode certification.
+        let replacement = dir.join("replacement.factsim");
+        std::fs::write(&replacement, vec![0x42u8; 2048]).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        let recertifying = RecertifyingLoad::begin(ready);
+        let confirmation = await_confirmation(&recertifying.confirm);
+        assert!(
+            !confirmation.matched,
+            "a path replaced after decoding must fail same-round confirmation"
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

@@ -14,7 +14,12 @@ pub struct SimResource {
     /// requested tick identity with a lock-free load instead of blocking on
     /// the simulation lock.
     completed_tick: Arc<AtomicU64>,
-    active_snapshot_captures: Arc<AtomicU64>,
+    /// Number of admission snapshot captures currently in flight. Fixed
+    /// ticks defer while nonzero so the world cannot advance between an
+    /// admission tick read and its background capture (see
+    /// `PendingSaveJobs` parked snapshots). Short-lived: a capture holds
+    /// only the simulation read lock, never file I/O.
+    capture_in_flight: Arc<AtomicU64>,
     snapshot_blocked_fixed_ticks: Arc<AtomicU64>,
 }
 
@@ -44,7 +49,7 @@ impl SimResource {
             replacement_revision: 0,
             generation: Arc::new(AtomicU64::new(0)),
             completed_tick: Arc::new(AtomicU64::new(0)),
-            active_snapshot_captures: Arc::new(AtomicU64::new(0)),
+            capture_in_flight: Arc::new(AtomicU64::new(0)),
             snapshot_blocked_fixed_ticks: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -57,7 +62,7 @@ impl SimResource {
             replacement_revision: 0,
             generation: Arc::new(AtomicU64::new(0)),
             completed_tick: Arc::new(AtomicU64::new(tick)),
-            active_snapshot_captures: Arc::new(AtomicU64::new(0)),
+            capture_in_flight: Arc::new(AtomicU64::new(0)),
             snapshot_blocked_fixed_ticks: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -159,6 +164,19 @@ impl SimResource {
         self.completed_tick.store(tick, Ordering::Release);
     }
 
+    /// Claims an admission capture slot: fixed ticks defer until the
+    /// returned guard is dropped. The guard must be moved into the capture
+    /// task so the count covers the whole admission-to-capture window even
+    /// if the task panics.
+    pub(crate) fn claim_admission_capture(&self) -> AdmissionCaptureClaim {
+        AdmissionCaptureClaim::claim(Arc::clone(&self.capture_in_flight))
+    }
+
+    /// Number of admission snapshot captures currently in flight.
+    pub(crate) fn admission_captures_in_flight(&self) -> u64 {
+        self.capture_in_flight.load(Ordering::Acquire)
+    }
+
     /// Clones the active simulation handle for background snapshot capture.
     pub(crate) fn clone_handle(&self) -> Arc<RwLock<Simulation>> {
         Arc::clone(
@@ -168,32 +186,55 @@ impl SimResource {
         )
     }
 
-    /// Pins the simulation handle and the requested world generation.
-    /// Workers compare the live generation after acquiring the read lock and
-    /// discard the request as stale when a different world was installed
-    /// while it waited, so a snapshot never mixes tick identity across worlds.
-    pub(crate) fn snapshot_source(&self) -> SnapshotSource {
-        SnapshotSource {
+    /// Pins the simulation handle, the requested world generation, and the
+    /// blocked-tick counter for one admission capture task. The task compares
+    /// the live generation after acquiring the read lock and discards the
+    /// request as stale when a different world was installed while it
+    /// waited, so a snapshot never mixes tick identity across worlds.
+    pub(crate) fn capture_source(&self) -> AdmissionCaptureSource {
+        AdmissionCaptureSource {
             simulation: self.clone_handle(),
             generation: Arc::clone(&self.generation),
-            active_captures: Arc::clone(&self.active_snapshot_captures),
             blocked_fixed_ticks: Arc::clone(&self.snapshot_blocked_fixed_ticks),
         }
     }
 
     pub(crate) fn note_snapshot_blocked_fixed_tick(&self) {
-        if self.active_snapshot_captures.load(Ordering::Acquire) > 0 {
+        if self.admission_captures_in_flight() > 0 {
             self.snapshot_blocked_fixed_ticks
                 .fetch_add(1, Ordering::Relaxed);
         }
     }
 }
 
-pub(crate) struct SnapshotSource {
+/// Owned inputs for one admission snapshot capture task: the simulation
+/// handle to read under, the world generation to verify against, and the
+/// counter that records fixed ticks deferred while captures are in flight.
+pub(crate) struct AdmissionCaptureSource {
     pub(crate) simulation: Arc<RwLock<Simulation>>,
     pub(crate) generation: Arc<AtomicU64>,
-    pub(crate) active_captures: Arc<AtomicU64>,
     pub(crate) blocked_fixed_ticks: Arc<AtomicU64>,
+}
+
+/// RAII guard for one admission snapshot capture. Fixed ticks defer while
+/// the count is nonzero; dropping (including on task panic) releases it.
+/// The guard must be moved into the capture task so the window covers
+/// admission-to-capture exactly.
+pub(crate) struct AdmissionCaptureClaim {
+    counter: Arc<AtomicU64>,
+}
+
+impl AdmissionCaptureClaim {
+    pub(crate) fn claim(counter: Arc<AtomicU64>) -> Self {
+        counter.fetch_add(1, Ordering::Release);
+        Self { counter }
+    }
+}
+
+impl Drop for AdmissionCaptureClaim {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::Release);
+    }
 }
 
 #[derive(Resource, Default)]

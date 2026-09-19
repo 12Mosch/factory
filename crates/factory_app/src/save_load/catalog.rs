@@ -257,6 +257,7 @@ mod tests {
             // certify.
             path_confirmed_current: false,
             commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: None,
         };
         // Simulate the old worker finishing after the replacement + refresh.
         let mut catalog = SaveCatalog {
@@ -275,6 +276,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
             scan_epoch: 0,
             validation_queue: VecDeque::from([CatalogValidationRequest {
@@ -351,6 +353,7 @@ mod tests {
             // certify.
             path_confirmed_current: false,
             commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: None,
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -368,6 +371,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
             scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
@@ -536,6 +540,7 @@ mod tests {
             attempt: 1,
             path_confirmed_current: false,
             commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: None,
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -553,6 +558,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
             scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
@@ -597,6 +603,7 @@ mod tests {
             attempt: 0,
             path_confirmed_current: false,
             commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: None,
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -614,6 +621,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
             scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
@@ -679,6 +687,7 @@ mod tests {
             attempt: MAX_CATALOG_VALIDATION_RETRIES,
             path_confirmed_current: false,
             commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: None,
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -696,6 +705,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
             scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
@@ -791,6 +801,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: None,
             scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
@@ -856,6 +867,7 @@ mod tests {
             entries: Vec::new(),
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
             scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
@@ -876,6 +888,7 @@ mod tests {
                         attempt: 0,
                         path_confirmed_current: false,
                         commit_epoch,
+                        observed_metadata: None,
                     };
                     let mut spins = 0u32;
                     loop {
@@ -1012,6 +1025,7 @@ mod tests {
             }],
             revision: 7,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
             scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
@@ -1053,6 +1067,7 @@ mod tests {
             // real worker certifies for an unmodified path.
             path_confirmed_current: true,
             commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: Some(metadata.clone()),
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -1070,6 +1085,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
             scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
@@ -1082,16 +1098,16 @@ mod tests {
         };
 
         // A published outcome schedules no retry; the loop ends once the
-        // single job is consumed.
+        // single job is consumed and its parked confirmation installs.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut mutated = false;
-        while !catalog.validation_jobs.is_empty() {
+        while !catalog.validation_jobs.is_empty() || !catalog.confirming.is_empty() {
             assert!(
                 std::time::Instant::now() < deadline,
                 "validation job did not finish"
             );
             mutated |= poll_catalog_validation_jobs_inner(&mut catalog);
-            if !catalog.validation_jobs.is_empty() {
+            if !catalog.validation_jobs.is_empty() || !catalog.confirming.is_empty() {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }
@@ -1128,6 +1144,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: None,
             scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
@@ -1164,6 +1181,7 @@ mod tests {
             attempt: MAX_CATALOG_VALIDATION_RETRIES,
             path_confirmed_current: true,
             commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: None,
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -1181,6 +1199,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
             scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
@@ -1235,6 +1254,7 @@ mod tests {
             attempt: MAX_CATALOG_VALIDATION_RETRIES,
             path_confirmed_current: true,
             commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: None,
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -1252,6 +1272,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
             scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
@@ -1313,6 +1334,7 @@ mod tests {
             attempt: MAX_CATALOG_VALIDATION_RETRIES,
             path_confirmed_current: true,
             commit_epoch: certified_epoch,
+            observed_metadata: None,
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -1330,6 +1352,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
             scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
@@ -1375,6 +1398,9 @@ mod tests {
         let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
             .expect("current save should encode");
         fs::write(&path, &current).unwrap();
+        // The file is untouched since observation, matching what a real
+        // worker binds a header-only verdict to.
+        let observed = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
         let header_only = CatalogValidationOutcome {
             path: path.clone(),
             compatibility: SaveCompatibility::ExceedsCurrentLimits,
@@ -1382,6 +1408,7 @@ mod tests {
             attempt: 0,
             path_confirmed_current: true,
             commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: Some(observed),
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -1399,6 +1426,7 @@ mod tests {
             }],
             revision: 0,
             validation_cache: BTreeMap::new(),
+            confirming: Vec::new(),
             next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
             scan_epoch: 0,
             validation_queue: std::collections::VecDeque::new(),
@@ -1422,6 +1450,112 @@ mod tests {
             "a certified header-only verdict must install"
         );
         assert!(catalog.validation_queue.is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn replaced_file_between_certification_and_install_keeps_entry_pending() {
+        // Finding 3: the worker certifies instance A as corrupt, but an
+        // external actor replaces the path with a valid save before the
+        // frame consumes the outcome. The parked verdict must not install
+        // for the replacement; the entry stays pending and converges on a
+        // fresh verdict through the pending rescan.
+        let dir = std::env::temp_dir().join(format!(
+            "factory-cert-install-race-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        fs::write(&path, b"truncated-payload").unwrap();
+        let mut open_a = fs::File::open(&path).unwrap();
+        let metadata_a = save_file_metadata_fingerprint(&open_a);
+        let fingerprint_a = save_file_fingerprint(&mut open_a, metadata_a.clone()).unwrap();
+        drop(open_a);
+        // Certified against instance A, as a real worker would produce for
+        // bytes that fail decoding with a stable fingerprint.
+        let certified = CatalogValidationOutcome {
+            path: path.clone(),
+            compatibility: SaveCompatibility::CorruptOrTruncated,
+            fingerprint: Some(fingerprint_a),
+            attempt: 0,
+            path_confirmed_current: true,
+            commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: Some(metadata_a),
+        };
+        // External replacement with a valid save before frame consumption.
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        let metadata_b = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
+        assert_ne!(
+            metadata_b,
+            certified.observed_metadata.clone().unwrap(),
+            "the replacement must change file identity for the test"
+        );
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+                inspected: None,
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            // The pending rescan is disabled: the stale verdict must not
+            // install even before any re-observation runs.
+            confirming: Vec::new(),
+            next_pending_rescan: Some(Instant::now() + Duration::from_secs(3600)),
+            scan_epoch: 0,
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: vec![CatalogValidationJob {
+                path: path.clone(),
+                metadata: metadata_b.clone(),
+                cancel: Arc::new(AtomicBool::new(false)),
+                handle: thread::spawn(|| certified),
+            }],
+        };
+
+        drain_validation_jobs(&mut catalog);
+
+        assert_eq!(catalog.validation_jobs.len(), 0);
+        assert!(
+            catalog.confirming.is_empty(),
+            "the mismatched confirmation must be consumed, not parked"
+        );
+        assert!(
+            !catalog.validation_cache.contains_key(&path),
+            "the old corruption verdict must not populate the cache for the replacement"
+        );
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::ValidationPending,
+            "the replaced file must stay pending instead of inheriting corruption"
+        );
+
+        // Enabling the pending rescan converges on a fresh verdict for the
+        // replacement without any further refresh. Prime one poll so the
+        // rescan (which is what schedules work here) can run.
+        catalog.next_pending_rescan = None;
+        poll_catalog_validation_jobs_inner(&mut catalog);
+        drain_validation_jobs(&mut catalog);
+
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::Compatible,
+            "the replacement must converge on its own verdict"
+        );
+        assert_eq!(
+            catalog.validation_cache[&path].fingerprint.metadata,
+            metadata_b
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1480,13 +1614,15 @@ mod tests {
 
     fn drain_validation_jobs(catalog: &mut SaveCatalog) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !catalog.validation_jobs.is_empty() {
+        // Certified outcomes park for same-round confirmation before
+        // installing, so draining covers parked confirmations too.
+        while !catalog.validation_jobs.is_empty() || !catalog.confirming.is_empty() {
             assert!(
                 std::time::Instant::now() < deadline,
                 "validation job did not finish"
             );
             poll_catalog_validation_jobs_inner(catalog);
-            if !catalog.validation_jobs.is_empty() {
+            if !catalog.validation_jobs.is_empty() || !catalog.confirming.is_empty() {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }

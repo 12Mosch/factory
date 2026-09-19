@@ -7,6 +7,7 @@
 //! for explicit callers such as recovery tests.
 
 use super::super::container::{ContainerError, load_simulation_from_reader, save_artifact_epoch};
+use super::super::freshness::path_resolves_to_instance;
 use super::super::{
     CachedSaveValidation, CatalogValidationJob, CatalogValidationOutcome, CatalogValidationRequest,
     SaveCatalog, SaveCompatibility, SaveFileMetadataFingerprint, SaveKind,
@@ -197,13 +198,7 @@ pub(crate) fn validate_loadable_file(
 /// without a stable identity this falls back to length/mtime equality.
 fn confirm_path_current(path: &Path, observed: &SaveFileMetadataFingerprint) -> (bool, u64) {
     let before = save_artifact_epoch(path);
-    let confirmed = fs::File::open(path).is_ok_and(|file| {
-        let current = save_file_metadata_fingerprint(&file);
-        match (&observed.identity, &current.identity) {
-            (Some(expected), Some(actual)) => expected == actual,
-            _ => current.len == observed.len && current.modified == observed.modified,
-        }
-    });
+    let confirmed = path_resolves_to_instance(path, observed);
     let after = save_artifact_epoch(path);
     (confirmed && before == after, after)
 }
@@ -229,6 +224,7 @@ pub(crate) fn validate_loadable_path(
                 attempt,
                 commit_epoch,
                 path_confirmed_current: false,
+                observed_metadata: None,
             };
         }
     };
@@ -242,6 +238,7 @@ pub(crate) fn validate_loadable_path(
             attempt,
             commit_epoch,
             path_confirmed_current,
+            observed_metadata: Some(metadata),
         };
     }
     // The path may have been replaced after the request was created. Only a
@@ -269,6 +266,7 @@ pub(crate) fn validate_loadable_path(
                     attempt,
                     commit_epoch,
                     path_confirmed_current,
+                    observed_metadata: Some(metadata),
                 };
             }
         },
@@ -282,6 +280,7 @@ pub(crate) fn validate_loadable_path(
             attempt,
             commit_epoch,
             path_confirmed_current,
+            observed_metadata: Some(metadata),
         };
     }
     // From here on every byte is read through the cancellation wrapper so
@@ -301,6 +300,7 @@ pub(crate) fn validate_loadable_path(
                 attempt,
                 commit_epoch,
                 path_confirmed_current,
+                observed_metadata: Some(metadata),
             };
         }
         Err(_) => {
@@ -312,6 +312,7 @@ pub(crate) fn validate_loadable_path(
                 attempt,
                 commit_epoch,
                 path_confirmed_current,
+                observed_metadata: Some(metadata),
             };
         }
     };
@@ -342,6 +343,7 @@ pub(crate) fn validate_loadable_path(
         attempt,
         commit_epoch,
         path_confirmed_current,
+        observed_metadata: Some(after_metadata),
     }
 }
 

@@ -12,9 +12,12 @@
 //!
 //! # Bounds
 //!
-//! * Save workers: at most [`MAX_SAVE_WORKERS`] running. Only the running job
-//!   retains an immutable snapshot generation ([`MAX_RETAINED_SAVE_GENERATIONS`]).
-//!   Queued requests retain only parameters, never snapshot memory.
+//! * Save workers: at most [`MAX_SAVE_WORKERS`] running. Each admitted save
+//!   retains its own immutable admission snapshot until its worker encodes
+//!   it, so at most [`MAX_QUEUED_SAVES`] parked plus one running generation
+//!   are retained ([`MAX_RETAINED_SAVE_GENERATIONS`] bounds the running
+//!   worker's share). Queued requests additionally retain only parameters
+//!   plus the parked-snapshot handoff.
 //! * Queued saves: at most [`MAX_QUEUED_SAVES`]. Manual (explicit) saves are
 //!   FIFO; autosaves coalesce by target and apply backpressure by dropping.
 //! * Load workers: at most [`MAX_LOAD_WORKERS`] running with at most
@@ -26,15 +29,18 @@
 //!
 //! * Saves to the same target serialize in FIFO request order, including
 //!   repeated named overwrites of one save.
-//! * Each save captures exactly the completed tick recorded at admission.
-//!   Fixed steps defer while an accepted save has not secured its snapshot
-//!   (queued, or running but still capturing), so the world cannot tick out
-//!   from under the requested tick identity; once the worker holds the
-//!   snapshot, ticks resume while encoding and disk I/O proceed in the
-//!   background. A request queued while a different world is installed is
+//! * Each save pins exactly the completed tick recorded at admission: an
+//!   admission capture task secures the immutable snapshot under the
+//!   simulation read lock in the background and parks it for the worker,
+//!   which never touches the simulation lock. Fixed steps defer only while
+//!   such a capture is in flight, so the world cannot tick out from under
+//!   the requested tick identity between admission and capture; once every
+//!   admitted snapshot is parked, ticks resume while queueing, encoding, and
+//!   disk I/O proceed. A capture that finds a different world installed is
 //!   discarded as stale instead of capturing another world's bytes, and the
 //!   captured tick is reported in the outcome, so requested completed-tick
-//!   identity is never mixed across worlds or ticks.
+//!   identity is never mixed across worlds or ticks — including when the
+//!   world is replaced while a pinned request still waits.
 //! * Each load result carries its request id and the world generation observed
 //!   when its worker started. A result installs only when its request is still
 //!   the newest and no newer world installation happened after the worker
@@ -44,9 +50,17 @@
 //!   worker opens the file, and the worker re-observes the decoded file
 //!   instance after decoding (off-thread) and carries the verdict. A save
 //!   committed afterwards, or an external replacement of the path, fails
-//!   the carried certification, so the request restarts and converges on
-//!   the current bytes instead of installing a rollback. The frame-side
-//!   install boundary stays memory-only.
+//!   that carried certification, so the request restarts instead of
+//!   installing a rollback. Because the worker's certification is stale by
+//!   the time the frame consumes it whenever an external actor replaces the
+//!   file in between, the frame never installs it directly: a confirmation
+//!   worker re-observes the path off-thread and installation proceeds only
+//!   on its same-round verdict, chained to the writer epoch so our own
+//!   commits invalidate it too. Catalog validation verdicts consume through
+//!   the same confirmation protocol before publishing. The frame-side
+//!   install boundary stays memory-only; the residual window (a replacement
+//!   landing between the confirmation's final observation and the
+//!   memory-only install) is documented at both install sites.
 //!
 //! # Shutdown and cancellation
 //!

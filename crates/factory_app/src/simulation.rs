@@ -3,7 +3,6 @@ use factory_sim::{SimCommand, SimCommandEffect, SimCommandError};
 
 use crate::input::resources::{TrainManualInput, WeaponInput};
 use crate::resources::{FixedStepCatchUpStats, SimProfileStats, SimResource, UpsStats};
-use crate::save_load::PendingSaveJobs;
 
 /// Presentation-owned pause state for the active game session.
 ///
@@ -100,12 +99,12 @@ pub(crate) fn collect_sim_commands(
 /// its snapshot.
 ///
 /// An accepted save preserves its admission tick exactly: fixed steps defer
-/// while any save has not secured its snapshot under the simulation read
-/// lock (queued, or running but still capturing), so the world cannot tick
-/// out from under the requested completed-tick identity. Once the worker
-/// holds the snapshot, ticks resume while encoding and disk I/O proceed in
-/// the background. Deferred commands stay queued in FIFO order for the next
-/// completed tick.
+/// while any admission snapshot capture is in flight, so the world cannot
+/// tick out from under the requested completed-tick identity between
+/// admission and capture. The window covers only the capture — once every
+/// admitted snapshot is parked, ticks resume while encoding and disk I/O
+/// proceed in the background. Deferred commands stay queued in FIFO order
+/// for the next completed tick.
 pub(crate) fn tick_sim(
     mut sim: ResMut<SimResource>,
     mut backlog: ResMut<SimCommandBacklog>,
@@ -113,17 +112,11 @@ pub(crate) fn tick_sim(
     mut ups: ResMut<UpsStats>,
     mut profile_stats: ResMut<SimProfileStats>,
     mut catch_up_stats: ResMut<FixedStepCatchUpStats>,
-    saves: Option<Res<PendingSaveJobs>>,
 ) {
-    // Without the save subsystem no save can be accepted, so nothing is at
-    // risk; the production app always provides the queue via SaveLoadPlugin.
-    if saves
-        .as_ref()
-        .is_some_and(|saves| saves.snapshot_unsecured())
-    {
-        // Bounded by the save queue: workers secure their snapshot within
-        // one capture and the queue drains in FIFO order, so ticks resume
-        // as soon as no accepted save is at risk.
+    if sim.admission_captures_in_flight() > 0 {
+        // Bounded by capture duration: each claim releases when its snapshot
+        // is parked (or its task panics), so ticks resume as soon as no
+        // admitted snapshot is at risk.
         sim.note_snapshot_blocked_fixed_tick();
         profile_stats.save_blocked_fixed_ticks =
             profile_stats.save_blocked_fixed_ticks.saturating_add(1);
@@ -302,7 +295,7 @@ mod tests {
         assert_eq!(
             app.world()
                 .resource::<SimResource>()
-                .snapshot_source()
+                .capture_source()
                 .blocked_fixed_ticks
                 .load(Ordering::Relaxed),
             0,

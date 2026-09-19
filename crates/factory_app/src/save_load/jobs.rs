@@ -8,30 +8,27 @@ use super::{
     SaveId, SaveKind, SaveLoadConfig, SaveLoadMetrics, SaveLoadStatus, SaveLoadStatusKind,
     SaveMetadata,
 };
-use crate::resources::{SimResource, SnapshotSource};
-use factory_sim::try_capture_record_snapshot;
+use crate::resources::{AdmissionCaptureClaim, AdmissionCaptureSource, SimResource};
+use factory_sim::{SimulationSaveSnapshot, try_capture_record_snapshot};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicU8, Ordering},
+    mpsc,
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-struct SnapshotCaptureActivity<'a>(&'a AtomicU64);
-
-impl<'a> SnapshotCaptureActivity<'a> {
-    fn begin(active_captures: &'a AtomicU64) -> Self {
-        active_captures.fetch_add(1, Ordering::AcqRel);
-        Self(active_captures)
-    }
-}
-
-impl Drop for SnapshotCaptureActivity<'_> {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::AcqRel);
-    }
+/// Snapshot secured by an admission capture task, parked for the worker to
+/// pick up. The worker never touches the simulation lock: by the time it
+/// runs, the snapshot below is already immutable.
+struct ParkedSnapshot {
+    snapshot: SimulationSaveSnapshot,
+    snapshot_lock_wait_ms: f64,
+    snapshot_lock_hold_ms: f64,
+    snapshot_capture_ms: f64,
+    snapshot_blocked_fixed_ticks: u64,
 }
 
 /// Bounded asynchronous save queue.
@@ -40,11 +37,19 @@ impl Drop for SnapshotCaptureActivity<'_> {
 /// immutable snapshot generation. Accepted manual saves wait in a bounded
 /// FIFO ([`MAX_QUEUED_SAVES`]); autosaves coalesce by target and apply
 /// backpressure by dropping instead of queueing. Submission never blocks on
-/// the simulation lock: the worker acquires it in the background, so frame
-/// schedules stay responsive while capture, encoding, and disk I/O proceed.
+/// the simulation lock: an admission capture task secures the snapshot under
+/// the simulation read lock in the background, so frame schedules stay
+/// responsive while capture, encoding, and disk I/O proceed.
 ///
-/// Queued entries hold only request parameters plus cheap simulation handles;
-/// snapshot memory is retained solely by the running worker after capture.
+/// Each admission spawns its own capture task immediately, so the
+/// tick-deferral window covers only admission-to-capture: fixed ticks defer
+/// while any capture is in flight, then resume once every admitted snapshot
+/// is parked. Queued entries and running workers hold already-secured
+/// snapshots, never the simulation lock.
+///
+/// Queued entries hold only request parameters plus the parked-snapshot
+/// channel; snapshot memory is retained solely by the parked handoff until
+/// the worker encodes it.
 #[derive(bevy::prelude::Resource, Default)]
 pub struct PendingSaveJobs {
     running: Option<RunningSave>,
@@ -66,7 +71,15 @@ struct QueuedSave {
     explicit: bool,
     requested_generation: u64,
     requested_tick: u64,
-    source: SnapshotSource,
+    /// Created at admission so a queued cancel reaches the capture task
+    /// before it secures the snapshot; moved into the worker at dequeue.
+    cancel: Arc<AtomicU8>,
+    /// Handoff from the admission capture task. The worker blocks here only
+    /// until its snapshot is parked — the simulation lock is never held
+    /// across this wait. The mutex exists solely for the Bevy resource
+    /// `Sync` bound while the entry sits in the queue; after dequeue the
+    /// worker is the single owner and unwraps it without contention.
+    parked: Mutex<mpsc::Receiver<Result<ParkedSnapshot, SaveJobError>>>,
 }
 
 struct RunningSave {
@@ -85,24 +98,6 @@ struct RunningSave {
 impl PendingSaveJobs {
     pub fn is_empty(&self) -> bool {
         self.running.is_none() && self.queue.is_empty()
-    }
-
-    /// Whether fixed ticks must defer: an accepted save has not yet secured
-    /// its snapshot under the simulation read lock — either waiting in the
-    /// queue, or running but still capturing. Deferring freezes the world so
-    /// it cannot tick out from under the requested completed-tick identity
-    /// between admission and capture; once the worker holds the snapshot
-    /// (encoding onward) ticks resume while I/O proceeds in the background.
-    pub(crate) fn snapshot_unsecured(&self) -> bool {
-        if !self.queue.is_empty() {
-            return true;
-        }
-        self.running.as_ref().is_some_and(|job| {
-            matches!(
-                SaveJobPhase::decode(job.phase.load(Ordering::Relaxed)),
-                SaveJobPhase::Queued | SaveJobPhase::Capturing
-            )
-        })
     }
 
     pub fn any_running(&self) -> bool {
@@ -192,6 +187,18 @@ impl PendingSaveJobs {
     /// false — too late — instead of a false success).
     pub fn cancel(&mut self, id: &SaveId) -> bool {
         let mut cancelled = false;
+        // Signal queued entries first: their capture task may still be
+        // running and checks this flag before securing the snapshot, so a
+        // queued cancel avoids wasted capture work. The entries are dropped
+        // below regardless; a task that already parked finds its receiver
+        // gone and drops the snapshot instead of retaining it.
+        for queued in &self.queue {
+            if &queued.id == id {
+                queued
+                    .cancel
+                    .store(SAVE_CANCEL_REQUESTED, Ordering::Relaxed);
+            }
+        }
         let before = self.queue.len();
         self.queue.retain(|queued| &queued.id != id);
         cancelled |= self.queue.len() != before;
@@ -249,10 +256,10 @@ impl PendingSaveJobs {
             explicit,
             requested_generation,
             requested_tick,
-            source,
+            cancel,
+            parked,
         } = queued;
         let phase = Arc::new(AtomicU8::new(SaveJobPhase::Queued.encode()));
-        let cancel = Arc::new(AtomicU8::new(SAVE_CANCEL_ACTIVE));
         let worker_phase = Arc::clone(&phase);
         let worker_cancel = Arc::clone(&cancel);
         let worker_id = id.clone();
@@ -269,7 +276,7 @@ impl PendingSaveJobs {
                 worker_kind,
                 worker_name,
                 worker_path,
-                source,
+                parked,
                 worker_phase,
                 worker_cancel,
                 worker_shutdown,
@@ -392,13 +399,30 @@ pub(crate) fn queue_save(
     }
     let submission_start = Instant::now();
     let requested_generation = sim.replacement_revision();
+    // Claim before reading the admission tick so fixed ticks defer across
+    // the whole admission-to-capture window. The guard moves into the
+    // capture task and releases when the snapshot is parked (or the task
+    // panics), so the deferral never outlives the capture.
+    let claim = sim.claim_admission_capture();
     // The completed tick at admission, read lock-free so submission never
-    // blocks on the simulation lock. Fixed ticks defer while this request
-    // has not secured its snapshot (see `snapshot_unsecured`), so the
-    // worker captures exactly this tick; the captured tick is reported in
-    // the outcome.
+    // blocks on the simulation lock. The deferral above holds the world on
+    // exactly this tick until the capture task secures its snapshot, so the
+    // worker captures this identity without ever touching the simulation
+    // lock; the captured tick is reported in the outcome.
     let requested_tick = sim.completed_tick();
-    let source = sim.snapshot_source();
+    let source = sim.capture_source();
+    let cancel = Arc::new(AtomicU8::new(SAVE_CANCEL_ACTIVE));
+    let worker_cancel = Arc::clone(&cancel);
+    let (parked_tx, parked_rx) = mpsc::channel();
+    thread::spawn(move || {
+        admission_capture_task(
+            requested_generation,
+            source,
+            worker_cancel,
+            claim,
+            parked_tx,
+        );
+    });
     let request_id = PersistenceRequestId::next();
     pending.queue.push_back(QueuedSave {
         request_id,
@@ -410,7 +434,8 @@ pub(crate) fn queue_save(
         explicit,
         requested_generation,
         requested_tick,
-        source,
+        cancel,
+        parked: Mutex::new(parked_rx),
     });
     pending.start_next();
     metrics.last_request_submission_ms = submission_start.elapsed().as_secs_f64() * 1000.0;
@@ -422,25 +447,34 @@ pub(crate) fn queue_save(
     true
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_save_worker(
-    request_id: PersistenceRequestId,
+/// Secures one admitted snapshot under the simulation read lock and parks
+/// it for the worker. Spawned per admission — not at dequeue — so the
+/// tick-deferral window covers only this capture, never queue wait or disk
+/// I/O. The claim guard releases the deferral when this returns (or if the
+/// task panics); a disconnected channel therefore tells the worker its
+/// capture task died. A parked result whose receiver is gone (queued cancel,
+/// teardown) is dropped here instead of retained.
+fn admission_capture_task(
     requested_generation: u64,
-    requested_tick: u64,
-    worker_id: SaveId,
-    worker_kind: SaveKind,
-    worker_name: String,
-    worker_path: PathBuf,
-    source: SnapshotSource,
-    phase: Arc<AtomicU8>,
+    source: AdmissionCaptureSource,
     cancel: Arc<AtomicU8>,
-    shutdown: Arc<AtomicBool>,
-) -> Result<SaveJobOutcome, SaveJobError> {
-    let worker_start = Instant::now();
-    phase.store(SaveJobPhase::Capturing.encode(), Ordering::Relaxed);
+    _claim: AdmissionCaptureClaim,
+    parked: mpsc::Sender<Result<ParkedSnapshot, SaveJobError>>,
+) {
+    let outcome = capture_admission(requested_generation, &source, &cancel);
+    let _ = parked.send(outcome);
+}
+
+fn capture_admission(
+    requested_generation: u64,
+    source: &AdmissionCaptureSource,
+    cancel: &AtomicU8,
+) -> Result<ParkedSnapshot, SaveJobError> {
+    if cancel.load(Ordering::Relaxed) != SAVE_CANCEL_ACTIVE {
+        return Err(SaveJobError::Cancelled);
+    }
     // Background acquisition keeps frame submission responsive. Fixed ticks
-    // defer via `try_write` while the read lock is held; frame readers stay
-    // concurrent.
+    // defer while this capture is in flight; frame readers stay concurrent.
     let lock_wait_start = Instant::now();
     let sim = source
         .simulation
@@ -449,19 +483,17 @@ fn run_save_worker(
     let snapshot_lock_wait_ms = lock_wait_start.elapsed().as_secs_f64() * 1000.0;
     let lock_acquired = Instant::now();
     // Enforce the requested world identity: a world installed while this
-    // request waited in the queue mutates the same lock, so capturing now
-    // would mix the requested tick identity with another world's bytes. The
-    // stale request is discarded with the previous save intact instead.
-    // Tick identity needs no check here: fixed ticks defer while any
-    // accepted save has not secured its snapshot (see
-    // `PendingSaveJobs::snapshot_unsecured`), so the world cannot advance
-    // between admission and this capture. `requested_tick` is retained for
-    // observability and the captured tick is reported in the outcome.
+    // request waited mutates the same lock, so capturing now would mix the
+    // requested tick identity with another world's bytes. The stale request
+    // is discarded with the previous save intact instead. Tick identity
+    // needs no check here: fixed ticks defer while any admission capture is
+    // in flight, so the world cannot advance between admission and this
+    // capture. `requested_tick` is retained for observability and the
+    // captured tick is reported in the outcome.
     let capture_generation = source.generation.load(Ordering::Acquire);
     if capture_generation != requested_generation {
         return Err(SaveJobError::Stale);
     }
-    let capture_activity = SnapshotCaptureActivity::begin(&source.active_captures);
     let blocked_before = source.blocked_fixed_ticks.load(Ordering::Relaxed);
     if cancel.load(Ordering::Relaxed) != SAVE_CANCEL_ACTIVE {
         return Err(SaveJobError::Cancelled);
@@ -475,15 +507,64 @@ fn run_save_worker(
             _ => SaveJobError::CaptureFailed(format!("{error:?}")),
         })?;
     let snapshot_capture_ms = snapshot_start.elapsed().as_secs_f64() * 1000.0;
-    let snapshot_identity = snapshot.identity();
-    let snapshot_seed = snapshot.world_seed();
     drop(sim);
-    drop(capture_activity);
     let snapshot_lock_hold_ms = lock_acquired.elapsed().as_secs_f64() * 1000.0;
     let snapshot_blocked_fixed_ticks = source
         .blocked_fixed_ticks
         .load(Ordering::Relaxed)
         .saturating_sub(blocked_before);
+    if cancel.load(Ordering::Relaxed) != SAVE_CANCEL_ACTIVE {
+        return Err(SaveJobError::Cancelled);
+    }
+    Ok(ParkedSnapshot {
+        snapshot,
+        snapshot_lock_wait_ms,
+        snapshot_lock_hold_ms,
+        snapshot_capture_ms,
+        snapshot_blocked_fixed_ticks,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_save_worker(
+    request_id: PersistenceRequestId,
+    requested_generation: u64,
+    requested_tick: u64,
+    worker_id: SaveId,
+    worker_kind: SaveKind,
+    worker_name: String,
+    worker_path: PathBuf,
+    parked: Mutex<mpsc::Receiver<Result<ParkedSnapshot, SaveJobError>>>,
+    phase: Arc<AtomicU8>,
+    cancel: Arc<AtomicU8>,
+    shutdown: Arc<AtomicBool>,
+) -> Result<SaveJobOutcome, SaveJobError> {
+    let worker_start = Instant::now();
+    phase.store(SaveJobPhase::Capturing.encode(), Ordering::Relaxed);
+    // Single owner after dequeue: the mutex was never locked while queued,
+    // so unwrapping cannot observe poisoning.
+    let parked = parked
+        .into_inner()
+        .expect("parked receiver is never shared before handoff");
+    // The admission capture task secured the snapshot under the simulation
+    // read lock at submission time; the worker only picks it up here, so it
+    // never touches the simulation lock and fixed ticks already resumed once
+    // the capture parked. A disconnected channel means the capture task
+    // panicked. World identity was enforced at capture; the deferral between
+    // admission and capture preserves the requested tick identity, so
+    // neither needs re-checking here — `requested_tick` is retained for
+    // observability and the captured tick is reported in the outcome.
+    let ParkedSnapshot {
+        snapshot,
+        snapshot_lock_wait_ms,
+        snapshot_lock_hold_ms,
+        snapshot_capture_ms,
+        snapshot_blocked_fixed_ticks,
+    } = parked
+        .recv()
+        .map_err(|_| SaveJobError::Encode("admission capture task panicked".into()))??;
+    let snapshot_identity = snapshot.identity();
+    let snapshot_seed = snapshot.world_seed();
     if cancel.load(Ordering::Relaxed) != SAVE_CANCEL_ACTIVE {
         return Err(SaveJobError::Cancelled);
     }
@@ -646,8 +727,27 @@ mod tests {
         assert!(pending.is_empty());
     }
 
+    fn test_queued_save(id: &str, requested_tick: u64) -> QueuedSave {
+        // The sender is dropped: these queue-shape tests never run a
+        // capture task, they only assert on queue bookkeeping.
+        let (_, parked) = mpsc::channel();
+        QueuedSave {
+            request_id: PersistenceRequestId::next(),
+            id: SaveId::new(id),
+            kind: SaveKind::Quicksave,
+            display_name: id.into(),
+            path: PathBuf::from(format!("{id}.factsim")),
+            normalized_name: None,
+            explicit: true,
+            requested_generation: 0,
+            requested_tick,
+            cancel: Arc::new(AtomicU8::new(SAVE_CANCEL_ACTIVE)),
+            parked: Mutex::new(parked),
+        }
+    }
+
     #[test]
-    fn unsecured_saves_defer_fixed_ticks_until_snapshot_secured() {
+    fn admission_captures_defer_fixed_ticks_until_parked() {
         use crate::resources::{FixedStepCatchUpStats, SimProfileStats, UpsStats};
         use crate::simulation::{SimCommandBacklog, SimCommandResult, tick_sim};
         use bevy::prelude::{App, Update};
@@ -657,7 +757,6 @@ mod tests {
             .init_resource::<SimCommandBacklog>()
             .init_resource::<SimProfileStats>()
             .init_resource::<FixedStepCatchUpStats>()
-            .init_resource::<PendingSaveJobs>()
             .init_resource::<UpsStats>()
             .add_message::<SimCommandResult>()
             .add_systems(Update, tick_sim);
@@ -674,99 +773,73 @@ mod tests {
         assert_eq!(tick(&app), before + 1);
         assert_eq!(blocked(&app), 0);
 
-        // Two accepted saves with no worker started: the queue holds them,
-        // so fixed steps must defer instead of ticking out from under the
-        // requested completed-tick identity.
-        let source = app.world().resource::<SimResource>().snapshot_source();
-        for name in ["freeze-a", "freeze-b"] {
-            app.world_mut()
-                .resource_mut::<PendingSaveJobs>()
-                .queue
-                .push_back(QueuedSave {
-                    request_id: PersistenceRequestId::next(),
-                    id: SaveId::new(name),
-                    kind: SaveKind::Quicksave,
-                    display_name: name.into(),
-                    path: PathBuf::from(format!("{name}.factsim")),
-                    normalized_name: None,
-                    explicit: true,
-                    requested_generation: 0,
-                    requested_tick: before + 1,
-                    source: SnapshotSource {
-                        simulation: Arc::clone(&source.simulation),
-                        generation: Arc::clone(&source.generation),
-                        active_captures: Arc::clone(&source.active_captures),
-                        blocked_fixed_ticks: Arc::clone(&source.blocked_fixed_ticks),
-                    },
-                });
-        }
+        // A held admission claim defers fixed steps so the world cannot tick
+        // out from under the requested completed-tick identity before the
+        // capture task secures its snapshot.
+        let claim = app
+            .world()
+            .resource::<SimResource>()
+            .claim_admission_capture();
         for _ in 0..3 {
             app.update();
         }
         assert_eq!(
             tick(&app),
             before + 1,
-            "ticks must freeze while accepted saves await their snapshot"
+            "ticks must defer while an admission capture is in flight"
         );
         assert_eq!(blocked(&app), 3);
 
-        // Drained queue: ticks resume on the very next step.
-        app.world_mut()
-            .resource_mut::<PendingSaveJobs>()
-            .queue
-            .clear();
+        // Released claim (snapshot parked): ticks resume on the very next
+        // step while encoding and disk I/O would still proceed elsewhere.
+        drop(claim);
         app.update();
         assert_eq!(tick(&app), before + 2);
         assert_eq!(blocked(&app), 3);
     }
 
     #[test]
-    fn snapshot_unsecured_tracks_capture_phase() {
-        let (running, release) = test_running_save("phase-probe");
-        let mut pending = PendingSaveJobs {
-            running: Some(running),
-            queue: VecDeque::new(),
-            shutdown: Arc::new(AtomicBool::new(false)),
-        };
-        // Still capturing: the snapshot is not secured, ticks must defer.
-        assert!(pending.snapshot_unsecured());
-        // Snapshot secured (encoding onward): ticks resume while I/O
-        // proceeds in the background.
-        pending
-            .running
-            .as_ref()
-            .expect("worker should be running")
-            .phase
-            .store(SaveJobPhase::Encoding.encode(), Ordering::Relaxed);
-        assert!(!pending.snapshot_unsecured());
-        release.send(()).unwrap();
-        pending.join_running();
+    fn admission_capture_parks_requested_tick_identity() {
+        let sim = SimResource::new(factory_sim::Simulation::new_test_world(7));
+        let requested_generation = sim.replacement_revision();
+        let requested_tick = sim.completed_tick();
+        let source = sim.capture_source();
+        let cancel = AtomicU8::new(SAVE_CANCEL_ACTIVE);
+
+        let parked = capture_admission(requested_generation, &source, &cancel)
+            .expect("admission capture should park the requested tick");
+        assert_eq!(
+            parked.snapshot.identity().tick,
+            requested_tick,
+            "the parked snapshot must carry the admission tick identity"
+        );
+
+        // A world installed after admission is stale, never mixed into the
+        // requested identity.
+        let stale = capture_admission(requested_generation.wrapping_add(1), &source, &cancel);
+        assert!(
+            matches!(stale, Err(SaveJobError::Stale)),
+            "a post-admission world install must be discarded as stale"
+        );
+
+        // A cancel racing the capture wins before any snapshot is retained.
+        cancel.store(SAVE_CANCEL_REQUESTED, Ordering::Relaxed);
+        let cancelled = capture_admission(requested_generation, &source, &cancel);
+        assert!(
+            matches!(cancelled, Err(SaveJobError::Cancelled)),
+            "a pre-capture cancel must win without retaining a snapshot"
+        );
     }
 
     #[test]
     fn queued_saves_stay_within_documented_bounds() {
         let sim = SimResource::new(factory_sim::Simulation::new_test_world(7));
-        let source = sim.snapshot_source();
         let requested_tick = sim.completed_tick();
         let mut pending = PendingSaveJobs::default();
         for index in 0..MAX_QUEUED_SAVES {
-            pending.queue.push_back(QueuedSave {
-                request_id: PersistenceRequestId::next(),
-                id: SaveId::new(format!("queued-{index}")),
-                kind: SaveKind::Quicksave,
-                display_name: format!("Queued {index}"),
-                path: PathBuf::from(format!("queued-{index}.factsim")),
-                normalized_name: None,
-                explicit: true,
-                requested_generation: 0,
-                requested_tick,
-                source: SnapshotSource {
-                    simulation: Arc::clone(&source.simulation),
-                    generation: Arc::clone(&source.generation),
-                    active_captures: Arc::clone(&source.active_captures),
-                    blocked_fixed_ticks: Arc::clone(&source.blocked_fixed_ticks),
-                },
-            });
+            pending
+                .queue
+                .push_back(test_queued_save(&format!("queued-{index}"), requested_tick));
         }
         assert_eq!(pending.queued_len(), MAX_QUEUED_SAVES);
         assert!(pending.queue_full());
@@ -781,25 +854,20 @@ mod tests {
     fn cancel_removes_queued_and_signals_running() {
         let (running, release) = test_running_save("running");
         let sim = SimResource::new(factory_sim::Simulation::new_test_world(7));
-        let source = sim.snapshot_source();
+        let queued = test_queued_save("queued", sim.completed_tick());
+        let queued_cancel = Arc::clone(&queued.cancel);
         let mut pending = PendingSaveJobs {
             running: Some(running),
             shutdown: Arc::new(AtomicBool::new(false)),
-            queue: VecDeque::from([QueuedSave {
-                request_id: PersistenceRequestId::next(),
-                id: SaveId::new("queued"),
-                kind: SaveKind::Quicksave,
-                display_name: "Queued".into(),
-                path: PathBuf::from("queued.factsim"),
-                normalized_name: None,
-                explicit: true,
-                requested_generation: 0,
-                requested_tick: sim.completed_tick(),
-                source,
-            }]),
+            queue: VecDeque::from([queued]),
         };
         assert!(pending.cancel(&SaveId::new("queued")));
         assert!(pending.queue.is_empty());
+        assert_eq!(
+            queued_cancel.load(Ordering::Relaxed),
+            SAVE_CANCEL_REQUESTED,
+            "a queued cancel must reach the capture task before the entry is dropped"
+        );
         assert!(pending.cancel(&SaveId::new("running")));
         assert!(
             pending
@@ -848,13 +916,24 @@ mod tests {
         // A detached scan worker holds the artifact lock across recovery.
         let _held = crate::save_load::container::hold_save_artifact_lock_for_tests();
         let sim = SimResource::new(factory_sim::Simulation::new_test_world(7));
-        let source = sim.snapshot_source();
+        let source = sim.capture_source();
         let requested = source.generation.load(Ordering::Acquire);
         let requested_tick = sim.completed_tick();
         let phase = Arc::new(AtomicU8::new(SaveJobPhase::Queued.encode()));
         let worker_phase = Arc::clone(&phase);
         let shutdown = Arc::new(AtomicBool::new(false));
         let worker_shutdown = Arc::clone(&shutdown);
+        // Park the admission synchronously: the worker under test starts at
+        // the channel handoff, already past snapshot capture.
+        let (parked_tx, parked_rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicU8::new(SAVE_CANCEL_ACTIVE));
+        admission_capture_task(
+            requested,
+            source,
+            Arc::clone(&cancel),
+            sim.claim_admission_capture(),
+            parked_tx,
+        );
         let handle = thread::spawn(move || {
             run_save_worker(
                 PersistenceRequestId::next(),
@@ -864,9 +943,9 @@ mod tests {
                 SaveKind::Quicksave,
                 "Shutdown probe".into(),
                 std::env::temp_dir().join("factory-shutdown-probe.factsim"),
-                source,
+                Mutex::new(parked_rx),
                 worker_phase,
-                Arc::new(AtomicU8::new(SAVE_CANCEL_ACTIVE)),
+                cancel,
                 worker_shutdown,
             )
         });
@@ -949,7 +1028,7 @@ mod tests {
                 }
             }
         }
-        let source = sim.snapshot_source();
+        let source = sim.capture_source();
         let requested = source.generation.load(Ordering::Acquire);
         let requested_tick = sim.completed_tick();
         let phase = Arc::new(AtomicU8::new(SaveJobPhase::Queued.encode()));
@@ -960,6 +1039,16 @@ mod tests {
             std::env::temp_dir().join(format!("factory-mid-encode-cancel-{}", std::process::id()));
         let worker_path = root.join("probe.factsim");
         let committed_path = worker_path.clone();
+        // Park the admission synchronously: the worker under test starts at
+        // the channel handoff, already past snapshot capture.
+        let (parked_tx, parked_rx) = mpsc::channel();
+        admission_capture_task(
+            requested,
+            source,
+            Arc::clone(&worker_cancel),
+            sim.claim_admission_capture(),
+            parked_tx,
+        );
         let handle = thread::spawn(move || {
             run_save_worker(
                 PersistenceRequestId::next(),
@@ -969,7 +1058,7 @@ mod tests {
                 SaveKind::Quicksave,
                 "Probe".into(),
                 worker_path,
-                source,
+                Mutex::new(parked_rx),
                 worker_phase,
                 worker_cancel,
                 Arc::new(AtomicBool::new(false)),
@@ -1003,18 +1092,26 @@ mod tests {
     }
 
     #[test]
-    fn queued_save_captures_latest_tick_when_world_advances_while_waiting() {
-        // A save accepted at tick N that waits while the same world advances
-        // to N+1 captures the latest completed tick when its worker starts,
-        // so FIFO acceptance keeps working under normal gameplay. The
+    fn queued_save_preserves_admission_tick_when_world_advances_while_waiting() {
+        // A save admitted at tick N parks its snapshot at admission; when
+        // the same world advances to N+1 while the entry waits, the worker
+        // still commits tick N — the requested completed-tick identity —
+        // because fixed ticks deferred only across admission-to-capture. The
         // requested tick is retained for observability and the captured tick
         // is reported in the outcome.
         let mut sim = SimResource::new(factory_sim::Simulation::new_test_world(7));
-        let source = sim.snapshot_source();
-        let requested_generation = source.generation.load(Ordering::Acquire);
+        let requested_generation = sim.replacement_revision();
         let requested_tick = sim.completed_tick();
-        // The world ticks once after admission (e.g. while another save
-        // occupied the worker).
+        // Park the admission, then advance the world while the entry
+        // "waits" for the worker.
+        let (parked_tx, parked_rx) = mpsc::channel();
+        admission_capture_task(
+            requested_generation,
+            sim.capture_source(),
+            Arc::new(AtomicU8::new(SAVE_CANCEL_ACTIVE)),
+            sim.claim_admission_capture(),
+            parked_tx,
+        );
         sim.write_for_tests().tick();
         sim.publish_completed_tick(sim.read().tick_count());
         let live_tick = sim.read().tick_count();
@@ -1035,15 +1132,15 @@ mod tests {
             SaveKind::Quicksave,
             "Tick fifo".into(),
             root.join("probe.factsim"),
-            source,
+            Mutex::new(parked_rx),
             Arc::new(AtomicU8::new(SaveJobPhase::Queued.encode())),
             Arc::new(AtomicU8::new(SAVE_CANCEL_ACTIVE)),
             Arc::new(AtomicBool::new(false)),
         )
-        .expect("a queued save must succeed with the latest tick");
+        .expect("a queued save must commit its parked admission tick");
         assert_eq!(
-            outcome.snapshot_tick, live_tick,
-            "the worker must capture the latest completed tick"
+            outcome.snapshot_tick, requested_tick,
+            "the worker must commit the admission tick, not the latest tick"
         );
         assert_eq!(
             outcome.requested_tick, requested_tick,

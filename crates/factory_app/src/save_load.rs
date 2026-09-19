@@ -1,6 +1,7 @@
 mod catalog;
 mod compatibility;
 mod container;
+mod freshness;
 mod jobs;
 pub mod lifecycle;
 mod loads;
@@ -575,6 +576,19 @@ pub(crate) fn poll_load_jobs(
     catalog: Res<SaveCatalog>,
     mut state: LoadState,
 ) {
+    // Service an in-flight path confirmation first: with a same-round
+    // verdict in hand it is one step from installation.
+    if let Some(recertifying) = pending.take_recertifying()
+        && !poll_recertifying_load(
+            &mut pending,
+            &mut status,
+            &catalog,
+            &mut state,
+            recertifying,
+        )
+    {
+        return;
+    }
     if let Some(ready) = pending.take_ready_for_install() {
         // A newer request accepted while this candidate waited supersedes it:
         // installing now would put an obsolete world over the requested one.
@@ -601,11 +615,7 @@ pub(crate) fn poll_load_jobs(
         }
         match completed.result {
             Ok(candidate) => {
-                let current = if state.sim.is_initialized() {
-                    state.sim.replacement_revision()
-                } else {
-                    0
-                };
+                let current = current_generation(&state);
                 if state.sim.is_initialized() && current != completed.observed_generation {
                     // A newer world was installed after this worker started
                     // (e.g. new-world creation). Discard without touching it.
@@ -710,16 +720,59 @@ fn restart_overtaken_load(
     true
 }
 
-/// Attempts boundary installation of one validated candidate. Returns true
-/// when resolved (installed or terminally rejected) and false when the
-/// simulation was busy and the candidate was retained for retry.
+/// Live world generation for rebasing a restarted load, or zero before the
+/// first world exists.
+fn current_generation(state: &LoadState) -> u64 {
+    if state.sim.is_initialized() {
+        state.sim.replacement_revision()
+    } else {
+        0
+    }
+}
+
+/// Terminal catalog rejections evaluated at install time. The catalog may
+/// change while a candidate waits or confirms, so both install phases
+/// recheck: a removed entry is a terminal rejection (a save that is no
+/// longer listed must not install), as is an entry that no longer loads.
+/// Returns true when terminally resolved with the status set.
+fn reject_stale_catalog_entry(
+    status: &mut SaveLoadStatus,
+    catalog: &SaveCatalog,
+    ready: &loads::ReadyLoad,
+) -> bool {
+    let Some(entry) = catalog.get(&ready.id) else {
+        set_error(status, "Cannot load: save is no longer in the catalog.");
+        return true;
+    };
+    if !entry.compatibility.can_load() {
+        set_error(
+            status,
+            entry
+                .compatibility
+                .reason()
+                .unwrap_or_else(|| "Cannot load this save.".into()),
+        );
+        return true;
+    }
+    false
+}
+
+/// First install phase: gates a validated candidate and parks it for
+/// same-round path confirmation. Returns true when resolved (terminally
+/// rejected or parked for confirmation) and false when the candidate was
+/// retained for retry.
 ///
-/// The artifact lock is held across the overtaken check and the world
-/// installation, so a save commit cannot land between them: our writer bumps
-/// the artifact epoch only while holding that lock. When the lock itself is
-/// held (a save encoding or a scan in recovery), installation defers without
-/// blocking the frame and retries next frame, then rechecks freshness under
-/// the lock.
+/// The decode worker's certification is stale by the time the frame consumes
+/// it whenever an external actor replaces the file in between, so the frame
+/// never installs it directly: after the memory-only gates below pass, a
+/// confirmation worker re-observes the path off-thread and the second phase
+/// ([`poll_recertifying_load`]) installs only on its same-round verdict.
+/// The artifact lock is held across the overtaken check and the confirmation
+/// spawn, so a save commit cannot land between them: our writer bumps the
+/// artifact epoch only while holding that lock. When the lock itself is held
+/// (a save encoding or a scan in recovery), the candidate is retained
+/// without spawning and retries next frame, then re-verifies freshness from
+/// scratch — a confirmation earned before the wait must not outlive it.
 fn install_ready_load(
     pending: &mut PendingLoadJobs,
     status: &mut SaveLoadStatus,
@@ -746,38 +799,118 @@ fn install_ready_load(
     // schedule). Installing either would roll the world back, so restart
     // the request instead: quickload converges on the current bytes once
     // saves settle. The epoch half is checked under the artifact lock, so
-    // our own writer cannot commit between the check and the installation
-    // below.
+    // our own writer cannot commit between the check and the confirmation
+    // spawn below.
     if ready.is_overtaken() || !ready.candidate.end_certified {
         drop(_artifact_guard);
-        let observed = if state.sim.is_initialized() {
-            state.sim.replacement_revision()
-        } else {
-            0
-        };
         return restart_overtaken_load(
             pending,
             status,
             &ready.id,
             &ready.display_name,
             &ready.path,
-            observed,
+            current_generation(state),
         );
     }
-    // The catalog may have changed while decoding. A removed entry is a
-    // terminal rejection: a save that is no longer listed must not install.
-    let Some(entry) = catalog.get(&ready.id) else {
-        set_error(status, "Cannot load: save is no longer in the catalog.");
+    // The catalog may have changed while decoding; rechecked after
+    // confirmation as well, before anything installs.
+    if reject_stale_catalog_entry(status, catalog, &ready) {
         return true;
+    }
+    pending.retain_recertifying(loads::RecertifyingLoad::begin(ready));
+    false
+}
+
+/// Second install phase: consumes a parked path confirmation. Returns true
+/// when resolved (installed, terminally rejected, or restarted) and false
+/// when the candidate was parked again for retry.
+///
+/// Residual bound: a replacement landing between the confirmation worker's
+/// final observation and the memory-only installation below still installs
+/// obsolete bytes. That window holds no filesystem I/O or sleeps — the
+/// frame joins the finished worker and installs in the same system run —
+/// and a candidate retained across frames (busy simulation, held artifact
+/// lock) is never installed on a previous round's verdict: it parks back to
+/// the ready slot and earns a fresh confirmation instead.
+fn poll_recertifying_load(
+    pending: &mut PendingLoadJobs,
+    status: &mut SaveLoadStatus,
+    catalog: &SaveCatalog,
+    state: &mut LoadState,
+    recertifying: loads::RecertifyingLoad,
+) -> bool {
+    let loads::RecertifyingLoad { ready, confirm } = recertifying;
+    // Every `latest_request` change clears the confirmation slot, so an
+    // occupied slot always names the latest request.
+    debug_assert!(
+        pending
+            .latest_request()
+            .is_some_and(|latest| ready.request_id == latest)
+    );
+    let confirmation = match confirm.poll() {
+        freshness::ConfirmationPoll::Pending => {
+            pending.retain_recertifying(loads::RecertifyingLoad { ready, confirm });
+            return false;
+        }
+        freshness::ConfirmationPoll::Ready(confirmation) => confirmation,
+        freshness::ConfirmationPoll::WorkerGone => {
+            // Pathological: the confirmation worker died. Restart re-decodes
+            // and re-certifies from scratch instead of installing on no
+            // evidence.
+            return restart_overtaken_load(
+                pending,
+                status,
+                &ready.id,
+                &ready.display_name,
+                &ready.path,
+                current_generation(state),
+            );
+        }
     };
-    if !entry.compatibility.can_load() {
-        set_error(
+    if !confirmation.matched {
+        // External replacement (or deletion) after the decode worker's
+        // certification: restart converges on the current bytes once they
+        // settle instead of installing the obsolete instance.
+        return restart_overtaken_load(
+            pending,
             status,
-            entry
-                .compatibility
-                .reason()
-                .unwrap_or_else(|| "Cannot load this save.".into()),
+            &ready.id,
+            &ready.display_name,
+            &ready.path,
+            current_generation(state),
         );
+    }
+    let Some(_artifact_guard) = container::try_acquire_save_artifact_lock() else {
+        // The lock was held while confirming: park back to the ready slot
+        // and earn a fresh confirmation next frame instead of installing on
+        // this round's verdict.
+        let waiting = status.kind != SaveLoadStatusKind::Error;
+        pending.retain_ready(ready);
+        if waiting {
+            status.message = Some("Loading... waiting for the save to release the world.".into());
+            status.kind = SaveLoadStatusKind::Info;
+        }
+        return false;
+    };
+    // Unbroken freshness chain under the artifact lock: no own-writer commit
+    // between the decode worker's open, the confirmation's observation, and
+    // this installation (our writer bumps the epoch only under this lock).
+    // An external replacement in the confirmation-to-install window is ruled
+    // out by `matched` above, up to the documented residual bound.
+    if ready.candidate.artifact_epoch != confirmation.epoch
+        || confirmation.epoch != container::save_artifact_epoch(&ready.path)
+    {
+        drop(_artifact_guard);
+        return restart_overtaken_load(
+            pending,
+            status,
+            &ready.id,
+            &ready.display_name,
+            &ready.path,
+            current_generation(state),
+        );
+    }
+    if reject_stale_catalog_entry(status, catalog, &ready) {
         return true;
     }
     let loads::ReadyLoad {
@@ -795,12 +928,12 @@ fn install_ready_load(
     let candidate_epoch = candidate.artifact_epoch;
     let candidate_identity = candidate.observed_identity.clone();
     let candidate_certified = candidate.end_certified;
-    // Two nested atomic steps: the artifact guard (held since the overtaken
-    // check) blocks our writer from committing between the check and this
+    // Two nested atomic steps: the artifact guard (held since the freshness
+    // recheck) blocks our writer from committing between the check and this
     // `install`, which itself swaps the world and publishes the new
     // generation under a single write guard. Contention returns the
-    // candidate so a busy simulation retains it for retry instead of
-    // dropping a validated world.
+    // candidate so a busy simulation parks it for a fresh confirmation
+    // instead of dropping a validated world.
     let installed = state.sim.install(candidate.simulation);
     // The world is swapped (or the attempt resolved); presentation reset
     // needs no artifact exclusion.
@@ -819,8 +952,9 @@ fn install_ready_load(
         }
         Err(conflict) => match conflict.cause {
             SimAccessError::Busy => {
-                // A save worker holds the read lock for capture. Retain the
-                // validated candidate and retry next frame; commands stay queued.
+                // A save worker holds the read lock for capture. Park back
+                // to the ready slot and earn a fresh confirmation next
+                // frame; commands stay queued.
                 pending.retain_ready(loads::ReadyLoad {
                     id,
                     display_name,
