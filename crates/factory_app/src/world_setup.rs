@@ -5,8 +5,9 @@ use factory_data::PrototypeCatalog;
 use factory_sim::{EnemyDifficultyPreset, Simulation, SimulationConfig};
 
 use crate::save_load::{
-    LoadState, PendingSaveConfirmation, PendingSaveJobs, SaveCatalog, SaveId, SaveKind,
-    SaveLoadConfig, SaveLoadStatus, delete_save, enter_swapped_world, load_save, refresh_catalog,
+    LoadState, PendingLoadJobs, PendingSaveConfirmation, PendingSaveJobs, SaveCatalog, SaveId,
+    SaveKind, SaveLoadConfig, SaveLoadStatus, delete_save_with_loads, enter_swapped_world,
+    load_save, refresh_catalog,
 };
 use crate::ui::layout::scroll_column;
 use crate::ui::save_load::format_timestamp;
@@ -446,10 +447,12 @@ pub(crate) fn handle_world_setup_buttons(
 }
 
 /// Creates the requested world after the seed editor has been sanitized and
-/// copied into [`WorldSetupState`].
+/// copied into [`WorldSetupState`]. A new world supersedes pending loads: they
+/// are cancelled so a stale decode cannot install over the newer world.
 pub(crate) fn start_world_from_setup(
     mut requests: MessageReader<WorldSetupStartRequested>,
     mut setup: ResMut<WorldSetupState>,
+    mut pending_loads: ResMut<PendingLoadJobs>,
     mut load_state: LoadState,
 ) {
     if requests.read().count() == 0 {
@@ -474,6 +477,8 @@ pub(crate) fn start_world_from_setup(
         setup.validation_error = Some("Simulation is busy; try Start again".into());
         return;
     }
+    // Last operation wins: the new world is newer than any queued load.
+    pending_loads.cancel_all();
     enter_swapped_world(&mut load_state, tick, player_tile);
 }
 
@@ -482,10 +487,11 @@ pub(crate) fn handle_world_setup_load_buttons(
     mut buttons: SetupButtons,
     config: Res<SaveLoadConfig>,
     pending: Res<PendingSaveJobs>,
+    mut pending_loads: ResMut<PendingLoadJobs>,
     mut catalog: ResMut<SaveCatalog>,
     mut confirmation: ResMut<PendingSaveConfirmation>,
     mut status: ResMut<SaveLoadStatus>,
-    mut load_state: LoadState,
+    load_state: LoadState,
     mut setup: ResMut<WorldSetupState>,
 ) {
     for (interaction, action) in &mut buttons {
@@ -494,7 +500,7 @@ pub(crate) fn handle_world_setup_load_buttons(
         }
         match action {
             WorldSetupAction::LoadSave(id)
-                if !load_save(id, &catalog, &pending, &mut status, &mut load_state) =>
+                if !load_save(id, &catalog, &mut pending_loads, &mut status, &load_state) =>
             {
                 setup.validation_error = status.message.clone();
             }
@@ -506,7 +512,14 @@ pub(crate) fn handle_world_setup_load_buttons(
                 let pending_action = std::mem::take(&mut *confirmation);
                 if *confirm
                     && let PendingSaveConfirmation::Delete(id) = pending_action
-                    && !delete_save(&id, &config, &mut catalog, &pending, &mut status)
+                    && !delete_save_with_loads(
+                        &id,
+                        &config,
+                        &mut catalog,
+                        &pending,
+                        Some(&pending_loads),
+                        &mut status,
+                    )
                 {
                     setup.validation_error = status.message.clone();
                 }

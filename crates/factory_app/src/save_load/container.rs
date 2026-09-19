@@ -366,6 +366,15 @@ pub(crate) fn with_save_artifact_lock<T>(operation: impl FnOnce() -> T) -> T {
     operation()
 }
 
+/// Non-blocking variant for frame schedules: runs `operation` only when the
+/// background writer is not holding the artifact lock. Returns `None` when
+/// the writer is busy so catalog refreshes stay responsive instead of
+/// blocking on encoding, disk I/O, or commit.
+pub(crate) fn try_with_save_artifact_lock<T>(operation: impl FnOnce() -> T) -> Option<T> {
+    let _guard = SAVE_ARTIFACT_LOCK.try_lock().ok()?;
+    Some(operation())
+}
+
 /// Writes and durably installs a complete save without exposing partial contents.
 pub(crate) fn write_save_bytes(path: &Path, bytes: &[u8]) -> Result<(), ContainerError> {
     with_save_artifact_lock(|| write_save_bytes_locked(path, bytes, SaveLimits::default()))

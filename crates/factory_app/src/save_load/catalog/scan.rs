@@ -5,7 +5,9 @@
 //! verdicts in the background. [`super::recovery`] runs first so
 //! interrupted writes are settled before anything is listed.
 
-use super::super::container::{fallback_metadata, with_save_artifact_lock};
+use super::super::container::{
+    fallback_metadata, try_with_save_artifact_lock, with_save_artifact_lock,
+};
 use super::super::{
     CachedSaveValidation, CatalogValidationRequest, SaveCatalog, SaveCompatibility, SaveEntry,
     SaveId, SaveKind, SaveLoadConfig, local_datetime_from_unix_ms,
@@ -27,10 +29,31 @@ use std::fs;
 use std::path::PathBuf;
 
 /// Replaces the in-memory catalog after a lightweight scan, then queues bounded
-/// background payload validation for cache misses.
+/// background payload validation for cache misses. Recovery is best-effort and
+/// non-blocking: when the background writer holds the artifact lock, recovery
+/// is deferred to the next refresh instead of stalling the frame.
 pub fn refresh_catalog(config: &SaveLoadConfig, catalog: &mut SaveCatalog) -> Result<(), String> {
+    refresh_catalog_inner(config, catalog, false)
+}
+
+/// Startup variant: recovery blocks on the artifact lock so the first frame
+/// observes a settled catalog. At real startup no writer exists yet, so this
+/// does not stall the UI; under parallel tests it waits out other tests'
+/// writers instead of deferring cleanup nobody re-triggers.
+pub fn refresh_catalog_blocking(
+    config: &SaveLoadConfig,
+    catalog: &mut SaveCatalog,
+) -> Result<(), String> {
+    refresh_catalog_inner(config, catalog, true)
+}
+
+fn refresh_catalog_inner(
+    config: &SaveLoadConfig,
+    catalog: &mut SaveCatalog,
+    blocking_recovery: bool,
+) -> Result<(), String> {
     poll_catalog_validation_jobs_inner(catalog);
-    let (mut entries, current_hash) = scan_catalog_unvalidated(config)?;
+    let (mut entries, current_hash) = scan_catalog_unvalidated(config, blocking_recovery)?;
     let present = entries
         .iter()
         .map(|entry| entry.path.clone())
@@ -59,8 +82,10 @@ pub fn refresh_catalog(config: &SaveLoadConfig, catalog: &mut SaveCatalog) -> Re
 }
 
 /// Recovers interrupted saves and returns all recognized canonical entries.
+/// Explicit callers (tests, one-shot scans) block on the artifact lock so
+/// recovery is deterministic; interactive refreshes use the non-blocking path.
 pub fn scan_catalog(config: &SaveLoadConfig) -> Result<Vec<SaveEntry>, String> {
-    let (mut entries, current_hash) = scan_catalog_unvalidated(config)?;
+    let (mut entries, current_hash) = scan_catalog_unvalidated(config, true)?;
     let mut cache = BTreeMap::new();
     for entry in &mut entries {
         if entry.compatibility.can_load() {
@@ -71,7 +96,10 @@ pub fn scan_catalog(config: &SaveLoadConfig) -> Result<Vec<SaveEntry>, String> {
     Ok(entries)
 }
 
-fn scan_catalog_unvalidated(config: &SaveLoadConfig) -> Result<(Vec<SaveEntry>, u64), String> {
+fn scan_catalog_unvalidated(
+    config: &SaveLoadConfig,
+    blocking: bool,
+) -> Result<(Vec<SaveEntry>, u64), String> {
     if !config.root_dir.exists() {
         return Ok((Vec::new(), 0));
     }
@@ -79,7 +107,18 @@ fn scan_catalog_unvalidated(config: &SaveLoadConfig) -> Result<(Vec<SaveEntry>, 
         &PrototypeCatalog::load_base()
             .map_err(|error| format!("failed to load prototype data: {error}"))?,
     );
-    with_save_artifact_lock(|| recover_interrupted_saves(config, current_hash));
+    if blocking {
+        with_save_artifact_lock(|| recover_interrupted_saves(config, current_hash));
+    } else if try_with_save_artifact_lock(|| recover_interrupted_saves(config, current_hash))
+        .is_none()
+    {
+        // Never block the frame on the background writer: recovery mutates
+        // artifacts under the same lock held during encoding and commit. When
+        // the writer is busy, skip recovery this refresh and retry on the next
+        // poll; directory listing and header inspection below stay lock-free
+        // and bounded, and payload validation already runs on workers.
+        warn!("save catalog recovery deferred: background save holds the artifact lock");
+    }
     let directory = fs::read_dir(&config.root_dir)
         .map_err(|error| format!("failed to scan save directory: {error}"))?;
     let mut entries = Vec::new();

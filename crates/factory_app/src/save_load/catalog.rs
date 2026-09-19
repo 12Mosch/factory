@@ -6,7 +6,7 @@ pub(crate) mod validation;
 
 pub(crate) use inspect::now_unix_ms;
 pub(crate) use polling::poll_catalog_validation_jobs;
-pub use scan::{refresh_catalog, scan_catalog};
+pub use scan::{refresh_catalog, refresh_catalog_blocking, scan_catalog};
 
 #[cfg(test)]
 use super::container::{ContainerError, fallback_metadata, load_simulation_from_reader};

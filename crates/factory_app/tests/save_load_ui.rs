@@ -5,7 +5,7 @@ use factory_app::FactoryAppPlugin;
 use factory_app::build::resources::{BuildPlacementState, BuildSelection};
 use factory_app::resources::SimResource;
 use factory_app::save_load::{
-    BACKUP_ARTIFACT_MARKER, PendingSaveConfirmation, PendingSaveJobs, SaveCatalog,
+    BACKUP_ARTIFACT_MARKER, PendingLoadJobs, PendingSaveConfirmation, PendingSaveJobs, SaveCatalog,
     SaveCompatibility, SaveKind, SaveLoadConfig, SaveLoadMetrics, SaveLoadStatus, SaveLoadTab,
     SaveLoadWindowState, TEMP_ARTIFACT_MARKER, decode_container, encode_container,
     request_system_save, scan_catalog,
@@ -68,6 +68,7 @@ fn f9_reads_existing_raw_quicksave_and_resets_transient_state() {
     }
     app.world_mut().resource_mut::<OpenContainer>().entity_id = Some(EntityId::new(999));
     tap_key(&mut app, KeyCode::F9);
+    drain_load_jobs(&mut app);
     assert_eq!(sim_tick_and_hash(&app), saved);
     assert!(
         app.world()
@@ -100,6 +101,7 @@ fn migratable_v57_quicksave_is_labeled_loaded_and_left_untouched() {
     assert!(entry.compatibility.can_load());
 
     tap_key(&mut app, KeyCode::F9);
+    drain_load_jobs(&mut app);
 
     let loaded = app.world().resource::<SimResource>().read();
     assert_eq!(loaded.tick_count(), 64);
@@ -344,6 +346,7 @@ fn malformed_metadata_falls_back_without_blocking_load() {
     app.update();
     press_entry(&mut app, &id, SaveEntryAction::Load);
     app.update();
+    drain_load_jobs(&mut app);
     assert_eq!(sim_tick_and_hash(&app), expected);
 }
 
@@ -1043,6 +1046,7 @@ fn legacy_save_without_seed_shows_unknown_but_load_preserves_original_seed() {
     let id = entries[0].id.clone();
     press_entry(&mut app, &id, SaveEntryAction::Load);
     app.update();
+    drain_load_jobs(&mut app);
     assert_eq!(
         app.world().resource::<SimResource>().read().seed(),
         original_seed
@@ -1108,6 +1112,7 @@ fn loading_a_save_restores_its_preserved_seed_in_the_current_display() {
     app.update();
     press_entry(&mut app, &first_id, SaveEntryAction::Load);
     app.update();
+    drain_load_jobs(&mut app);
     assert_eq!(
         app.world().resource::<SimResource>().read().seed(),
         first_seed
@@ -1287,13 +1292,34 @@ fn run_until_jobs_start(app: &mut App) {
 }
 
 fn drain_save_jobs(app: &mut App) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    drain_persistence_jobs(app);
+}
+
+fn drain_persistence_jobs(app: &mut App) {
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if app.world().resource::<PendingSaveJobs>().is_empty() {
+        let saves_empty = app.world().resource::<PendingSaveJobs>().is_empty();
+        let loads_empty = app.world().resource::<PendingLoadJobs>().is_empty();
+        if saves_empty && loads_empty {
             drain_catalog_validations(app);
             return;
         }
-        assert!(Instant::now() < deadline, "save jobs did not drain");
+        assert!(
+            Instant::now() < deadline,
+            "persistence jobs did not drain (saves_empty={saves_empty}, loads_empty={loads_empty})"
+        );
+        app.update();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn drain_load_jobs(app: &mut App) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if app.world().resource::<PendingLoadJobs>().is_empty() {
+            return;
+        }
+        assert!(Instant::now() < deadline, "load jobs did not drain");
         app.update();
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -1364,4 +1390,378 @@ fn test_artifact_path(path: &std::path::Path, marker: &str, nonce: &str) -> Path
         "{}{marker}{nonce}",
         path.file_name().unwrap().to_string_lossy()
     ))
+}
+
+#[test]
+fn manual_saves_queue_fifo_and_autosaves_coalesce_within_bounds() {
+    use factory_app::save_load::{MAX_QUEUED_SAVES, SaveJobPhase};
+    let mut app = test_app(Duration::ZERO, "fifo_bounds");
+    // First quicksave starts the single worker.
+    tap_key(&mut app, KeyCode::F5);
+    assert!(!app.world().resource::<PendingSaveJobs>().is_empty());
+    // Rapid same-target quicksaves serialize FIFO instead of running
+    // concurrently; autosaves to the same target coalesce silently.
+    for _ in 0..(MAX_QUEUED_SAVES + 2) {
+        press_key(&mut app, KeyCode::F5);
+        app.update();
+        finish_key_press(&mut app, KeyCode::F5);
+    }
+    let pending = app.world().resource::<PendingSaveJobs>();
+    assert!(
+        pending.queued_len() <= MAX_QUEUED_SAVES,
+        "queued saves must stay within the documented bound"
+    );
+    assert!(
+        pending.pending_ids().len() <= MAX_QUEUED_SAVES + 1,
+        "running plus queued saves must stay bounded"
+    );
+    let phases = pending.progress();
+    assert_eq!(phases.len(), pending.pending_ids().len());
+    assert!(
+        phases
+            .iter()
+            .any(|(_, phase)| *phase != SaveJobPhase::Queued)
+            || phases.len() == 1,
+        "the running save must expose a non-queued progress phase"
+    );
+    drain_persistence_jobs(&mut app);
+    let metrics = app.world().resource::<SaveLoadMetrics>();
+    assert!(metrics.last_bytes > 0);
+}
+
+#[test]
+fn autosave_requests_coalesce_while_a_save_is_running() {
+    use factory_app::save_load::{SaveLoadStatus, SaveLoadStatusKind};
+    let root = unique_temp_dir("autosave_coalesce");
+    fs::create_dir_all(&root).unwrap();
+    let config = SaveLoadConfig {
+        root_dir: root.clone(),
+        autosave_interval_ticks: 5 * 60 * 60,
+        autosave_slot_count: 5,
+    };
+    let sim = SimResource::new(factory_sim::Simulation::new_test_world(11));
+    let mut pending = PendingSaveJobs::default();
+    let mut status = SaveLoadStatus::default();
+    let mut metrics = SaveLoadMetrics::default();
+    // First autosave starts the single worker; the duplicate coalesces.
+    assert!(request_system_save(
+        SaveKind::Autosave { generation: 1 },
+        &sim,
+        &config,
+        &mut pending,
+        &mut status,
+        &mut metrics,
+        false,
+    ));
+    assert!(!request_system_save(
+        SaveKind::Autosave { generation: 1 },
+        &sim,
+        &config,
+        &mut pending,
+        &mut status,
+        &mut metrics,
+        false,
+    ));
+    assert_eq!(
+        status.kind,
+        SaveLoadStatusKind::Info,
+        "coalesced autosaves must not raise an error status"
+    );
+    drop(pending);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn same_target_saves_serialize_and_final_overwrite_wins() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0), "same_target_order");
+    run_until_tick(&mut app, 5);
+    freeze_time(&mut app);
+    tap_key(&mut app, KeyCode::F5);
+    // Advance exactly one tick while frozen time is lifted, then freeze again
+    // so the queued overwrite captures a distinct later tick deterministically.
+    app.world_mut()
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+    run_until_tick(&mut app, 6);
+    freeze_time(&mut app);
+    // Second quicksave to the same path queues behind the first in FIFO order.
+    tap_key(&mut app, KeyCode::F5);
+    drain_persistence_jobs(&mut app);
+    let path = app
+        .world()
+        .resource::<SaveLoadConfig>()
+        .root_dir
+        .join("quicksave.factsim");
+    let bytes = fs::read(path).unwrap();
+    let (_, payload) = decode_container(&bytes).unwrap();
+    let saved = load_from_bytes(payload).unwrap();
+    assert_eq!(
+        saved.tick_count(),
+        6,
+        "the last queued overwrite must win in request order"
+    );
+}
+
+#[test]
+fn stale_load_after_new_world_is_discarded() {
+    let mut app = test_app(Duration::ZERO, "stale_load_new_world");
+    create_named_save(&mut app, "Stale World");
+    drain_persistence_jobs(&mut app);
+    let stale_id = app
+        .world()
+        .resource::<SaveCatalog>()
+        .entries()
+        .iter()
+        .find(|entry| entry.metadata.display_name == "Stale World")
+        .unwrap()
+        .id
+        .clone();
+    // Queue a load, then install a newer world before the worker finishes.
+    // Direct replacement (without cancelling) exercises the generation guard:
+    // the load must not install over the newer world.
+    app.world_mut().resource_mut::<SaveLoadWindowState>().open = true;
+    app.world_mut().resource_mut::<SaveLoadWindowState>().tab = SaveLoadTab::Load;
+    app.update();
+    press_entry(&mut app, &stale_id, SaveEntryAction::Load);
+    app.update();
+    assert!(!app.world().resource::<PendingLoadJobs>().is_empty());
+    let newer_seed = 777_001;
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .replace(factory_sim::Simulation::new_test_world(newer_seed))
+        .expect("new world should install");
+    app.update();
+    drain_load_jobs(&mut app);
+    assert_eq!(
+        app.world().resource::<SimResource>().read().seed(),
+        newer_seed,
+        "a stale load must not install over a newer world"
+    );
+}
+
+#[test]
+fn newest_queued_load_wins() {
+    let mut app = test_app(Duration::ZERO, "newest_load_wins");
+    create_named_save(&mut app, "First Load Wins Target");
+    drain_persistence_jobs(&mut app);
+    let first_tick = sim_tick_and_hash(&app).0;
+    // Frozen test time never advances fixed ticks; lift the clock explicitly.
+    app.world_mut()
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+    run_until_tick(&mut app, first_tick + 2);
+    freeze_time(&mut app);
+    create_named_save(&mut app, "Second Load Wins Target");
+    drain_persistence_jobs(&mut app);
+    let (first_id, second_id) = {
+        let catalog = app.world().resource::<SaveCatalog>();
+        let first = catalog
+            .entries()
+            .iter()
+            .find(|entry| entry.metadata.display_name == "First Load Wins Target")
+            .unwrap()
+            .id
+            .clone();
+        let second = catalog
+            .entries()
+            .iter()
+            .find(|entry| entry.metadata.display_name == "Second Load Wins Target")
+            .unwrap()
+            .id
+            .clone();
+        (first, second)
+    };
+    app.world_mut().resource_mut::<SaveLoadWindowState>().open = true;
+    app.world_mut().resource_mut::<SaveLoadWindowState>().tab = SaveLoadTab::Load;
+    app.update();
+    press_entry(&mut app, &first_id, SaveEntryAction::Load);
+    app.update();
+    press_entry(&mut app, &second_id, SaveEntryAction::Load);
+    app.update();
+    drain_load_jobs(&mut app);
+    let expected_tick = {
+        let config = app.world().resource::<SaveLoadConfig>().clone();
+        let entries = scan_catalog(&config).unwrap();
+        entries
+            .iter()
+            .find(|entry| entry.id == second_id)
+            .map(|entry| {
+                let bytes = fs::read(entry.path()).unwrap();
+                let (_, payload) = decode_container(&bytes).unwrap();
+                load_from_bytes(payload).unwrap().tick_count()
+            })
+            .unwrap()
+    };
+    assert_eq!(
+        app.world().resource::<SimResource>().read().tick_count(),
+        expected_tick,
+        "the newest queued load must win even when workers finish in order"
+    );
+}
+
+#[test]
+fn commands_around_load_apply_once_and_continue() {
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0), "commands_around_load");
+    run_until_tick(&mut app, 3);
+    create_named_save(&mut app, "Command Load Boundary");
+    drain_persistence_jobs(&mut app);
+    // The file's captured tick is the boundary; the live tick has moved on.
+    let (id, file_tick) = {
+        let catalog = app.world().resource::<SaveCatalog>();
+        let entry = catalog
+            .entries()
+            .iter()
+            .find(|entry| entry.metadata.display_name == "Command Load Boundary")
+            .unwrap();
+        let bytes = fs::read(entry.path()).unwrap();
+        let (_, payload) = decode_container(&bytes).unwrap();
+        (
+            entry.id.clone(),
+            load_from_bytes(payload).unwrap().tick_count(),
+        )
+    };
+    let saved_tick = sim_tick_and_hash(&app).0;
+    // Command applied before the load ticks on the old world.
+    app.world_mut()
+        .write_message(SimCommandRequest(SimCommand::MovePlayer {
+            direction_x: 1.0,
+            direction_y: 0.0,
+            delta_seconds: 0.25,
+        }));
+    run_until_tick(&mut app, saved_tick + 1);
+    app.world_mut().resource_mut::<SaveLoadWindowState>().open = true;
+    app.world_mut().resource_mut::<SaveLoadWindowState>().tab = SaveLoadTab::Load;
+    app.update();
+    press_entry(&mut app, &id, SaveEntryAction::Load);
+    app.update();
+    // Ticks stay responsive while decoding runs off-thread.
+    let before = app.world().resource::<SimResource>().read().tick_count();
+    app.update();
+    let during = app.world().resource::<SimResource>().read().tick_count();
+    assert!(
+        during >= before,
+        "fixed ticks must continue during load decoding"
+    );
+    drain_load_jobs(&mut app);
+    // Installation lands exactly on the file's captured tick through the
+    // shared reset.
+    assert_eq!(
+        app.world().resource::<SimResource>().read().tick_count(),
+        file_tick
+    );
+    // Post-load input applies exactly once on the new world.
+    app.world_mut()
+        .write_message(SimCommandRequest(SimCommand::MovePlayer {
+            direction_x: 0.0,
+            direction_y: 1.0,
+            delta_seconds: 0.5,
+        }));
+    freeze_time(&mut app);
+    // Advance exactly one fixed tick deterministically.
+    app.world_mut()
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+    app.update();
+    assert_eq!(
+        app.world().resource::<SimResource>().read().tick_count(),
+        file_tick + 1
+    );
+}
+
+#[test]
+fn cancelled_queued_save_never_reports_committed() {
+    use factory_app::save_load::SaveLoadStatus;
+    let root = unique_temp_dir("cancel_queued_save");
+    fs::create_dir_all(&root).unwrap();
+    let config = SaveLoadConfig {
+        root_dir: root.clone(),
+        autosave_interval_ticks: 5 * 60 * 60,
+        autosave_slot_count: 5,
+    };
+    let sim = SimResource::new(factory_sim::Simulation::new_test_world(13));
+    let mut pending = PendingSaveJobs::default();
+    let mut status = SaveLoadStatus::default();
+    let mut metrics = SaveLoadMetrics::default();
+    // Start one worker, queue a second target behind it, then cancel the
+    // queued request before commit. It must leave no artifact and never read
+    // as committed.
+    assert!(request_system_save(
+        SaveKind::Quicksave,
+        &sim,
+        &config,
+        &mut pending,
+        &mut status,
+        &mut metrics,
+        true,
+    ));
+    assert!(request_system_save(
+        SaveKind::Autosave { generation: 1 },
+        &sim,
+        &config,
+        &mut pending,
+        &mut status,
+        &mut metrics,
+        true,
+    ));
+    let autosave_id = pending
+        .pending_ids()
+        .into_iter()
+        .find(|id| id.as_str() == "autosave-1")
+        .expect("autosave should be queued");
+    assert!(pending.cancel(&autosave_id));
+    drop(pending);
+    assert!(
+        !root.join("autosave-1.factsim").exists(),
+        "a cancelled pre-commit save must leave no artifact"
+    );
+    assert!(
+        root.join("quicksave.factsim").exists(),
+        "shutdown must still join the running save"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn catalog_refresh_stays_responsive_while_save_holds_writer_lock() {
+    let mut app = test_app(Duration::ZERO, "refresh_during_save");
+    generate_large_world(&mut app);
+    press_key(&mut app, KeyCode::F5);
+    app.update();
+    finish_key_press(&mut app, KeyCode::F5);
+    assert!(!app.world().resource::<PendingSaveJobs>().is_empty());
+    // Frame-side catalog refresh must not block on the writer lock.
+    let started = Instant::now();
+    app.update();
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "catalog refresh blocked on the writer lock for {elapsed:?}"
+    );
+    drain_persistence_jobs(&mut app);
+}
+
+#[test]
+fn inaccessible_save_reports_pending_not_corrupt() {
+    use factory_app::save_load::SaveCompatibility;
+    // A file that cannot be opened at all is transiently inaccessible, never
+    // corruption: validation stays pending for a retry.
+    let missing = std::env::temp_dir().join(format!(
+        "factory-missing-save-{}-{}.factsim",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let current_hash =
+        factory_sim::prototype_hash(&factory_data::PrototypeCatalog::load_base().unwrap());
+    let compatibility = factory_app::save_load::validate_loadable_file_for_tests(
+        &missing,
+        &SaveKind::Quicksave,
+        current_hash,
+    );
+    assert_eq!(compatibility, SaveCompatibility::ValidationPending);
 }

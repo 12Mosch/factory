@@ -132,8 +132,13 @@ at a time. With no shared pages there are no worker-retained old pages or dirty
 page copies to add to the accounting; the measured owned snapshot is the whole
 retained generation. During encoding it coexists with one bounded payload
 buffer. The snapshot is dropped before allocating the similarly bounded app
-container, and the payload is dropped before writing. A second request is
-rejected without consuming a tick or input while that generation is retained.
+container, and the payload is dropped before writing. One save worker runs at
+a time; accepted manual saves wait in a bounded FIFO (same-target overwrites
+serialize in request order) while autosaves coalesce by target and drop under
+backpressure instead of queueing. Queued requests hold parameters only, never
+snapshot memory. Capture, encoding, and disk I/O run off the frame schedule,
+so submission never blocks on the simulation lock and no tick or input is
+consumed while the generation is retained.
 
 Before cloning, background capture walks the borrowed schema and enforces the
 same 64 MiB payload and collection limits as encoding. A world outside that

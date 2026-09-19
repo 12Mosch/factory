@@ -8,6 +8,7 @@ use std::time::Duration;
 pub struct SimResource {
     inner: Option<Arc<RwLock<Simulation>>>,
     replacement_revision: u64,
+    generation: Arc<AtomicU64>,
     active_snapshot_captures: Arc<AtomicU64>,
     snapshot_blocked_fixed_ticks: Arc<AtomicU64>,
 }
@@ -27,6 +28,7 @@ impl SimResource {
         Self {
             inner: None,
             replacement_revision: 0,
+            generation: Arc::new(AtomicU64::new(0)),
             active_snapshot_captures: Arc::new(AtomicU64::new(0)),
             snapshot_blocked_fixed_ticks: Arc::new(AtomicU64::new(0)),
         }
@@ -37,6 +39,7 @@ impl SimResource {
         Self {
             inner: Some(Arc::new(RwLock::new(sim))),
             replacement_revision: 0,
+            generation: Arc::new(AtomicU64::new(0)),
             active_snapshot_captures: Arc::new(AtomicU64::new(0)),
             snapshot_blocked_fixed_ticks: Arc::new(AtomicU64::new(0)),
         }
@@ -65,6 +68,14 @@ impl SimResource {
         self.inner.as_ref()?.try_write().ok()
     }
 
+    /// Probes whether a world installation would find the write lock free
+    /// without consuming a candidate. Frame schedules check this before moving
+    /// a validated load candidate into [`replace`](Self::replace), so a busy
+    /// simulation retains the candidate for retry instead of dropping it.
+    pub fn is_write_available(&self) -> bool {
+        self.try_write().is_some()
+    }
+
     /// Locks the active simulation for test setup, blocking until it is available.
     pub fn write_for_tests(&mut self) -> SimWriteGuard<'_> {
         self.inner
@@ -86,6 +97,8 @@ impl SimResource {
             self.inner = Some(Arc::new(RwLock::new(sim)));
         }
         self.replacement_revision = self.replacement_revision.wrapping_add(1);
+        self.generation
+            .store(self.replacement_revision, Ordering::Release);
         Ok(())
     }
 
@@ -104,11 +117,13 @@ impl SimResource {
     }
 
     /// Pins the simulation handle and its application generation atomically
-    /// with respect to main-thread world replacement.
+    /// with respect to main-thread world replacement. Workers retag to the
+    /// generation observed under the read lock, so a world installed while
+    /// queued still captures consistently.
     pub(crate) fn snapshot_source(&self) -> SnapshotSource {
         SnapshotSource {
             simulation: self.clone_handle(),
-            world_generation: self.replacement_revision,
+            generation: Arc::clone(&self.generation),
             active_captures: Arc::clone(&self.active_snapshot_captures),
             blocked_fixed_ticks: Arc::clone(&self.snapshot_blocked_fixed_ticks),
         }
@@ -124,7 +139,7 @@ impl SimResource {
 
 pub(crate) struct SnapshotSource {
     pub(crate) simulation: Arc<RwLock<Simulation>>,
-    pub(crate) world_generation: u64,
+    pub(crate) generation: Arc<AtomicU64>,
     pub(crate) active_captures: Arc<AtomicU64>,
     pub(crate) blocked_fixed_ticks: Arc<AtomicU64>,
 }
