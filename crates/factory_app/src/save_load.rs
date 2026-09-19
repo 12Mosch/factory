@@ -201,7 +201,7 @@ pub fn request_named_save(
 pub struct DeferredNamedSave {
     pub(crate) name: Option<String>,
     /// A request dropped by a failed scan, retained until a later scan
-    /// installs successfully or the user admits a new request. A
+    /// installs successfully or a new request for a save is accepted. A
     /// follow-up (or any later) scan that also fails re-reports this
     /// failure instead of replacing it with a generic refresh error, so
     /// the settled status stays connected to the lost user action. Never
@@ -248,14 +248,16 @@ pub fn request_named_save_guarded(
         status.last_completed_id = None;
         return false;
     }
-    // A new admission supersedes any dropped-request context: the user
-    // re-issued (or redirected) their intent, so a later scan failure
-    // must not re-report the older dropped save as uncreated. Without
-    // this, retrying a dropped name whose write then commits would see
-    // its success replaced by a false failure — inviting a further retry
-    // that mints a duplicate.
-    deferred.dropped_name = None;
-    request_named_save(
+    // An accepted admission supersedes any dropped-request context: the
+    // user re-issued their intent, so a later scan failure must not
+    // re-report the older dropped save as uncreated. Without this,
+    // retrying a dropped name whose write then commits would see its
+    // success replaced by a false failure — inviting a further retry
+    // that mints a duplicate. A rejected retry (full queue, name already
+    // saving, overwrite confirmation) accepts nothing, so the context
+    // must survive: the original save is still uncreated, and later
+    // failures must keep reporting it truthfully.
+    let admitted = request_named_save(
         name,
         sim,
         config,
@@ -264,7 +266,11 @@ pub fn request_named_save_guarded(
         confirmation,
         status,
         metrics,
-    )
+    );
+    if admitted {
+        deferred.dropped_name = None;
+    }
+    admitted
 }
 
 pub fn request_overwrite(
@@ -1493,6 +1499,43 @@ mod tests {
         assert!(
             !fixture.pending.is_empty(),
             "the retried request must be admitted"
+        );
+    }
+
+    #[test]
+    fn rejected_retry_preserves_dropped_failure_context() {
+        // Review follow-up: the dropped context may only be cleared by
+        // confirmed admission. A retry that request_named_save rejects —
+        // the name is already saving, or the catalog routes it to
+        // overwrite confirmation — accepts nothing, so the original save
+        // stays uncreated and the context must survive.
+        let mut fixture = DeferredFixture::with_outstanding_scan();
+        fixture.settle_scan();
+        assert!(fixture.guarded("Base"));
+        // The first attempt is still in flight (nothing is ever polled
+        // here), so retrying the name is rejected as already saving.
+        fixture.deferred.dropped_name = Some("Base".into());
+        assert!(!fixture.guarded("Base"));
+        assert_eq!(
+            fixture.status.message.as_deref(),
+            Some("Base is already being saved.")
+        );
+        assert_eq!(
+            fixture.deferred.dropped_name.as_deref(),
+            Some("Base"),
+            "a rejected retry must not discard the dropped context"
+        );
+        // Routed to overwrite confirmation: likewise no admission.
+        fixture.catalog.entries.push(named_entry("Base"));
+        assert!(!fixture.guarded("base"));
+        assert!(matches!(
+            fixture.confirmation,
+            PendingSaveConfirmation::Overwrite(_)
+        ));
+        assert_eq!(
+            fixture.deferred.dropped_name.as_deref(),
+            Some("Base"),
+            "an overwrite routing must not discard the dropped context"
         );
     }
 
