@@ -187,6 +187,23 @@ pub(crate) fn validate_loadable_file(
     outcome.compatibility
 }
 
+/// Re-observes the path on the worker after classification and reports
+/// whether it still resolves to the classified file instance, so the frame
+/// can install the outcome without touching the filesystem. Stable identity
+/// (device, inode, change time) defeats same-length replacements that
+/// preserve mtime; without a stable identity this falls back to
+/// length/mtime equality.
+fn confirm_path_unchanged(path: &Path, observed: &SaveFileMetadataFingerprint) -> bool {
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+    let current = save_file_metadata_fingerprint(&file);
+    match (&observed.identity, &current.identity) {
+        (Some(expected), Some(actual)) => expected == actual,
+        _ => current.len == observed.len && current.modified == observed.modified,
+    }
+}
+
 pub(crate) fn validate_loadable_path(
     path: PathBuf,
     kind: SaveKind,
@@ -201,20 +218,21 @@ pub(crate) fn validate_loadable_path(
             return CatalogValidationOutcome {
                 path,
                 compatibility: SaveCompatibility::ValidationPending,
-                observed_metadata: None,
                 fingerprint: None,
                 attempt,
+                path_confirmed_current: false,
             };
         }
     };
     let metadata = save_file_metadata_fingerprint(&file);
     if metadata.len > SaveLimits::default().max_encoded_bytes {
+        let path_confirmed_current = confirm_path_unchanged(&path, &metadata);
         return CatalogValidationOutcome {
             path,
             compatibility: SaveCompatibility::ExceedsCurrentLimits,
-            observed_metadata: Some(metadata),
             fingerprint: None,
             attempt,
+            path_confirmed_current,
         };
     }
     // The path may have been replaced after the request was created. Only a
@@ -234,23 +252,25 @@ pub(crate) fn validate_loadable_path(
         {
             Some(current_hash) => classify_open_save(&mut file, &kind, current_hash),
             None => {
+                let path_confirmed_current = confirm_path_unchanged(&path, &metadata);
                 return CatalogValidationOutcome {
                     path,
                     compatibility: SaveCompatibility::ValidationPending,
-                    observed_metadata: Some(metadata),
                     fingerprint: None,
                     attempt,
+                    path_confirmed_current,
                 };
             }
         },
     };
     if !source_compatibility.can_load() {
+        let path_confirmed_current = confirm_path_unchanged(&path, &metadata);
         return CatalogValidationOutcome {
             path,
             compatibility: source_compatibility,
-            observed_metadata: Some(metadata),
             fingerprint: None,
             attempt,
+            path_confirmed_current,
         };
     }
     // From here on every byte is read through the cancellation wrapper so
@@ -262,21 +282,23 @@ pub(crate) fn validate_loadable_path(
     let fingerprint = match save_file_fingerprint(&mut file, metadata.clone()) {
         Ok(fingerprint) => fingerprint,
         Err(ContainerError::TooLarge) => {
+            let path_confirmed_current = confirm_path_unchanged(&path, &metadata);
             return CatalogValidationOutcome {
                 path,
                 compatibility: SaveCompatibility::ExceedsCurrentLimits,
-                observed_metadata: Some(metadata),
                 fingerprint: None,
                 attempt,
+                path_confirmed_current,
             };
         }
         Err(_) => {
+            let path_confirmed_current = confirm_path_unchanged(&path, &metadata);
             return CatalogValidationOutcome {
                 path,
                 compatibility: SaveCompatibility::ValidationPending,
-                observed_metadata: Some(metadata),
                 fingerprint: None,
                 attempt,
+                path_confirmed_current,
             };
         }
     };
@@ -297,11 +319,58 @@ pub(crate) fn validate_loadable_path(
         Ok(after_validation) if after_validation == fingerprint => Some(fingerprint),
         _ => None,
     };
+    // Final freshness observation stays on the worker: the frame installs
+    // certified outcomes without any filesystem call.
+    let path_confirmed_current = confirm_path_unchanged(&path, &after_metadata);
     CatalogValidationOutcome {
         path,
         compatibility,
-        observed_metadata: Some(after_metadata),
         fingerprint: stable_fingerprint,
         attempt,
+        path_confirmed_current,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_confirmation_rejects_same_length_mtime_preserving_replacement() {
+        let dir = std::env::temp_dir().join(format!(
+            "factory-path-confirm-{}-{:?}",
+            std::process::id(),
+            thread::current().id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        fs::write(&path, vec![0x41u8; 1024]).unwrap();
+        let observed = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
+        assert!(
+            confirm_path_unchanged(&path, &observed),
+            "an unmodified path must confirm"
+        );
+        // Same-length replacement with the mtime restored: length and mtime
+        // look identical, but the file instance changed.
+        fs::write(&path, vec![0x42u8; 1024]).unwrap();
+        if let Some(mtime) = observed.modified {
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(mtime)
+                .unwrap();
+        }
+        let spoofed = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
+        assert_eq!(
+            (spoofed.len, spoofed.modified),
+            (observed.len, observed.modified),
+            "the test must spoof the signals the old length/mtime check relied on"
+        );
+        assert!(
+            !confirm_path_unchanged(&path, &observed),
+            "a same-length mtime-preserving replacement must not inherit the old verdict"
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 }

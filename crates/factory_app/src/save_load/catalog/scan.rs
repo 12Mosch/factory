@@ -158,8 +158,10 @@ pub fn refresh_catalog_blocking(
 }
 
 /// Recovers interrupted saves and returns all recognized canonical entries.
-/// Explicit callers (tests, one-shot scans) block on the artifact lock so
-/// recovery is deterministic; interactive refreshes use the non-blocking path.
+/// Recovery always takes the artifact lock blocking-style; interactive
+/// refreshes run it on the background scan worker (see
+/// [`request_catalog_scan`]), so frames never wait on it. Shutdown joins the
+/// worker, which only reads — it cannot lose a save by waiting.
 pub fn scan_catalog(config: &SaveLoadConfig) -> Result<Vec<SaveEntry>, String> {
     let (mut entries, current_hash) = scan_catalog_unvalidated(config)?;
     let mut cache = BTreeMap::new();

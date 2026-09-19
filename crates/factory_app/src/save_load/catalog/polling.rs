@@ -5,16 +5,13 @@
 //! changed; pure timer bookkeeping does not count, so an idle catalog never
 //! trips Bevy change detection.
 
-use super::super::{
-    CachedSaveValidation, SaveCatalog, SaveCompatibility, SaveFileMetadataFingerprint, SaveKind,
-};
+use super::super::{CachedSaveValidation, SaveCatalog, SaveCompatibility, SaveKind};
 use super::validation::{
     MAX_CATALOG_VALIDATION_RETRIES, blind_retry_request, queue_catalog_validation,
     start_catalog_validation_jobs,
 };
 use bevy::log::warn;
 use bevy::prelude::{DetectChangesMut, ResMut};
-use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -53,28 +50,14 @@ pub(crate) fn poll_catalog_validation_jobs_inner(catalog: &mut SaveCatalog) -> b
                 continue;
             }
         };
-        // Freshness check without opening the file: a replacement always
-        // rewrites the bytes, so length/mtime equality with the
-        // worker-observed identity is sufficient on the frame schedule.
-        // Handle-bound instance checks already ran inside the worker.
-        let current_metadata = fs::metadata(&outcome.path)
-            .ok()
-            .map(|metadata| (metadata.len(), metadata.modified().ok()));
-        let worker_metadata =
-            |fingerprint: &SaveFileMetadataFingerprint| (fingerprint.len, fingerprint.modified);
-        let still_current = match (&outcome.fingerprint, &outcome.observed_metadata) {
-            (Some(fingerprint), _) => {
-                current_metadata == Some(worker_metadata(&fingerprint.metadata))
-            }
-            (None, Some(observed))
-                if outcome.compatibility == SaveCompatibility::ExceedsCurrentLimits =>
-            {
-                current_metadata == Some((observed.len, observed.modified))
-            }
-            (None, None) => false,
-            (None, Some(_)) => false,
-        };
-        if still_current && outcome.compatibility != SaveCompatibility::ValidationPending {
+        // No filesystem work on the frame schedule: the worker re-observed
+        // the path after classifying and certified the outcome only when it
+        // still resolved to the same file instance. Stable identity defeats
+        // same-length replacements that preserve mtime; uncertified
+        // outcomes always take the retry path below.
+        if outcome.path_confirmed_current
+            && outcome.compatibility != SaveCompatibility::ValidationPending
+        {
             if let Some(fingerprint) = outcome.fingerprint {
                 catalog.validation_cache.insert(
                     outcome.path.clone(),

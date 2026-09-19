@@ -563,13 +563,12 @@ pub(crate) fn poll_load_jobs(
     for completed in loads::take_completed_loads(&mut pending) {
         match completed.result {
             Ok(candidate) => {
-                // Newer load requests supersede older completions even when
-                // workers finish out of order.
-                if pending
-                    .latest_request()
-                    .is_some_and(|latest| completed.request_id != latest)
-                    && pending.has_newer_queued_or_running(completed.request_id)
-                {
+                // Any completion that is not the latest accepted request is
+                // superseded, even when workers finish out of order: the
+                // newest request stays authoritative after its worker
+                // finishes, so an older completion must never install over
+                // it and poison its generation check.
+                if pending.completion_superseded(completed.request_id) {
                     continue;
                 }
                 let current = if state.sim.is_initialized() {

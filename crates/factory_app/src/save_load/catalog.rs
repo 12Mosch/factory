@@ -247,9 +247,12 @@ mod tests {
         let stale = CatalogValidationOutcome {
             path: path.clone(),
             compatibility: migratable.clone(),
-            observed_metadata: Some(metadata_a.clone()),
             fingerprint: Some(fingerprint_a),
             attempt: 0,
+            // The on-disk file was replaced after this outcome was produced;
+            // a real worker would observe the new instance and decline to
+            // certify.
+            path_confirmed_current: false,
         };
         // Simulate the old worker finishing after the replacement + refresh.
         let mut catalog = SaveCatalog {
@@ -336,9 +339,12 @@ mod tests {
         let stale = CatalogValidationOutcome {
             path: path.clone(),
             compatibility: migratable,
-            observed_metadata: Some(metadata_a.clone()),
             fingerprint: Some(fingerprint_a),
             attempt: 0,
+            // The on-disk file was replaced after this outcome was produced;
+            // a real worker would observe the new instance and decline to
+            // certify.
+            path_confirmed_current: false,
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -513,16 +519,15 @@ mod tests {
         let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
             .expect("current save should encode");
         fs::write(&path, &current).unwrap();
-        let metadata = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
 
         // The first validation and its retry both hit transient I/O
         // failures. Loading must not stay disabled.
         let transient = CatalogValidationOutcome {
             path: path.clone(),
             compatibility: SaveCompatibility::ValidationPending,
-            observed_metadata: Some(metadata),
             fingerprint: None,
             attempt: 1,
+            path_confirmed_current: false,
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -579,9 +584,9 @@ mod tests {
         let transient = CatalogValidationOutcome {
             path: path.clone(),
             compatibility: SaveCompatibility::ValidationPending,
-            observed_metadata: Some(metadata_before.clone()),
             fingerprint: None,
             attempt: 0,
+            path_confirmed_current: false,
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -656,13 +661,12 @@ mod tests {
         let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
             .expect("current save should encode");
         fs::write(&path, &current).unwrap();
-        let metadata = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
         let transient = CatalogValidationOutcome {
             path: path.clone(),
             compatibility: SaveCompatibility::ValidationPending,
-            observed_metadata: Some(metadata),
             fingerprint: None,
             attempt: MAX_CATALOG_VALIDATION_RETRIES,
+            path_confirmed_current: false,
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {
@@ -852,9 +856,9 @@ mod tests {
                     let outcome = CatalogValidationOutcome {
                         path,
                         compatibility: SaveCompatibility::ValidationPending,
-                        observed_metadata: None,
                         fingerprint: None,
                         attempt: 0,
+                        path_confirmed_current: false,
                     };
                     let mut spins = 0u32;
                     loop {
@@ -1025,9 +1029,11 @@ mod tests {
         let outcome = CatalogValidationOutcome {
             path: path.clone(),
             compatibility: SaveCompatibility::Compatible,
-            observed_metadata: Some(metadata.clone()),
             fingerprint: Some(fingerprint),
             attempt: 0,
+            // The file is untouched since fingerprinting, matching what a
+            // real worker certifies for an unmodified path.
+            path_confirmed_current: true,
         };
         let mut catalog = SaveCatalog {
             entries: vec![SaveEntry {

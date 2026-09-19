@@ -147,18 +147,14 @@ impl PendingLoadJobs {
         self.latest_request
     }
 
-    /// Whether a newer request is still queued or running after `request_id`.
-    pub fn has_newer_queued_or_running(&self, request_id: PersistenceRequestId) -> bool {
-        if self
-            .running
-            .as_ref()
-            .is_some_and(|job| job.request_id > request_id && !job.handle.is_finished())
-        {
-            return true;
-        }
-        self.queue
-            .iter()
-            .any(|queued| queued.request_id > request_id)
+    /// Whether a completed load is obsolete. Any completion that is not the
+    /// latest accepted request is superseded — even if the newer worker
+    /// already finished. The latest request stays authoritative until an
+    /// even newer request arrives, so an older completion must never
+    /// install first and poison the newer result's generation check.
+    pub fn completion_superseded(&self, request_id: PersistenceRequestId) -> bool {
+        self.latest_request
+            .is_some_and(|latest| request_id != latest)
     }
 
     /// Cancels a queued or ready load and signals a running load when it
@@ -476,6 +472,45 @@ mod tests {
         };
         assert_eq!(phases.len(), 1);
         pending.cancel_all();
+        pending.join_running();
+    }
+
+    #[test]
+    fn finished_newer_worker_still_supersedes_older_completion() {
+        // An older completion must not install once a newer request was
+        // accepted, even if the newer worker already finished before the
+        // older completion is collected: installing the older world would
+        // bump the generation and discard the newer result as stale.
+        let mut pending = PendingLoadJobs::default();
+        let older = PersistenceRequestId::next();
+        let newer = PersistenceRequestId::next();
+        pending.latest_request = Some(newer);
+        let handle = thread::spawn(|| Err(LoadJobError::Cancelled));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !handle.is_finished() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "newer load worker did not finish"
+            );
+            thread::yield_now();
+        }
+        pending.running = Some(RunningLoad {
+            request_id: newer,
+            id: SaveId::new("newer"),
+            display_name: "Newer".into(),
+            observed_generation: 0,
+            phase: Arc::new(AtomicU8::new(LoadJobPhase::ReadyToInstall.encode())),
+            cancel: Arc::new(AtomicBool::new(false)),
+            handle,
+        });
+        assert!(
+            pending.completion_superseded(older),
+            "an older completion must stay superseded after its newer worker finished"
+        );
+        assert!(
+            !pending.completion_superseded(newer),
+            "the latest request stays authoritative once finished"
+        );
         pending.join_running();
     }
 }

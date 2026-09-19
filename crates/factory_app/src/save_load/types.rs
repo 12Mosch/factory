@@ -212,9 +212,13 @@ pub(crate) struct CatalogValidationRequest {
 pub(crate) struct CatalogValidationOutcome {
     pub(crate) path: PathBuf,
     pub(crate) compatibility: SaveCompatibility,
-    pub(crate) observed_metadata: Option<SaveFileMetadataFingerprint>,
     pub(crate) fingerprint: Option<SaveFileFingerprint>,
     pub(crate) attempt: u8,
+    /// Whether the worker re-observed the path after validating and found
+    /// the same file instance it classified. The frame installs certified
+    /// outcomes without any filesystem call; uncertified outcomes always
+    /// take the retry path.
+    pub(crate) path_confirmed_current: bool,
 }
 
 #[derive(Debug)]
