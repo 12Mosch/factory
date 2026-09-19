@@ -17,7 +17,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
 };
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 struct SnapshotCaptureActivity<'a>(&'a AtomicU64);
 
@@ -49,6 +49,11 @@ impl Drop for SnapshotCaptureActivity<'_> {
 pub struct PendingSaveJobs {
     running: Option<RunningSave>,
     queue: VecDeque<QueuedSave>,
+    /// Teardown signal shared with the running worker. Set on drop so a
+    /// worker waiting on the artifact lock — possibly held by a detached
+    /// scan worker — aborts instead of stalling shutdown through it. A
+    /// worker already past acquisition still runs to its commit point.
+    shutdown: Arc<AtomicBool>,
 }
 
 struct QueuedSave {
@@ -219,6 +224,7 @@ impl PendingSaveJobs {
         let worker_name = display_name.clone();
         let worker_kind = kind.clone();
         let worker_path = path.clone();
+        let worker_shutdown = Arc::clone(&self.shutdown);
         let handle = thread::spawn(move || {
             run_save_worker(
                 request_id,
@@ -230,6 +236,7 @@ impl PendingSaveJobs {
                 source,
                 worker_phase,
                 worker_cancel,
+                worker_shutdown,
             )
         });
         self.running = Some(RunningSave {
@@ -247,11 +254,33 @@ impl PendingSaveJobs {
     }
 }
 
+/// How long teardown waits for a running save to finish before admitting
+/// shutdown. Absorbs normal artifact-lock holds (scan recovery, a commit
+/// landing concurrently) so an accepted save still completes whenever the
+/// lock frees promptly, while capping the stall when the holder is a
+/// detached scan worker on a pathological filesystem.
+const SHUTDOWN_DRAIN_GRACE: Duration = Duration::from_secs(5);
+
 impl Drop for PendingSaveJobs {
     fn drop(&mut self) {
         // Queued requests never started, so dropping them cancels without
-        // touching disk and without reporting a commit. Join the running
-        // worker so an accepted save cannot be abandoned on teardown.
+        // touching disk and without reporting a commit. Drain briefly so a
+        // running save finishes when the artifact lock frees promptly,
+        // then signal teardown so a worker still waiting on the lock
+        // (possibly held by a detached scan worker) aborts instead of
+        // stalling shutdown through it. Joining afterwards still lets an
+        // accepted save already past acquisition run to completion.
+        // Never starts new workers here: `take_completed` would.
+        let deadline = Instant::now() + SHUTDOWN_DRAIN_GRACE;
+        while self
+            .running
+            .as_ref()
+            .is_some_and(|job| !job.handle.is_finished())
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(1));
+        }
+        self.shutdown.store(true, Ordering::Relaxed);
         self.queue.clear();
         self.join_running();
     }
@@ -360,6 +389,7 @@ fn run_save_worker(
     source: SnapshotSource,
     phase: Arc<AtomicU8>,
     cancel: Arc<AtomicBool>,
+    shutdown: Arc<AtomicBool>,
 ) -> Result<SaveJobOutcome, SaveJobError> {
     let worker_start = Instant::now();
     phase.store(SaveJobPhase::Capturing.encode(), Ordering::Relaxed);
@@ -425,8 +455,15 @@ fn run_save_worker(
     }
     phase.store(SaveJobPhase::Writing.encode(), Ordering::Relaxed);
     let write_start = Instant::now();
-    let stream = write_save_snapshot(&worker_path, &metadata, &snapshot)
-        .map_err(|error| SaveJobError::Io(error.to_string()))?;
+    // Shutdown admission before the artifact lock: a detached scan worker
+    // may hold it across recovery, and teardown joins this worker — so an
+    // unconditional wait would stall shutdown indirectly through the
+    // detached holder. Abandoning the wait reports cancellation; nothing
+    // has committed yet.
+    let Some(write) = write_save_snapshot(&worker_path, &metadata, &snapshot, &shutdown) else {
+        return Err(SaveJobError::Cancelled);
+    };
+    let stream = write.map_err(|error| SaveJobError::Io(error.to_string()))?;
     phase.store(SaveJobPhase::Committing.encode(), Ordering::Relaxed);
     let stream_ms = write_start.elapsed().as_secs_f64() * 1000.0;
     // The captured world remains alive only until the streaming encoder is
@@ -526,6 +563,7 @@ mod tests {
         let mut pending = PendingSaveJobs {
             running: Some(running),
             queue: VecDeque::new(),
+            shutdown: Arc::new(AtomicBool::new(false)),
         };
 
         assert!(pending.any_running());
@@ -589,6 +627,7 @@ mod tests {
         let source = sim.snapshot_source();
         let mut pending = PendingSaveJobs {
             running: Some(running),
+            shutdown: Arc::new(AtomicBool::new(false)),
             queue: VecDeque::from([QueuedSave {
                 request_id: PersistenceRequestId::next(),
                 id: SaveId::new("queued"),
@@ -613,5 +652,96 @@ mod tests {
         );
         release.send(()).unwrap();
         pending.join_running();
+    }
+
+    #[test]
+    fn shutdown_releases_save_waiting_on_artifact_lock() {
+        // A detached scan worker holds the artifact lock across recovery.
+        let _held = crate::save_load::container::hold_save_artifact_lock_for_tests();
+        let sim = SimResource::new(factory_sim::Simulation::new_test_world(7));
+        let source = sim.snapshot_source();
+        let requested = source.generation.load(Ordering::Acquire);
+        let phase = Arc::new(AtomicU8::new(SaveJobPhase::Queued.encode()));
+        let worker_phase = Arc::clone(&phase);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker_shutdown = Arc::clone(&shutdown);
+        let handle = thread::spawn(move || {
+            run_save_worker(
+                PersistenceRequestId::next(),
+                requested,
+                SaveId::new("shutdown-probe"),
+                SaveKind::Quicksave,
+                "Shutdown probe".into(),
+                std::env::temp_dir().join("factory-shutdown-probe.factsim"),
+                source,
+                worker_phase,
+                Arc::new(AtomicBool::new(false)),
+                worker_shutdown,
+            )
+        });
+        // Wait until the worker blocks in the artifact-lock wait.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while SaveJobPhase::decode(phase.load(Ordering::Relaxed)) != SaveJobPhase::Writing
+            && !handle.is_finished()
+        {
+            assert!(
+                Instant::now() < deadline,
+                "worker never reached the artifact-lock wait"
+            );
+            thread::yield_now();
+        }
+        assert_eq!(
+            SaveJobPhase::decode(phase.load(Ordering::Relaxed)),
+            SaveJobPhase::Writing,
+            "worker finished before blocking on the artifact lock"
+        );
+        // Teardown admission releases the wait as cancellation instead of
+        // joining shutdown through the detached holder.
+        shutdown.store(true, Ordering::Relaxed);
+        let result = handle.join().expect("save worker panicked");
+        assert!(
+            matches!(result, Err(SaveJobError::Cancelled)),
+            "expected cancellation, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn drop_signals_shutdown_before_joining() {
+        let mut pending = PendingSaveJobs::default();
+        let observed = Arc::new(AtomicBool::new(false));
+        let worker_observed = Arc::clone(&observed);
+        let worker_shutdown = Arc::clone(&pending.shutdown);
+        let handle = thread::spawn(move || {
+            // Outlives the drain grace: the flag is set only after it.
+            let deadline = Instant::now() + SHUTDOWN_DRAIN_GRACE + Duration::from_secs(5);
+            while !worker_shutdown.load(Ordering::Relaxed) {
+                assert!(Instant::now() < deadline, "drop did not signal shutdown");
+                thread::yield_now();
+            }
+            worker_observed.store(true, Ordering::Relaxed);
+            Err(SaveJobError::Encode("teardown".into()))
+        });
+        pending.running = Some(RunningSave {
+            request_id: PersistenceRequestId::next(),
+            id: SaveId::new("teardown"),
+            kind: SaveKind::Quicksave,
+            display_name: "Teardown".into(),
+            path: PathBuf::from("teardown.factsim"),
+            normalized_name: None,
+            explicit: true,
+            phase: Arc::new(AtomicU8::new(SaveJobPhase::Capturing.encode())),
+            cancel: Arc::new(AtomicBool::new(false)),
+            handle,
+        });
+        let start = Instant::now();
+        drop(pending);
+        assert!(
+            start.elapsed() < SHUTDOWN_DRAIN_GRACE + Duration::from_secs(5),
+            "drop stalled instead of draining, signalling shutdown, and joining"
+        );
+        assert!(
+            observed.load(Ordering::Relaxed),
+            "running worker was not released by the shutdown signal"
+        );
     }
 }

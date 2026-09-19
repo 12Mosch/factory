@@ -1562,6 +1562,12 @@ fn stale_load_after_new_world_is_discarded() {
 #[test]
 fn newest_queued_load_wins() {
     let mut app = test_app(Duration::ZERO, "newest_load_wins");
+    // The first target is large so its worker spends many frames decoding.
+    // A tiny first target could finish and install before the second press
+    // is processed (closing the window and dropping that press), which
+    // would pass or fail on thread scheduling instead of exercising the
+    // newest-wins ordering.
+    generate_large_world(&mut app);
     create_named_save(&mut app, "First Load Wins Target");
     drain_persistence_jobs(&mut app);
     let first_tick = sim_tick_and_hash(&app).0;

@@ -6,9 +6,9 @@ use factory_sim::{
 use std::collections::BTreeMap;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, TryLockError};
+use std::time::{Duration, Instant};
 use std::{fs, str};
 
 static SAVE_ARTIFACT_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -410,6 +410,38 @@ pub(crate) fn with_save_artifact_lock<T>(operation: impl FnOnce() -> T) -> T {
     operation()
 }
 
+/// Polling interval while waiting for the artifact lock with shutdown
+/// admission. Keeps teardown latency near-instant without busy-spinning
+/// against a holder doing real work.
+const ARTIFACT_LOCK_WAIT_POLL: Duration = Duration::from_millis(1);
+
+/// Like [`with_save_artifact_lock`], but stops waiting when `shutdown` is
+/// set (resource teardown racing a detached lock holder, e.g. a catalog
+/// scan worker detached at shutdown while holding the lock across
+/// recovery) instead of blocking indefinitely. Returns `None` when
+/// shutdown won the race; once the lock is held the operation still runs
+/// to completion.
+pub(crate) fn with_save_artifact_lock_shutdown_aware<T>(
+    shutdown: &AtomicBool,
+    operation: impl FnOnce() -> T,
+) -> Option<T> {
+    let guard = loop {
+        match SAVE_ARTIFACT_LOCK.try_lock() {
+            Ok(guard) => break guard,
+            Err(TryLockError::Poisoned(poison)) => break poison.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                if shutdown.load(Ordering::Relaxed) {
+                    return None;
+                }
+                std::thread::sleep(ARTIFACT_LOCK_WAIT_POLL);
+            }
+        }
+    };
+    let result = operation();
+    drop(guard);
+    Some(result)
+}
+
 /// Writes and durably installs a complete save without exposing partial contents.
 pub(crate) fn write_save_bytes(path: &Path, bytes: &[u8]) -> Result<(), ContainerError> {
     with_save_artifact_lock(|| write_save_bytes_locked(path, bytes, SaveLimits::default()))
@@ -417,12 +449,19 @@ pub(crate) fn write_save_bytes(path: &Path, bytes: &[u8]) -> Result<(), Containe
 
 /// Encodes a snapshot through a buffered temporary file and commits it only
 /// after the encoder has finished and the buffer has been flushed and synced.
+/// Admits `shutdown` while waiting for the artifact lock — which a detached
+/// scan worker may hold across recovery — instead of joining shutdown
+/// through it. Returns `None` when shutdown was signalled during the wait;
+/// the caller reports cancellation. Abandoning the wait never loses a
+/// save: nothing has committed yet, and leftover temp artifacts are
+/// recovered next startup.
 pub(crate) fn write_save_snapshot(
     path: &Path,
     metadata: &SaveMetadata,
     snapshot: &SimulationSaveSnapshot,
-) -> Result<StreamWriteMetrics, ContainerError> {
-    with_save_artifact_lock(|| {
+    shutdown: &AtomicBool,
+) -> Option<Result<StreamWriteMetrics, ContainerError>> {
+    with_save_artifact_lock_shutdown_aware(shutdown, || {
         write_save_snapshot_locked(path, metadata, snapshot, SaveLimits::default())
     })
 }
@@ -1139,7 +1178,9 @@ mod tests {
         ));
         let path = root.join("manual-stream.factsim");
         let metadata = metadata("Streamed");
-        let metrics = write_save_snapshot(&path, &metadata, &snapshot).unwrap();
+        let metrics = write_save_snapshot(&path, &metadata, &snapshot, &AtomicBool::new(false))
+            .unwrap()
+            .unwrap();
         assert_eq!(metrics.simulation_bytes, expected_payload.len());
         let bytes = fs::read(&path).unwrap();
         let (decoded_metadata, payload) = decode_container(&bytes).unwrap();
@@ -1166,7 +1207,14 @@ mod tests {
         ));
         let path = root.join("manual-copy.factsim");
         let exported = root.join("exported-copy.factsim");
-        let metrics = write_save_snapshot(&path, &metadata("Copied"), &snapshot).unwrap();
+        let metrics = write_save_snapshot(
+            &path,
+            &metadata("Copied"),
+            &snapshot,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             metrics.simulation_bytes,
             save_snapshot_records_to_bytes(&snapshot).unwrap().len()
@@ -1256,7 +1304,14 @@ mod tests {
             SAVE_ARTIFACT_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         let reference = root.join("reference.factsim");
-        write_save_snapshot(&reference, &metadata("Framing"), &snapshot).unwrap();
+        write_save_snapshot(
+            &reference,
+            &metadata("Framing"),
+            &snapshot,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
         let total = fs::read(&reference).unwrap().len() as u64;
         // The record header and manifest live inside the payload allowance,
         // so the exact artifact size must be accepted.
