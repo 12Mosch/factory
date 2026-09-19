@@ -1784,6 +1784,111 @@ fn externally_replaced_load_never_installs_obsolete_bytes() {
 }
 
 #[test]
+fn stale_parked_load_restarts_against_newer_world() {
+    use factory_app::save_load::LoadJobPhase;
+    let mut app = test_app(Duration::from_secs_f64(1.0 / 60.0), "stale_parked_load");
+    // A large world keeps the restarted decode in flight, so the restart is
+    // observable instead of racing the assertion below.
+    generate_large_world(&mut app);
+    write_raw_quicksave(&app);
+    run_until_tick(&mut app, 3);
+    app.update();
+    // Settle the catalog: the large raw quicksave must validate loadable
+    // before F9, otherwise the request is rejected as pending.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let quicksave_id = loop {
+        let found = app
+            .world()
+            .resource::<SaveCatalog>()
+            .entries()
+            .iter()
+            .find(|entry| entry.id.as_str() == "quicksave")
+            .filter(|entry| entry.compatibility.can_load())
+            .map(|entry| entry.id.clone());
+        if let Some(id) = found {
+            break id;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "quicksave entry did not become loadable"
+        );
+        app.update();
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    tap_key(&mut app, KeyCode::F9);
+    // Hold the artifact lock so the first install phase parks the decoded
+    // candidate in the ready slot instead of consuming it. Decode workers
+    // never take the artifact lock, so the load still decodes.
+    let held = factory_app::save_load::hold_save_artifact_lock_for_tests();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !app
+        .world()
+        .resource::<PendingLoadJobs>()
+        .has_ready_candidate()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "load worker did not decode the quicksave"
+        );
+        app.update();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // A newer world installs while the candidate waits; the file is
+    // untouched, so only the world-generation gate can stop the install.
+    freeze_time(&mut app);
+    app.world_mut()
+        .resource_mut::<SimResource>()
+        .replace(factory_sim::Simulation::new_test_world(777))
+        .expect("test world replacement must succeed");
+    let world_before = sim_tick_and_hash(&app);
+    drop(held);
+    // The artifact lock is process-global: a concurrent test's save commit
+    // may hold it across any one poll, keeping the candidate parked in
+    // ready. Retry until it leaves the slot (restarted run or confirmation),
+    // then assert which. `progress` reports both ready and recertifying as
+    // ReadyToInstall, so only leaving the slot is observable here.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app
+        .world()
+        .resource::<PendingLoadJobs>()
+        .has_ready_candidate()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "stale candidate never left the ready slot"
+        );
+        app.update();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // The stale candidate must restart (requeued for a fresh decode) rather
+    // than proceed to path confirmation and installation: a running
+    // restarted decode is observable, while a recertifying candidate leaves
+    // no running worker behind.
+    assert!(
+        app.world().resource::<PendingLoadJobs>().any_running(),
+        "the stale candidate must restart its decode instead of installing"
+    );
+    let phases = app.world().resource::<PendingLoadJobs>().progress();
+    assert_eq!(phases.len(), 1);
+    assert_ne!(
+        phases[0].1,
+        LoadJobPhase::ReadyToInstall,
+        "a candidate stale for the live world must not proceed to installation"
+    );
+    // Settle: the restarted request is cancelled before it can install the
+    // still-requested file, so the newer world is never overwritten.
+    app.world_mut()
+        .resource_mut::<PendingLoadJobs>()
+        .cancel(&quicksave_id);
+    drain_load_jobs(&mut app);
+    assert_eq!(
+        sim_tick_and_hash(&app),
+        world_before,
+        "the newer world must never be overwritten by the stale candidate"
+    );
+}
+
+#[test]
 fn obsolete_load_failure_never_overwrites_status() {
     use factory_app::save_load::{SaveLoadStatus, SaveLoadStatusKind};
     let mut app = test_app(Duration::ZERO, "obsolete_load_error");

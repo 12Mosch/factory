@@ -258,6 +258,30 @@ impl PendingLoadJobs {
             running.cancel.store(true, Ordering::Relaxed);
             cancelled = true;
         }
+        // Rebase `latest_request` onto the newest survivor: a removed newest
+        // request must not supersede surviving older work, or the older
+        // completion is discarded even though it was neither cancelled nor
+        // replaced. Newest-wins applies among survivors; with no survivors
+        // the pointer is left alone (a future request overwrites it, and a
+        // signalled running job still reports its own terminal status).
+        // A signalled running job stays in place until collected, so it
+        // counts as a survivor here.
+        let newest_survivor = self
+            .running
+            .as_ref()
+            .map(|running| running.request_id)
+            .into_iter()
+            .chain(self.queue.iter().map(|queued| queued.request_id))
+            .chain(self.ready.as_ref().map(|ready| ready.request_id))
+            .chain(
+                self.recertifying
+                    .as_ref()
+                    .map(|recertifying| recertifying.ready.request_id),
+            )
+            .max();
+        if let Some(newest) = newest_survivor {
+            self.latest_request = Some(newest);
+        }
         cancelled
     }
 
@@ -354,6 +378,10 @@ impl Drop for PendingLoadJobs {
         // queue and hold save files.
         self.queue.clear();
         self.ready = None;
+        // A parked confirmation is dropped with its channel: the bounded
+        // worker's send fails and it exits alone after one open plus
+        // fingerprint, so teardown never blocks on it.
+        self.recertifying = None;
         if let Some(running) = &self.running
             && !running.handle.is_finished()
         {
@@ -862,6 +890,53 @@ mod tests {
             !confirmation.matched,
             "a path replaced after decoding must fail same-round confirmation"
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn cancel_newest_load_rebases_latest_request_to_survivor() {
+        // Review scenario: load A is running while newer load B is queued
+        // and latest. Cancelling B must rebase `latest_request` onto A so
+        // A's completion is not discarded as superseded.
+        let dir = std::env::temp_dir().join(format!(
+            "factory-load-cancel-rebase-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut pending = PendingLoadJobs::default();
+        // Missing files: both workers fail fast in the background; only
+        // queue bookkeeping is asserted here, and Drop joins the runner.
+        let running = queue_load(
+            SaveId::new("a"),
+            "A".into(),
+            dir.join("a.factsim"),
+            0,
+            &mut pending,
+        );
+        let queued = queue_load(
+            SaveId::new("b"),
+            "B".into(),
+            dir.join("b.factsim"),
+            0,
+            &mut pending,
+        );
+        assert_eq!(pending.latest_request(), Some(queued));
+        assert!(
+            pending.completion_superseded(running),
+            "before the fix the surviving run would be discarded"
+        );
+        assert!(pending.cancel(&SaveId::new("b")));
+        assert_eq!(
+            pending.latest_request(),
+            Some(running),
+            "cancelling the newest request must rebase latest onto the surviving run"
+        );
+        assert!(
+            !pending.completion_superseded(running),
+            "the surviving run's completion must not be discarded"
+        );
+        drop(pending);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

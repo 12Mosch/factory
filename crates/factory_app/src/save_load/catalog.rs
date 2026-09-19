@@ -19,8 +19,8 @@ use super::container::{
 #[cfg(test)]
 use super::{
     CachedSaveValidation, CatalogValidationJob, CatalogValidationOutcome, CatalogValidationRequest,
-    SaveCatalog, SaveCompatibility, SaveEntry, SaveFileMetadataFingerprint, SaveId, SaveKind,
-    SaveLoadConfig,
+    ConfirmingValidation, SaveCatalog, SaveCompatibility, SaveEntry, SaveFileMetadataFingerprint,
+    SaveId, SaveKind, SaveLoadConfig,
 };
 #[cfg(test)]
 use factory_sim::{SaveLimits, load_from_bytes};
@@ -29,7 +29,7 @@ pub(crate) use inspect::{
     inspect_file, recognized_file, save_file_fingerprint, save_file_metadata_fingerprint,
 };
 #[cfg(test)]
-pub(crate) use polling::poll_catalog_validation_jobs_inner;
+pub(crate) use polling::{poll_catalog_validation_jobs_inner, rescan_stale_pending};
 #[cfg(test)]
 pub(crate) use recovery::{
     PrimaryState, RecoveryBackup, classify_backup_result, classify_simulation_result,
@@ -1556,6 +1556,80 @@ mod tests {
             catalog.validation_cache[&path].fingerprint.metadata,
             metadata_b
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rescan_skips_paths_with_parked_confirmations() {
+        use super::super::freshness::spawn_path_confirmation;
+        // A certified outcome parks for confirmation with the rescan due:
+        // the rescan must treat the confirming path as active work instead
+        // of queueing a duplicate full payload validation for large saves.
+        let dir = std::env::temp_dir().join(format!(
+            "factory-confirm-rescan-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        let current = factory_sim::save_to_bytes(&factory_sim::Simulation::new_test_world(7))
+            .expect("current save should encode");
+        fs::write(&path, &current).unwrap();
+        let metadata = save_file_metadata_fingerprint(&fs::File::open(&path).unwrap());
+        let mut open = fs::File::open(&path).unwrap();
+        let fingerprint = save_file_fingerprint(&mut open, metadata.clone()).unwrap();
+        drop(open);
+        let outcome = CatalogValidationOutcome {
+            path: path.clone(),
+            compatibility: SaveCompatibility::Compatible,
+            fingerprint: Some(fingerprint),
+            attempt: 0,
+            path_confirmed_current: true,
+            commit_epoch: save_artifact_epoch(&path),
+            observed_metadata: Some(metadata.clone()),
+        };
+        let mut catalog = SaveCatalog {
+            entries: vec![SaveEntry {
+                id: SaveId::new("quicksave"),
+                metadata: fallback_metadata(
+                    SaveId::new("quicksave"),
+                    SaveKind::Quicksave,
+                    "Quicksave".into(),
+                    0,
+                ),
+                compatibility: SaveCompatibility::ValidationPending,
+                metadata_available: true,
+                path: path.clone(),
+                inspected: None,
+            }],
+            revision: 0,
+            validation_cache: BTreeMap::new(),
+            confirming: vec![ConfirmingValidation {
+                outcome,
+                confirm: spawn_path_confirmation(path.clone(), metadata),
+            }],
+            next_pending_rescan: None,
+            scan_epoch: 0,
+            validation_queue: std::collections::VecDeque::new(),
+            validation_jobs: Vec::new(),
+        };
+
+        // The rescan only filters paths; it never touches the confirmation
+        // worker, so this is deterministic regardless of worker timing.
+        assert!(!rescan_stale_pending(&mut catalog));
+        assert!(
+            catalog.validation_queue.is_empty() && catalog.validation_jobs.is_empty(),
+            "a confirming path must not queue a duplicate validation"
+        );
+
+        // The parked verdict still installs without any validation running.
+        drain_validation_jobs(&mut catalog);
+        assert_eq!(
+            catalog.entries[0].compatibility,
+            SaveCompatibility::Compatible,
+            "the parked verdict must install once confirmed"
+        );
+        assert!(catalog.validation_cache.contains_key(&path));
         fs::remove_dir_all(dir).unwrap();
     }
 

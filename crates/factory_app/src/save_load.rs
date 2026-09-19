@@ -730,6 +730,18 @@ fn current_generation(state: &LoadState) -> u64 {
     }
 }
 
+/// Whether the candidate's decoded world is stale for the live world:
+/// another system installed a newer world after the load observed its
+/// generation. Checked at completion collection AND immediately before final
+/// installation (both phases), so a candidate parked across frames can never
+/// install over a newer world (#297: stale/out-of-order loads cannot
+/// install). The pre-install check runs on the frame thread adjacent to the
+/// installation with no other installer able to interleave, so the gate is
+/// exact; the pre-confirmation check fails fast without spawning work.
+fn candidate_world_stale(candidate: &loads::LoadCandidate, state: &LoadState) -> bool {
+    state.sim.is_initialized() && current_generation(state) != candidate.observed_generation
+}
+
 /// Terminal catalog rejections evaluated at install time. The catalog may
 /// change while a candidate waits or confirms, so both install phases
 /// recheck: a removed entry is a terminal rejection (a save that is no
@@ -802,6 +814,20 @@ fn install_ready_load(
     // our own writer cannot commit between the check and the confirmation
     // spawn below.
     if ready.is_overtaken() || !ready.candidate.end_certified {
+        drop(_artifact_guard);
+        return restart_overtaken_load(
+            pending,
+            status,
+            &ready.id,
+            &ready.display_name,
+            &ready.path,
+            current_generation(state),
+        );
+    }
+    // A newer world installed while the candidate waited or decoded: fail
+    // fast here instead of spending a confirmation round on an install that
+    // the pre-install gate would restart anyway.
+    if candidate_world_stale(&ready.candidate, state) {
         drop(_artifact_guard);
         return restart_overtaken_load(
             pending,
@@ -900,6 +926,22 @@ fn poll_recertifying_load(
     if ready.candidate.artifact_epoch != confirmation.epoch
         || confirmation.epoch != container::save_artifact_epoch(&ready.path)
     {
+        drop(_artifact_guard);
+        return restart_overtaken_load(
+            pending,
+            status,
+            &ready.id,
+            &ready.display_name,
+            &ready.path,
+            current_generation(state),
+        );
+    }
+    // World-generation gate: another system may have installed a newer world
+    // while the candidate parked for confirmation. Installing now would
+    // overwrite it with stale bytes, so restart against the live world
+    // instead. Adjacent to the installation below with no other installer
+    // able to interleave on the frame thread, this gate is exact.
+    if candidate_world_stale(&ready.candidate, state) {
         drop(_artifact_guard);
         return restart_overtaken_load(
             pending,

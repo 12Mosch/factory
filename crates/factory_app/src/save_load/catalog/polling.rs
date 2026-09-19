@@ -205,7 +205,7 @@ fn consume_confirmations(catalog: &mut SaveCatalog) -> bool {
 /// Each rescan performs a single observation per entry; a still-failing
 /// entry simply waits for the next interval. Returns whether any request
 /// was queued; advancing the throttle alone does not count.
-fn rescan_stale_pending(catalog: &mut SaveCatalog) -> bool {
+pub(crate) fn rescan_stale_pending(catalog: &mut SaveCatalog) -> bool {
     let now = Instant::now();
     if catalog.next_pending_rescan.is_some_and(|due| now < due) {
         return false;
@@ -224,6 +224,13 @@ fn rescan_stale_pending(catalog: &mut SaveCatalog) -> bool {
                     .validation_jobs
                     .iter()
                     .any(|job| job.path == entry.path)
+                // A parked confirmation is active work: its verdict installs
+                // (or drops) within a round, so a second full payload
+                // validation here would duplicate decoding for large saves.
+                && !catalog
+                    .confirming
+                    .iter()
+                    .any(|confirming| confirming.outcome.path == entry.path)
         })
         .map(|entry| (entry.path.clone(), entry.metadata.kind.clone()))
         .collect();
