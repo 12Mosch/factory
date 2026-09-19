@@ -200,6 +200,13 @@ pub fn request_named_save(
 #[derive(Resource, Default)]
 pub struct DeferredNamedSave {
     pub(crate) name: Option<String>,
+    /// A request dropped by a failed scan, retained until a later scan
+    /// installs successfully. A follow-up (or any later) scan that also
+    /// fails re-reports this failure instead of replacing it with a
+    /// generic refresh error, so the settled status stays connected to
+    /// the lost user action. Never re-admitted: the drain only consumes
+    /// the parked `name`.
+    pub(crate) dropped_name: Option<String>,
 }
 
 /// Admits a named save only from a settled catalog when the name is new.

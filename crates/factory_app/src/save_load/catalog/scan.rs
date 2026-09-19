@@ -139,6 +139,9 @@ pub(crate) fn poll_catalog_scan(
     match outcome {
         Ok(entries) if worker_epoch == catalog.scan_epoch => {
             install_scan_entries(catalog, entries);
+            // Freshness re-established: the dropped-request context
+            // expires with the stale catalog it referred to.
+            deferred.dropped_name = None;
         }
         Ok(_) => {
             // A catalog mutation (e.g. a deletion) landed while this
@@ -148,7 +151,6 @@ pub(crate) fn poll_catalog_scan(
             follow_up = true;
         }
         Err(error) => {
-            status.message = Some(format!("Cannot refresh save catalog: {error}"));
             status.kind = SaveLoadStatusKind::Error;
             status.last_completed_id = None;
             if let Some(name) = deferred.name.take() {
@@ -158,13 +160,25 @@ pub(crate) fn poll_catalog_scan(
                 // explicitly — naming the save and preserving the refresh
                 // failure — instead of minting a possible duplicate. One
                 // follow-up scan is requested so a manual retry usually
-                // meets a fresh catalog; its own failure does not chain
-                // (nothing is parked then), so a persistent failure
-                // settles instead of spinning.
+                // meets a fresh catalog. The dropped name is retained: a
+                // follow-up that also fails re-reports it below instead of
+                // replacing it with a generic error.
+                deferred.dropped_name = Some(name.clone());
                 status.message = Some(format!(
                     "Cannot refresh save catalog: {error}; {name} was not created."
                 ));
                 follow_up = true;
+            } else if let Some(name) = &deferred.dropped_name {
+                // A follow-up (or later) scan failed while a dropped
+                // request is still unacknowledged-by-freshness: preserve
+                // its failure instead of disconnecting the settled status
+                // from the lost user action. No further follow-up: a
+                // persistent failure must settle, not spin.
+                status.message = Some(format!(
+                    "Cannot refresh save catalog: {error}; {name} was not created."
+                ));
+            } else {
+                status.message = Some(format!("Cannot refresh save catalog: {error}"));
             }
         }
     }
@@ -580,6 +594,7 @@ mod tests {
         });
         let mut deferred = DeferredNamedSave {
             name: Some("Base".into()),
+            dropped_name: None,
         };
         let mut status = SaveLoadStatus::default();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -627,6 +642,118 @@ mod tests {
         }
         assert!(pending.is_empty());
         assert!(deferred.name.is_none());
+        assert!(
+            deferred.dropped_name.is_none(),
+            "the successful follow-up re-establishes freshness and expires the dropped context"
+        );
+    }
+
+    #[test]
+    fn consecutive_scan_failures_preserve_dropped_save_failure() {
+        // Review follow-up: the explicit failure above is followed by one
+        // bounded retry. If the filesystem error persists, that follow-up
+        // reaches the generic error branch with nothing parked — it must
+        // re-report the dropped save instead of replacing the message,
+        // and must not chain another retry.
+        let dir = std::env::temp_dir().join(format!(
+            "factory-scan-error-repeat-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let config = SaveLoadConfig {
+            root_dir: dir,
+            autosave_interval_ticks: 300,
+            autosave_slot_count: 5,
+        };
+        let mut catalog = SaveCatalog::default();
+        let mut pending = PendingCatalogScan::default();
+        let mut deferred = DeferredNamedSave {
+            name: Some("Base".into()),
+            dropped_name: None,
+        };
+        let mut status = SaveLoadStatus::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // First failure drops the park and requests one follow-up.
+        pending.worker = Some(RunningCatalogScan {
+            epoch: 0,
+            handle: thread::spawn(|| Err("permission denied".into())),
+        });
+        while deferred.name.is_some() {
+            poll_catalog_scan(
+                &config,
+                &mut pending,
+                &mut catalog,
+                &mut status,
+                &mut deferred,
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "catalog scan did not settle"
+            );
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(
+            status.message.as_deref(),
+            Some("Cannot refresh save catalog: permission denied; Base was not created.")
+        );
+        // Replace the auto-requested follow-up with a second failure.
+        assert!(
+            !pending.is_empty(),
+            "the first failure must request one follow-up"
+        );
+        pending.worker = Some(RunningCatalogScan {
+            epoch: 0,
+            handle: thread::spawn(|| Err("permission denied".into())),
+        });
+        while pending.worker.is_some() {
+            poll_catalog_scan(
+                &config,
+                &mut pending,
+                &mut catalog,
+                &mut status,
+                &mut deferred,
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "follow-up scan did not settle"
+            );
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(
+            status.message.as_deref(),
+            Some("Cannot refresh save catalog: permission denied; Base was not created."),
+            "the follow-up failure must preserve the dropped save failure, got: {status:?}"
+        );
+        assert_eq!(status.kind, SaveLoadStatusKind::Error);
+        assert!(
+            pending.is_empty(),
+            "a persistent failure must settle, not spin"
+        );
+        assert!(deferred.name.is_none());
+        // A later successful scan expires the retained context.
+        pending.worker = Some(RunningCatalogScan {
+            epoch: 0,
+            handle: thread::spawn(|| Ok(Vec::new())),
+        });
+        while pending.worker.is_some() {
+            poll_catalog_scan(
+                &config,
+                &mut pending,
+                &mut catalog,
+                &mut status,
+                &mut deferred,
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "recovery scan did not settle"
+            );
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(pending.is_empty());
+        assert!(
+            deferred.dropped_name.is_none(),
+            "freshness re-established by a successful scan expires the context"
+        );
     }
 
     #[test]
