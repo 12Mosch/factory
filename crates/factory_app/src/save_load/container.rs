@@ -13,14 +13,18 @@ use std::{fs, str};
 
 static SAVE_ARTIFACT_COUNTER: AtomicU64 = AtomicU64::new(0);
 static SAVE_ARTIFACT_LOCK: Mutex<()> = Mutex::new(());
-/// Per-path mutation epochs for canonical save artifacts. Bumped after
-/// every committed replacement or removal (save commits, recovery
-/// promotions, deletions). Catalog validation outcomes record the epoch
-/// alongside worker certification so the frame can reject verdicts
-/// overtaken by our own writer without any filesystem call. Per-path (not
-/// global) so a save to one slot never invalidates another path's
-/// in-flight validation.
+/// Per-path mutation epochs for canonical save artifacts, drawn from a
+/// process-wide commit sequence. Bumped after every committed replacement
+/// or removal (save commits, recovery promotions, deletions); deleted
+/// paths are reclaimed. Catalog validation outcomes and load candidates
+/// record the epoch alongside worker observations so the frame can reject
+/// results overtaken by our own writer without any filesystem call.
+/// Per-path (not global) so a save to one slot never invalidates another
+/// path's in-flight work. The sequence never reuses a value, so deleting
+/// (reclaim) then recreating a path cannot realign with an older recorded
+/// epoch — no ABA.
 static SAVE_ARTIFACT_EPOCHS: Mutex<BTreeMap<PathBuf, u64>> = Mutex::new(BTreeMap::new());
+static SAVE_COMMIT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) fn save_artifact_epoch(path: &Path) -> u64 {
     SAVE_ARTIFACT_EPOCHS
@@ -31,8 +35,16 @@ pub(crate) fn save_artifact_epoch(path: &Path) -> u64 {
 
 pub(crate) fn bump_save_artifact_epoch(path: &Path) {
     if let Ok(mut epochs) = SAVE_ARTIFACT_EPOCHS.lock() {
-        let next = epochs.get(path).copied().unwrap_or(0).wrapping_add(1);
-        epochs.insert(path.to_path_buf(), next);
+        epochs.insert(
+            path.to_path_buf(),
+            SAVE_COMMIT_SEQUENCE.fetch_add(1, Ordering::AcqRel),
+        );
+    }
+}
+
+pub(crate) fn reclaim_save_artifact_epoch(path: &Path) {
+    if let Ok(mut epochs) = SAVE_ARTIFACT_EPOCHS.lock() {
+        epochs.remove(path);
     }
 }
 
@@ -617,7 +629,7 @@ pub(crate) fn remove_save_and_artifacts(path: &Path) -> io::Result<()> {
         sync_parent_directory(path)
     });
     if result.is_ok() {
-        bump_save_artifact_epoch(path);
+        reclaim_save_artifact_epoch(path);
     }
     result
 }
@@ -1304,6 +1316,30 @@ mod tests {
         write_save_bytes(&path, b"second").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"second");
         assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn deleted_paths_reclaim_epoch_entries() {
+        let root = std::env::temp_dir().join(format!(
+            "factory-epoch-reclaim-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("reclaimed.factsim");
+        write_save_bytes(&path, b"payload").unwrap();
+        assert!(SAVE_ARTIFACT_EPOCHS.lock().unwrap().contains_key(&path));
+        let committed = save_artifact_epoch(&path);
+        remove_save_and_artifacts(&path).unwrap();
+        assert!(
+            !SAVE_ARTIFACT_EPOCHS.lock().unwrap().contains_key(&path),
+            "deletion must reclaim the path entry"
+        );
+        // Recreating the path draws a fresh commit-sequence value that
+        // cannot realign with the pre-delete epoch: no ABA.
+        write_save_bytes(&path, b"payload").unwrap();
+        assert_ne!(committed, save_artifact_epoch(&path));
         fs::remove_dir_all(root).unwrap();
     }
 

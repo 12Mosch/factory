@@ -612,6 +612,7 @@ pub(crate) fn poll_load_jobs(
                     id: completed.id,
                     display_name: completed.display_name,
                     request_id: completed.request_id,
+                    path: candidate.path.clone(),
                     candidate,
                 };
                 if !install_ready_load(&mut pending, &mut status, &catalog, &mut state, ready) {
@@ -650,6 +651,30 @@ pub(crate) fn poll_load_jobs(
     }
 }
 
+/// Re-queues an overtaken load so quickload converges on the committed
+/// bytes once saves settle. Refreshes the "Loading..." status and reports
+/// the request resolved-as-restarted.
+fn restart_overtaken_load(
+    pending: &mut PendingLoadJobs,
+    status: &mut SaveLoadStatus,
+    id: &SaveId,
+    display_name: &str,
+    path: &std::path::Path,
+    observed_generation: u64,
+) -> bool {
+    loads::queue_load(
+        id.clone(),
+        display_name.to_owned(),
+        path.to_path_buf(),
+        observed_generation,
+        pending,
+    );
+    status.message = Some(format!("Loading {display_name}..."));
+    status.kind = SaveLoadStatusKind::Info;
+    status.last_completed_id = None;
+    true
+}
+
 /// Attempts boundary installation of one validated candidate. Returns true
 /// when resolved (installed or terminally rejected) and false when the
 /// simulation was busy and the candidate was retained for retry.
@@ -660,6 +685,25 @@ fn install_ready_load(
     state: &mut LoadState,
     ready: loads::ReadyLoad,
 ) -> bool {
+    // A save committed after the worker opened its handle replaces the
+    // target with bytes the candidate never decoded. Installing would roll
+    // the world back, so restart the request instead: quickload converges
+    // on the committed bytes once saves settle.
+    if ready.is_overtaken() {
+        let observed = if state.sim.is_initialized() {
+            state.sim.replacement_revision()
+        } else {
+            0
+        };
+        return restart_overtaken_load(
+            pending,
+            status,
+            &ready.id,
+            &ready.display_name,
+            &ready.path,
+            observed,
+        );
+    }
     // The catalog may have changed while decoding. A removed entry is a
     // terminal rejection: a save that is no longer listed must not install.
     let Some(entry) = catalog.get(&ready.id) else {
@@ -680,12 +724,15 @@ fn install_ready_load(
         id,
         display_name,
         request_id,
+        path: _,
         candidate,
     } = ready;
     // Copy scalar identity before the candidate moves into installation.
     let candidate_observed = candidate.observed_generation;
     let candidate_tick = candidate.tick;
     let candidate_player = candidate.player_tile;
+    let candidate_path = candidate.path.clone();
+    let candidate_epoch = candidate.artifact_epoch;
     // One atomic step: `install` swaps the world and publishes the new
     // generation under a single write guard, and returns the candidate on
     // contention so a busy simulation retains it for retry instead of
@@ -710,12 +757,15 @@ fn install_ready_load(
                     id,
                     display_name,
                     request_id,
+                    path: candidate_path.clone(),
                     candidate: loads::LoadCandidate {
                         request_id,
                         observed_generation: candidate_observed,
                         simulation: *conflict.simulation,
                         tick: candidate_tick,
                         player_tile: candidate_player,
+                        path: candidate_path,
+                        artifact_epoch: candidate_epoch,
                     },
                 });
                 if status.kind != SaveLoadStatusKind::Error {
@@ -858,6 +908,29 @@ fn default_data_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn overtaken_load_restarts_with_loading_status() {
+        let mut pending = PendingLoadJobs::default();
+        let mut status = SaveLoadStatus::default();
+        let path = PathBuf::from("restarted.factsim");
+        assert!(restart_overtaken_load(
+            &mut pending,
+            &mut status,
+            &SaveId::new("quicksave"),
+            "Quicksave",
+            &path,
+            7,
+        ));
+        // The same target is queued again (the worker may already have
+        // failed on the missing file, but the request record persists
+        // until collected) and the shared status keeps reporting the
+        // running request, never an error or a stale success.
+        assert_eq!(pending.pending_ids(), vec![SaveId::new("quicksave")],);
+        assert!(pending.latest_request().is_some());
+        assert_eq!(status.message.as_deref(), Some("Loading Quicksave..."),);
+        assert_eq!(status.kind, SaveLoadStatusKind::Info);
+    }
+
     #[test]
     fn validates_names() {
         assert_eq!(validate_save_name("  Main Base  ").unwrap(), "Main Base");

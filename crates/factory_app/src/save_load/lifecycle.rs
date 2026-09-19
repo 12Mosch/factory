@@ -35,6 +35,10 @@
 //!   the newest and no newer world installation happened after the worker
 //!   started. Out-of-order or superseded completions are discarded, never
 //!   installed over a newer world.
+//! * Each load candidate also records the target's writer epoch before its
+//!   worker opens the file. A save committed afterwards replaces the decoded
+//!   bytes, so the request restarts and converges on the committed bytes
+//!   instead of installing a rollback.
 //!
 //! # Shutdown and cancellation
 //!

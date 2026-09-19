@@ -9,7 +9,7 @@
 
 use super::SaveId;
 use super::catalog::validation::CancelReader;
-use super::container::{ContainerError, load_simulation_from_reader};
+use super::container::{ContainerError, load_simulation_from_reader, save_artifact_epoch};
 use super::lifecycle::{
     LoadJobError, LoadJobPhase, MAX_LOAD_WORKERS, MAX_QUEUED_LOADS, PersistenceRequestId,
 };
@@ -60,6 +60,11 @@ pub(crate) struct LoadCandidate {
     pub simulation: Simulation,
     pub tick: u64,
     pub player_tile: (f32, f32),
+    pub path: PathBuf,
+    /// Writer epoch for the target observed before the worker opened it. A
+    /// save committed afterwards replaces the decoded bytes, so the frame
+    /// restarts the request instead of installing a rollback.
+    pub artifact_epoch: u64,
 }
 
 /// A validated candidate retained with its catalog identity for boundary
@@ -69,7 +74,17 @@ pub(crate) struct ReadyLoad {
     pub id: SaveId,
     pub display_name: String,
     pub request_id: PersistenceRequestId,
+    pub path: PathBuf,
     pub candidate: LoadCandidate,
+}
+
+impl ReadyLoad {
+    /// Whether a save committed after the worker opened its handle,
+    /// replacing the decoded bytes. Overtaken candidates must restart
+    /// instead of installing a rollback.
+    pub fn is_overtaken(&self) -> bool {
+        super::container::save_artifact_epoch(&self.path) != self.candidate.artifact_epoch
+    }
 }
 
 pub(crate) struct CompletedLoad {
@@ -345,6 +360,10 @@ fn run_load_worker(
         return Err(LoadJobError::Cancelled);
     }
     phase.store(LoadJobPhase::Decoding.encode(), Ordering::Relaxed);
+    // Record the writer epoch before opening: any commit afterwards (even
+    // between this read and the open) only causes a harmless restart that
+    // re-decodes the committed bytes, never a rollback install.
+    let artifact_epoch = save_artifact_epoch(&path);
     let simulation = load_simulation_cancellable(&path, &cancel).map_err(|error| match error {
         ContainerError::Io(io_error) => map_load_io_error(io_error, &cancel),
         ContainerError::TooLarge => LoadJobError::TooLarge,
@@ -381,6 +400,8 @@ fn run_load_worker(
         simulation,
         tick,
         player_tile,
+        path,
+        artifact_epoch,
     })
 }
 
@@ -539,6 +560,40 @@ mod tests {
             "the latest request stays authoritative once finished"
         );
         pending.join_running();
+    }
+
+    #[test]
+    fn overtaken_candidate_is_detected_by_writer_epoch() {
+        use super::super::container::{bump_save_artifact_epoch, save_artifact_epoch};
+        let path = PathBuf::from("overtaken.factsim");
+        let candidate = |epoch| LoadCandidate {
+            request_id: PersistenceRequestId::next(),
+            observed_generation: 0,
+            simulation: Simulation::new_test_world(11),
+            tick: 0,
+            player_tile: (0.0, 0.0),
+            path: path.clone(),
+            artifact_epoch: epoch,
+        };
+        let ready = |epoch| ReadyLoad {
+            id: SaveId::new("quicksave"),
+            display_name: "Quicksave".into(),
+            request_id: PersistenceRequestId::next(),
+            path: path.clone(),
+            candidate: candidate(epoch),
+        };
+        // No commit since the worker opened: current, installable.
+        assert!(!ready(save_artifact_epoch(&path)).is_overtaken());
+        // A commit afterwards replaces the decoded bytes: restart. The
+        // commit sequence starts at 1, so epoch 0 is always stale here.
+        bump_save_artifact_epoch(&path);
+        assert!(ready(0).is_overtaken());
+        let stale_epoch = save_artifact_epoch(&path);
+        bump_save_artifact_epoch(&path);
+        assert!(
+            ready(stale_epoch).is_overtaken(),
+            "a candidate overtaken by a writer commit must restart"
+        );
     }
 
     #[test]
