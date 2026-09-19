@@ -682,7 +682,7 @@ pub(crate) fn poll_load_jobs(
 /// forever. Safe when idle: a live load always populates the queue, worker,
 /// or retained candidate, so no current request can own the message; save
 /// messages and error statuses are never touched.
-fn clear_loading_status_if_idle(pending: &PendingLoadJobs, status: &mut SaveLoadStatus) {
+pub(crate) fn clear_loading_status_if_idle(pending: &PendingLoadJobs, status: &mut SaveLoadStatus) {
     if !pending.is_empty() || status.kind != SaveLoadStatusKind::Info {
         return;
     }

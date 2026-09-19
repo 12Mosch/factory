@@ -234,6 +234,11 @@ impl PendingLoadJobs {
     /// load when it matches. Cancellation never mutates the active world.
     /// Dropping a recertifying load abandons its confirmation worker, which
     /// exits alone after one open plus fingerprint.
+    ///
+    /// Queue state only: when the cancelled request was the last one
+    /// retained, no worker completion remains to release the owned
+    /// `Loading...` status, so the caller must clear it synchronously
+    /// (see `super::clear_loading_status_if_idle`).
     pub fn cancel(&mut self, id: &SaveId) -> bool {
         let mut cancelled = false;
         let before = self.queue.len();
@@ -262,10 +267,12 @@ impl PendingLoadJobs {
         // request must not supersede surviving older work, or the older
         // completion is discarded even though it was neither cancelled nor
         // replaced. Newest-wins applies among survivors; with no survivors
-        // the pointer is left alone (a future request overwrites it, and a
-        // signalled running job still reports its own terminal status).
-        // A signalled running job stays in place until collected, so it
-        // counts as a survivor here.
+        // the pointer retires to `None` — a removed id must never stay
+        // authoritative, or a stale `latest_request` both mislabels future
+        // completions and orphans the owned `Loading...` status (nothing
+        // remains to collect and clear it). A signalled running job stays
+        // in place until collected, so it counts as a survivor here and
+        // still reports its own terminal status through the drain.
         let newest_survivor = self
             .running
             .as_ref()
@@ -279,9 +286,7 @@ impl PendingLoadJobs {
                     .map(|recertifying| recertifying.ready.request_id),
             )
             .max();
-        if let Some(newest) = newest_survivor {
-            self.latest_request = Some(newest);
-        }
+        self.latest_request = newest_survivor;
         cancelled
     }
 
@@ -938,6 +943,90 @@ mod tests {
         );
         drop(pending);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A parked candidate with no decode work behind it, for the
+    /// sole-retained cancellation tests below.
+    fn parked_ready(id: &str, request_id: PersistenceRequestId) -> ReadyLoad {
+        let path = PathBuf::from(format!("{id}.factsim"));
+        ReadyLoad {
+            id: SaveId::new(id),
+            display_name: id.into(),
+            request_id,
+            path: path.clone(),
+            candidate: LoadCandidate {
+                request_id,
+                observed_generation: 0,
+                simulation: Simulation::new_test_world(11),
+                tick: 0,
+                player_tile: (0.0, 0.0),
+                path,
+                artifact_epoch: 0,
+                observed_identity: SaveFileMetadataFingerprint {
+                    len: 0,
+                    modified: None,
+                    identity: None,
+                },
+                end_certified: true,
+            },
+        }
+    }
+
+    fn loading_status(display_name: &str) -> crate::save_load::SaveLoadStatus {
+        crate::save_load::SaveLoadStatus {
+            message: Some(format!("Loading {display_name}...")),
+            kind: crate::save_load::SaveLoadStatusKind::Info,
+            last_completed_id: None,
+        }
+    }
+
+    #[test]
+    fn cancel_sole_ready_load_retires_latest_request_and_releases_status() {
+        // Review edge case: cancelling the only remaining load must retire
+        // `latest_request` (no survivors to rebase onto) instead of leaving
+        // it naming the removed request. No worker completion remains, so
+        // the caller releases the owned `Loading...` status synchronously.
+        let request_id = PersistenceRequestId::next();
+        let mut pending = PendingLoadJobs::default();
+        pending.retain_ready(parked_ready("sole", request_id));
+        pending.latest_request = Some(request_id);
+        let mut status = loading_status("sole");
+        assert!(pending.cancel(&SaveId::new("sole")));
+        assert!(pending.is_empty());
+        assert_eq!(
+            pending.latest_request(),
+            None,
+            "cancelling the final retained load must retire the latest request"
+        );
+        crate::save_load::clear_loading_status_if_idle(&pending, &mut status);
+        assert!(
+            status.message.is_none(),
+            "the orphaned Loading status must be released, got: {status:?}"
+        );
+    }
+
+    #[test]
+    fn cancel_sole_recertifying_load_retires_latest_request_and_releases_status() {
+        // Same edge case for a parked candidate awaiting path confirmation:
+        // dropping it abandons the confirmation worker, so again no
+        // completion remains and the caller clears the status itself.
+        let request_id = PersistenceRequestId::next();
+        let mut pending = PendingLoadJobs::default();
+        pending.retain_recertifying(RecertifyingLoad::begin(parked_ready("sole", request_id)));
+        pending.latest_request = Some(request_id);
+        let mut status = loading_status("sole");
+        assert!(pending.cancel(&SaveId::new("sole")));
+        assert!(pending.is_empty());
+        assert_eq!(
+            pending.latest_request(),
+            None,
+            "cancelling the final recertifying load must retire the latest request"
+        );
+        crate::save_load::clear_loading_status_if_idle(&pending, &mut status);
+        assert!(
+            status.message.is_none(),
+            "the orphaned Loading status must be released, got: {status:?}"
+        );
     }
 
     #[test]

@@ -6,8 +6,8 @@ use factory_sim::{EnemyDifficultyPreset, Simulation, SimulationConfig};
 
 use crate::save_load::{
     LoadState, PendingCatalogScan, PendingLoadJobs, PendingSaveConfirmation, PendingSaveJobs,
-    SaveCatalog, SaveId, SaveKind, SaveLoadConfig, SaveLoadStatus, delete_save_with_loads,
-    enter_swapped_world, load_save, request_catalog_scan,
+    SaveCatalog, SaveId, SaveKind, SaveLoadConfig, SaveLoadStatus, clear_loading_status_if_idle,
+    delete_save_with_loads, enter_swapped_world, load_save, request_catalog_scan,
 };
 use crate::ui::layout::scroll_column;
 use crate::ui::save_load::format_timestamp;
@@ -457,6 +457,7 @@ pub(crate) fn start_world_from_setup(
     mut requests: MessageReader<WorldSetupStartRequested>,
     mut setup: ResMut<WorldSetupState>,
     mut pending_loads: ResMut<PendingLoadJobs>,
+    mut status: ResMut<SaveLoadStatus>,
     mut load_state: LoadState,
 ) {
     if requests.read().count() == 0 {
@@ -483,6 +484,11 @@ pub(crate) fn start_world_from_setup(
     }
     // Last operation wins: the new world is newer than any queued load.
     pending_loads.cancel_all();
+    // With nothing left in flight, no worker completion remains to release
+    // an orphaned `Loading...` status, so clear it synchronously. A
+    // signalled running decode stays in place until collected, so its
+    // message is preserved until its terminal completion clears it.
+    clear_loading_status_if_idle(&pending_loads, &mut status);
     enter_swapped_world(&mut load_state, tick, player_tile);
 }
 
