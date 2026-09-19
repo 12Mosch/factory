@@ -120,6 +120,7 @@ pub(crate) fn tick_sim(
         results.write(SimCommandResult { command, result });
     }
     let profile = simulation.profiled_tick();
+    sim.publish_completed_tick(simulation.tick_count());
     drop(simulation);
     sim.set_changed();
     let tick_ms = profile.total.as_secs_f64() * 1000.0;

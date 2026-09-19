@@ -26,20 +26,23 @@
 //!
 //! * Saves to the same target serialize in FIFO request order, including
 //!   repeated named overwrites of one save.
-//! * Each save captures exactly one completed tick of the requested world,
-//!   pinned at admission. A request queued while a different world is
-//!   installed, or while the same world advances past the requested tick,
-//!   is discarded as stale instead of capturing another world's bytes or a
-//!   later tick, so requested completed-tick identity is never mixed across
-//!   worlds or ticks.
+//! * Each save captures exactly one completed tick of the requested world.
+//!   The admission tick is recorded lock-free for observability, but a
+//!   queued request captures the latest completed tick of that world when
+//!   its worker starts, so accepted FIFO saves keep working while the
+//!   simulation ticks. A request queued while a different world is installed
+//!   is discarded as stale instead of capturing another world's bytes, and
+//!   the captured tick is reported in the outcome, so requested
+//!   completed-tick identity is never mixed across worlds.
 //! * Each load result carries its request id and the world generation observed
 //!   when its worker started. A result installs only when its request is still
 //!   the newest and no newer world installation happened after the worker
 //!   started. Out-of-order or superseded completions are discarded, never
 //!   installed over a newer world.
-//! * Each load candidate also records the target's writer epoch before its
-//!   worker opens the file. A save committed afterwards replaces the decoded
-//!   bytes, so the request restarts and converges on the committed bytes
+//! * Each load candidate also records the target's writer epoch and file
+//!   identity before its worker opens the file. A save committed afterwards,
+//!   or an external replacement of the path, no longer matches the decoded
+//!   instance, so the request restarts and converges on the current bytes
 //!   instead of installing a rollback.
 //!
 //! # Shutdown and cancellation
@@ -198,8 +201,7 @@ pub enum SaveJobError {
     Io(String),
     /// Cancelled before commit; never reported as committed.
     Cancelled,
-    /// A newer world was installed, or the same world ticked past the
-    /// requested tick, while waiting; result discarded.
+    /// A newer world was installed while waiting; result discarded.
     Stale,
 }
 
@@ -219,7 +221,7 @@ impl fmt::Display for SaveJobError {
             Self::Encode(detail) => write!(formatter, "{detail}"),
             Self::Io(detail) => write!(formatter, "save I/O failed: {detail}"),
             Self::Cancelled => write!(formatter, "save cancelled before commit"),
-            Self::Stale => write!(formatter, "save superseded by a newer world or tick"),
+            Self::Stale => write!(formatter, "save superseded by a newer world"),
         }
     }
 }

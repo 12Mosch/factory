@@ -629,6 +629,37 @@ fn deleting_a_save_removes_recovery_artifacts_without_resurrection() {
 }
 
 #[test]
+fn deleting_an_externally_removed_save_prunes_the_stale_entry() {
+    use factory_app::save_load::{SaveLoadStatus, SaveLoadStatusKind};
+    let mut app = test_app(Duration::ZERO, "delete_missing_file");
+    app.update();
+    create_named_save(&mut app, "Vanished");
+    drain_save_jobs(&mut app);
+    let entry = app.world().resource::<SaveCatalog>().entries()[0].clone();
+    // An external actor removes the file while the manager is open.
+    fs::remove_file(entry.path()).unwrap();
+    press_entry(&mut app, &entry.id, SaveEntryAction::Delete);
+    app.update();
+    press_confirmation(&mut app, true);
+    app.update();
+    // The missing file is still reported, but the stale entry is pruned
+    // instead of lingering for every repeated delete.
+    let status = app.world().resource::<SaveLoadStatus>().clone();
+    assert_eq!(status.kind, SaveLoadStatusKind::Error);
+    assert!(
+        status
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("missing")),
+        "deleting a missing file must report it, got: {status:?}"
+    );
+    assert!(
+        app.world().resource::<SaveCatalog>().entries().is_empty(),
+        "the stale entry must be pruned when the file is known missing"
+    );
+}
+
+#[test]
 fn background_submission_remains_non_blocking_and_metrics_populate() {
     let mut app = test_app(Duration::ZERO, "metrics");
     let captured_tick = app.world().resource::<SimResource>().read().tick_count();

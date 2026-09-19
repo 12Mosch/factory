@@ -9,6 +9,11 @@ pub struct SimResource {
     inner: Option<Arc<RwLock<Simulation>>>,
     replacement_revision: u64,
     generation: Arc<AtomicU64>,
+    /// Latest completed simulation tick, published after every fixed tick
+    /// and world installation. Lets frame-side submission record the
+    /// requested tick identity with a lock-free load instead of blocking on
+    /// the simulation lock.
+    completed_tick: Arc<AtomicU64>,
     active_snapshot_captures: Arc<AtomicU64>,
     snapshot_blocked_fixed_ticks: Arc<AtomicU64>,
 }
@@ -38,6 +43,7 @@ impl SimResource {
             inner: None,
             replacement_revision: 0,
             generation: Arc::new(AtomicU64::new(0)),
+            completed_tick: Arc::new(AtomicU64::new(0)),
             active_snapshot_captures: Arc::new(AtomicU64::new(0)),
             snapshot_blocked_fixed_ticks: Arc::new(AtomicU64::new(0)),
         }
@@ -45,10 +51,12 @@ impl SimResource {
 
     /// Creates an initialized resource containing an active simulation.
     pub fn new(sim: Simulation) -> Self {
+        let tick = sim.tick_count();
         Self {
             inner: Some(Arc::new(RwLock::new(sim))),
             replacement_revision: 0,
             generation: Arc::new(AtomicU64::new(0)),
+            completed_tick: Arc::new(AtomicU64::new(tick)),
             active_snapshot_captures: Arc::new(AtomicU64::new(0)),
             snapshot_blocked_fixed_ticks: Arc::new(AtomicU64::new(0)),
         }
@@ -103,14 +111,18 @@ impl SimResource {
                 }
             };
             *guard = sim;
+            let tick = guard.tick_count();
             self.replacement_revision = self.replacement_revision.wrapping_add(1);
             self.generation
                 .store(self.replacement_revision, Ordering::Release);
+            self.completed_tick.store(tick, Ordering::Release);
         } else {
+            let tick = sim.tick_count();
             self.inner = Some(Arc::new(RwLock::new(sim)));
             self.replacement_revision = self.replacement_revision.wrapping_add(1);
             self.generation
                 .store(self.replacement_revision, Ordering::Release);
+            self.completed_tick.store(tick, Ordering::Release);
         }
         Ok(())
     }
@@ -132,6 +144,19 @@ impl SimResource {
     /// Returns the wrapping revision incremented after every successful world installation.
     pub(crate) fn replacement_revision(&self) -> u64 {
         self.replacement_revision
+    }
+
+    /// Returns the latest completed simulation tick without locking. Updated
+    /// after every fixed tick and world installation, so frame-side code can
+    /// observe tick identity without blocking on the simulation lock.
+    pub(crate) fn completed_tick(&self) -> u64 {
+        self.completed_tick.load(Ordering::Acquire)
+    }
+
+    /// Publishes a newly completed tick. Called after fixed ticks and world
+    /// installations.
+    pub(crate) fn publish_completed_tick(&self, tick: u64) {
+        self.completed_tick.store(tick, Ordering::Release);
     }
 
     /// Clones the active simulation handle for background snapshot capture.

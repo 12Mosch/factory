@@ -7,7 +7,9 @@
 //! and world-generation ids so stale or out-of-order completions cannot
 //! install over a newer world.
 
+use super::SaveFileMetadataFingerprint;
 use super::SaveId;
+use super::catalog::inspect::save_file_metadata_fingerprint;
 use super::catalog::validation::CancelReader;
 use super::container::{ContainerError, load_simulation_from_reader, save_artifact_epoch};
 use super::lifecycle::{
@@ -17,7 +19,7 @@ use factory_sim::{SaveLimits, Simulation};
 use std::collections::VecDeque;
 use std::fs;
 use std::io::BufReader;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU8, Ordering},
@@ -65,6 +67,12 @@ pub(crate) struct LoadCandidate {
     /// save committed afterwards replaces the decoded bytes, so the frame
     /// restarts the request instead of installing a rollback.
     pub artifact_epoch: u64,
+    /// File identity of the open handle the worker decoded. An external
+    /// actor (cloud sync, another process) can replace the path without
+    /// bumping the process-local epoch; the frame re-observes the path
+    /// before installation and restarts when it no longer resolves to this
+    /// instance (see [`ReadyLoad::is_file_replaced`]).
+    pub observed_identity: SaveFileMetadataFingerprint,
 }
 
 /// A validated candidate retained with its catalog identity for boundary
@@ -84,6 +92,30 @@ impl ReadyLoad {
     /// instead of installing a rollback.
     pub fn is_overtaken(&self) -> bool {
         super::container::save_artifact_epoch(&self.path) != self.candidate.artifact_epoch
+    }
+
+    /// Whether the path no longer resolves to the file instance the worker
+    /// decoded (external replacement). A single targeted open plus metadata
+    /// observation at the install boundary — not a directory scan — checked
+    /// while the artifact lock is held, so our own writer cannot commit
+    /// between the re-observation and the installation below. An unopenable
+    /// path counts as replaced: the restarted worker then surfaces the real
+    /// failure instead of installing obsolete bytes.
+    pub fn is_file_replaced(&self) -> bool {
+        let current = match fs::File::open(&self.path) {
+            Ok(file) => save_file_metadata_fingerprint(&file),
+            Err(_) => return true,
+        };
+        match (
+            &self.candidate.observed_identity.identity,
+            &current.identity,
+        ) {
+            (Some(expected), Some(actual)) => expected != actual,
+            _ => {
+                current.len != self.candidate.observed_identity.len
+                    || current.modified != self.candidate.observed_identity.modified
+            }
+        }
     }
 }
 
@@ -198,9 +230,15 @@ impl PendingLoadJobs {
 
     /// Cancels everything pending. New-world installation calls this so a
     /// previously requested load cannot install over the newer world.
+    /// Retires the authoritative latest request as well: otherwise a queued
+    /// newer load removed here keeps naming `latest_request`, the running
+    /// older load's cancellation is filtered as superseded, and its
+    /// `Loading...` status is orphaned forever with nothing left to clear
+    /// it.
     pub fn cancel_all(&mut self) {
         self.queue.clear();
         self.ready = None;
+        self.latest_request = None;
         if let Some(running) = &self.running
             && !running.handle.is_finished()
         {
@@ -267,10 +305,18 @@ impl PendingLoadJobs {
 impl Drop for PendingLoadJobs {
     fn drop(&mut self) {
         // Queued and ready loads never installed, so dropping them cancels
-        // without touching the world. Join the running decoder so shutdown
-        // does not detach file I/O.
+        // without touching the world. Signal the running decoder first: it
+        // is cancellation-aware (aborts at the next read chunk), so teardown
+        // latency does not scale with the remaining decode work. Joining
+        // afterwards stays deterministic: no detached worker can outlive the
+        // queue and hold save files.
         self.queue.clear();
         self.ready = None;
+        if let Some(running) = &self.running
+            && !running.handle.is_finished()
+        {
+            running.cancel.store(true, Ordering::Relaxed);
+        }
         self.join_running();
     }
 }
@@ -317,11 +363,12 @@ pub(crate) fn queue_load(
 /// (e.g. new-world installation) aborts a stale decode at the next read
 /// chunk instead of running it to completion. Reads fail with
 /// `ConnectionAborted` once the signal is set; see [`map_load_io_error`].
+/// Takes the already-open handle so the caller can bind the decoded bytes
+/// to that file instance (see `run_load_worker`).
 fn load_simulation_cancellable(
-    path: &Path,
+    file: fs::File,
     cancel: &Arc<AtomicBool>,
 ) -> Result<Simulation, ContainerError> {
-    let file = fs::File::open(path)?;
     let mut reader = BufReader::new(CancelReader {
         reader: file,
         cancel: Arc::clone(cancel),
@@ -364,7 +411,15 @@ fn run_load_worker(
     // between this read and the open) only causes a harmless restart that
     // re-decodes the committed bytes, never a rollback install.
     let artifact_epoch = save_artifact_epoch(&path);
-    let simulation = load_simulation_cancellable(&path, &cancel).map_err(|error| match error {
+    let file = match fs::File::open(&path) {
+        Ok(file) => file,
+        Err(io_error) => return Err(map_load_io_error(io_error, &cancel)),
+    };
+    // Bind the decoded bytes to this open handle: an external replacement
+    // afterwards changes what the path resolves to, and the install
+    // boundary restarts instead of installing the old instance's bytes.
+    let observed_identity = save_file_metadata_fingerprint(&file);
+    let simulation = load_simulation_cancellable(file, &cancel).map_err(|error| match error {
         ContainerError::Io(io_error) => map_load_io_error(io_error, &cancel),
         ContainerError::TooLarge => LoadJobError::TooLarge,
         ContainerError::Simulation(error) => super::map_load_error(error),
@@ -406,6 +461,7 @@ fn run_load_worker(
         player_tile,
         path,
         artifact_epoch,
+        observed_identity,
     })
 }
 
@@ -569,6 +625,7 @@ mod tests {
     #[test]
     fn overtaken_candidate_is_detected_by_writer_epoch() {
         use super::super::container::{bump_save_artifact_epoch, save_artifact_epoch};
+        use super::SaveFileMetadataFingerprint;
         let path = PathBuf::from("overtaken.factsim");
         let candidate = |epoch| LoadCandidate {
             request_id: PersistenceRequestId::next(),
@@ -578,6 +635,11 @@ mod tests {
             player_tile: (0.0, 0.0),
             path: path.clone(),
             artifact_epoch: epoch,
+            observed_identity: SaveFileMetadataFingerprint {
+                len: 0,
+                modified: None,
+                identity: None,
+            },
         };
         let ready = |epoch| ReadyLoad {
             id: SaveId::new("quicksave"),
@@ -598,6 +660,112 @@ mod tests {
             ready(stale_epoch).is_overtaken(),
             "a candidate overtaken by a writer commit must restart"
         );
+    }
+
+    #[test]
+    fn replaced_file_is_detected_by_instance_identity() {
+        use super::SaveFileMetadataFingerprint;
+        let dir = std::env::temp_dir().join(format!(
+            "factory-load-identity-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.factsim");
+        std::fs::write(&path, vec![0x41u8; 1024]).unwrap();
+        let observed = save_file_metadata_fingerprint(&std::fs::File::open(&path).unwrap());
+        let ready = |identity: SaveFileMetadataFingerprint| ReadyLoad {
+            id: SaveId::new("quicksave"),
+            display_name: "Quicksave".into(),
+            request_id: PersistenceRequestId::next(),
+            path: path.clone(),
+            candidate: LoadCandidate {
+                request_id: PersistenceRequestId::next(),
+                observed_generation: 0,
+                simulation: Simulation::new_test_world(11),
+                tick: 0,
+                player_tile: (0.0, 0.0),
+                path: path.clone(),
+                artifact_epoch: super::super::container::save_artifact_epoch(&path),
+                observed_identity: identity,
+            },
+        };
+        // Unmodified path still resolves to the decoded instance.
+        assert!(
+            !ready(observed.clone()).is_file_replaced(),
+            "an unmodified path must still resolve to the decoded instance"
+        );
+        // External atomic replacement (new inode): the old bytes must not
+        // install even though the process-local epoch never moved.
+        let replacement = dir.join("replacement.factsim");
+        std::fs::write(&replacement, vec![0x42u8; 1024]).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        assert!(
+            ready(observed).is_file_replaced(),
+            "an externally replaced path must restart instead of installing obsolete bytes"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn drop_signals_running_decoder_before_joining() {
+        // Teardown must signal the decoder's cancel token before joining:
+        // decoding aborts at the next read chunk instead of running to
+        // completion, so shutdown latency does not scale with the remaining
+        // work. The worker self-bounds its wait so a regression fails the
+        // test instead of hanging the suite.
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
+        let observed = Arc::new(AtomicBool::new(false));
+        let worker_observed = Arc::clone(&observed);
+        let handle = thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !worker_cancel.load(Ordering::Relaxed) {
+                if std::time::Instant::now() >= deadline {
+                    return Err(LoadJobError::Corrupt("test decoder timeout".into()));
+                }
+                thread::yield_now();
+            }
+            worker_observed.store(true, Ordering::Relaxed);
+            Err(LoadJobError::Cancelled)
+        });
+        let mut pending = PendingLoadJobs::default();
+        pending.running = Some(RunningLoad {
+            request_id: PersistenceRequestId::next(),
+            id: SaveId::new("teardown"),
+            display_name: "Teardown".into(),
+            observed_generation: 0,
+            phase: Arc::new(AtomicU8::new(LoadJobPhase::Reading.encode())),
+            cancel,
+            handle,
+        });
+        let start = std::time::Instant::now();
+        drop(pending);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "drop joined the decoder without signalling cancellation first"
+        );
+        assert!(
+            observed.load(Ordering::Relaxed),
+            "the decoder never observed the teardown signal"
+        );
+    }
+
+    #[test]
+    fn cancel_all_retires_latest_request() {
+        // A queued newer load removed by `cancel_all` must not keep naming
+        // `latest_request`: otherwise the running older load's cancellation
+        // is filtered as superseded and its `Loading...` status is orphaned
+        // with nothing left to clear it.
+        let mut pending = PendingLoadJobs::default();
+        pending.latest_request = Some(PersistenceRequestId::next());
+        pending.cancel_all();
+        assert_eq!(
+            pending.latest_request(),
+            None,
+            "cancel_all must retire the authoritative latest request"
+        );
+        assert!(pending.is_empty());
     }
 
     #[test]

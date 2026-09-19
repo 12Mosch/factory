@@ -286,6 +286,10 @@ pub fn delete_save_with_loads(
         return false;
     }
     if !entry.path.is_file() {
+        // The catalog view is stale: the file is already gone. Prune the
+        // entry immediately (bumping the scan epoch so an in-flight scan
+        // cannot resurrect it) while still reporting the missing file.
+        catalog.remove(id);
         set_error(status, "Cannot delete: save file is missing.");
         return false;
     }
@@ -410,10 +414,8 @@ pub(crate) fn poll_save_jobs(
             }
             Err(SaveJobError::Stale) => {
                 if job.explicit {
-                    status.message = Some(format!(
-                        "{} superseded by a newer world or tick.",
-                        job.display_name
-                    ));
+                    status.message =
+                        Some(format!("{} superseded by a newer world.", job.display_name));
                     status.kind = SaveLoadStatusKind::Info;
                     status.last_completed_id = None;
                 }
@@ -611,7 +613,7 @@ pub(crate) fn poll_load_jobs(
                     // newer load is not stale after an older install. The
                     // orphaned "Loading..." status is released when this was
                     // the latest request and nothing remains.
-                    clear_loading_status_if_idle(&pending, &mut status, &completed.display_name);
+                    clear_loading_status_if_idle(&pending, &mut status);
                     continue;
                 }
                 let ready = loads::ReadyLoad {
@@ -627,12 +629,12 @@ pub(crate) fn poll_load_jobs(
             }
             Err(LoadJobError::Cancelled | LoadJobError::Stale) => {
                 // Cancellation and superseding never touch the world and
-                // never report success. A terminal cancellation of the
-                // latest request must still release its "Loading..."
+                // never report success. A terminal end of the latest
+                // request must still release an orphaned "Loading..."
                 // status, or the manager keeps reporting a load forever
                 // after all jobs finish (e.g. new-world creation via
-                // `cancel_all`). Only messages this load owns are cleared.
-                clear_loading_status_if_idle(&pending, &mut status, &completed.display_name);
+                // `cancel_all`).
+                clear_loading_status_if_idle(&pending, &mut status);
             }
             Err(LoadJobError::TransientIo(detail)) => {
                 set_error(
@@ -662,24 +664,23 @@ pub(crate) fn poll_load_jobs(
     }
 }
 
-/// Releases a finished load's "Loading..." status when nothing remains.
-/// Only clears messages the given load owns — its `Loading {name}...` or the
-/// generic install-wait message — with an `Info` kind, so a newer save or
-/// load message is never wiped. Without this, cancelling the latest load
-/// (e.g. starting a new world mid-decode) leaves the manager reporting a
-/// load forever after all jobs finish.
-fn clear_loading_status_if_idle(
-    pending: &PendingLoadJobs,
-    status: &mut SaveLoadStatus,
-    display_name: &str,
-) {
+/// Releases an orphaned "Loading..." status when no loads remain. Clears any
+/// `Info` loading message — a specific `Loading {name}...` or the generic
+/// install-wait message — so cancelling the latest load (e.g. starting a new
+/// world mid-decode, including the queued-newest case where the removed newer
+/// request named `latest_request`) never leaves the manager reporting a load
+/// forever. Safe when idle: a live load always populates the queue, worker,
+/// or retained candidate, so no current request can own the message; save
+/// messages and error statuses are never touched.
+fn clear_loading_status_if_idle(pending: &PendingLoadJobs, status: &mut SaveLoadStatus) {
     if !pending.is_empty() || status.kind != SaveLoadStatusKind::Info {
         return;
     }
-    let owned = status.message.as_deref() == Some(&format!("Loading {display_name}..."))
-        || status.message.as_deref()
-            == Some("Loading... waiting for the save to release the world.");
-    if owned {
+    if status
+        .message
+        .as_deref()
+        .is_some_and(|message| message.starts_with("Loading"))
+    {
         status.message = None;
         status.last_completed_id = None;
     }
@@ -738,11 +739,13 @@ fn install_ready_load(
         return false;
     };
     // A save committed after the worker opened its handle replaces the
-    // target with bytes the candidate never decoded. Installing would roll
-    // the world back, so restart the request instead: quickload converges
-    // on the committed bytes once saves settle. Checked under the artifact
-    // lock, so no commit can land before the installation below.
-    if ready.is_overtaken() {
+    // target with bytes the candidate never decoded, and an external actor
+    // can replace the path without bumping the process-local epoch.
+    // Installing either would roll the world back, so restart the request
+    // instead: quickload converges on the current bytes once saves settle.
+    // Checked under the artifact lock, so our own writer cannot commit
+    // between the re-observation and the installation below.
+    if ready.is_overtaken() || ready.is_file_replaced() {
         drop(_artifact_guard);
         let observed = if state.sim.is_initialized() {
             state.sim.replacement_revision()
@@ -787,6 +790,7 @@ fn install_ready_load(
     let candidate_player = candidate.player_tile;
     let candidate_path = candidate.path.clone();
     let candidate_epoch = candidate.artifact_epoch;
+    let candidate_identity = candidate.observed_identity.clone();
     // Two nested atomic steps: the artifact guard (held since the overtaken
     // check) blocks our writer from committing between the check and this
     // `install`, which itself swaps the world and publishes the new
@@ -826,6 +830,7 @@ fn install_ready_load(
                         player_tile: candidate_player,
                         path: candidate_path,
                         artifact_epoch: candidate_epoch,
+                        observed_identity: candidate_identity,
                     },
                 });
                 if status.kind != SaveLoadStatusKind::Error {
@@ -999,7 +1004,7 @@ mod tests {
             kind: SaveLoadStatusKind::Info,
             last_completed_id: None,
         };
-        clear_loading_status_if_idle(&pending, &mut status, "Base");
+        clear_loading_status_if_idle(&pending, &mut status);
         assert!(
             status.message.is_none(),
             "a terminal latest load must not leave its Loading status behind, got: {status:?}"
@@ -1007,23 +1012,33 @@ mod tests {
     }
 
     #[test]
-    fn loading_status_clearing_never_wipes_newer_messages() {
-        let pending = PendingLoadJobs::default();
-        // Another load's message is not owned by this completion.
+    fn loading_status_clearing_never_wipes_live_or_unrelated_messages() {
+        // A queued newer load keeps the queue non-empty, so its message is
+        // preserved even though another completion ended.
+        let mut pending = PendingLoadJobs::default();
+        loads::queue_load(
+            SaveId::new("rescue"),
+            "Rescue".into(),
+            PathBuf::from("rescue.factsim"),
+            0,
+            &mut pending,
+        );
         let mut status = SaveLoadStatus {
             message: Some("Loading Rescue...".into()),
             kind: SaveLoadStatusKind::Info,
             last_completed_id: None,
         };
-        clear_loading_status_if_idle(&pending, &mut status, "Base");
+        clear_loading_status_if_idle(&pending, &mut status);
         assert_eq!(status.message.as_deref(), Some("Loading Rescue..."));
+        // The remaining checks use an idle queue.
+        let idle = PendingLoadJobs::default();
         // Error statuses are never cleared.
         let mut status = SaveLoadStatus {
             message: Some("Loading Base...".into()),
             kind: SaveLoadStatusKind::Error,
             last_completed_id: None,
         };
-        clear_loading_status_if_idle(&pending, &mut status, "Base");
+        clear_loading_status_if_idle(&idle, &mut status);
         assert_eq!(status.message.as_deref(), Some("Loading Base..."));
         // Save messages are not loading messages.
         let mut status = SaveLoadStatus {
@@ -1031,7 +1046,7 @@ mod tests {
             kind: SaveLoadStatusKind::Info,
             last_completed_id: None,
         };
-        clear_loading_status_if_idle(&pending, &mut status, "Base");
+        clear_loading_status_if_idle(&idle, &mut status);
         assert_eq!(status.message.as_deref(), Some("Saving Base..."));
     }
 

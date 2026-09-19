@@ -374,10 +374,13 @@ pub(crate) fn queue_save(
     }
     let submission_start = Instant::now();
     let requested_generation = sim.replacement_revision();
-    // The completed tick at admission: a queued request preserves this exact
-    // identity and goes stale if the world ticks before the worker starts,
-    // instead of silently capturing a later tick.
-    let requested_tick = sim.read().tick_count();
+    // The completed tick at admission, read lock-free so submission never
+    // blocks on the simulation lock. Queued requests capture the latest
+    // completed tick when their worker starts (see `run_save_worker`), so
+    // FIFO acceptance keeps working while the world ticks; the requested
+    // tick is retained for observability and the captured tick is reported
+    // in the outcome.
+    let requested_tick = sim.completed_tick();
     let source = sim.snapshot_source();
     let request_id = PersistenceRequestId::next();
     pending.queue.push_back(QueuedSave {
@@ -428,17 +431,17 @@ fn run_save_worker(
         .map_err(|_| SaveJobError::LockPoisoned)?;
     let snapshot_lock_wait_ms = lock_wait_start.elapsed().as_secs_f64() * 1000.0;
     let lock_acquired = Instant::now();
-    // Enforce the requested world and tick identity: a world installed
-    // while this request waited mutates the same lock, and a tick that
-    // advanced while queued means the requested completed tick is no longer
-    // capturable. Capturing now would mix the requested identity with
-    // another world's bytes or a later tick. The stale request is discarded
-    // with the previous save intact instead.
+    // Enforce the requested world identity: a world installed while this
+    // request waited in the queue mutates the same lock, so capturing now
+    // would mix the requested tick identity with another world's bytes. The
+    // stale request is discarded with the previous save intact instead.
+    // Ticks are intentionally not pinned: a queued request captures the
+    // latest completed tick of the requested world when its worker starts
+    // (preserving FIFO acceptance while the simulation ticks), and the
+    // captured tick is reported in the outcome. `requested_tick` is retained
+    // for observability only.
     let capture_generation = source.generation.load(Ordering::Acquire);
     if capture_generation != requested_generation {
-        return Err(SaveJobError::Stale);
-    }
-    if sim.tick_count() != requested_tick {
         return Err(SaveJobError::Stale);
     }
     let capture_activity = SnapshotCaptureActivity::begin(&source.active_captures);
@@ -630,7 +633,7 @@ mod tests {
     fn queued_saves_stay_within_documented_bounds() {
         let sim = SimResource::new(factory_sim::Simulation::new_test_world(7));
         let source = sim.snapshot_source();
-        let requested_tick = sim.read().tick_count();
+        let requested_tick = sim.completed_tick();
         let mut pending = PendingSaveJobs::default();
         for index in 0..MAX_QUEUED_SAVES {
             pending.queue.push_back(QueuedSave {
@@ -677,7 +680,7 @@ mod tests {
                 normalized_name: None,
                 explicit: true,
                 requested_generation: 0,
-                requested_tick: sim.read().tick_count(),
+                requested_tick: sim.completed_tick(),
                 source,
             }]),
         };
@@ -733,7 +736,7 @@ mod tests {
         let sim = SimResource::new(factory_sim::Simulation::new_test_world(7));
         let source = sim.snapshot_source();
         let requested = source.generation.load(Ordering::Acquire);
-        let requested_tick = sim.read().tick_count();
+        let requested_tick = sim.completed_tick();
         let phase = Arc::new(AtomicU8::new(SaveJobPhase::Queued.encode()));
         let worker_phase = Arc::clone(&phase);
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -834,7 +837,7 @@ mod tests {
         }
         let source = sim.snapshot_source();
         let requested = source.generation.load(Ordering::Acquire);
-        let requested_tick = sim.read().tick_count();
+        let requested_tick = sim.completed_tick();
         let phase = Arc::new(AtomicU8::new(SaveJobPhase::Queued.encode()));
         let worker_phase = Arc::clone(&phase);
         let cancel = Arc::new(AtomicU8::new(SAVE_CANCEL_ACTIVE));
@@ -886,48 +889,55 @@ mod tests {
     }
 
     #[test]
-    fn queued_save_goes_stale_when_tick_advances_while_waiting() {
+    fn queued_save_captures_latest_tick_when_world_advances_while_waiting() {
         // A save accepted at tick N that waits while the same world advances
-        // to N+1 must not silently capture the later tick: the requested
-        // completed-tick identity is no longer capturable, so the worker
-        // reports Stale with the previous save intact.
+        // to N+1 captures the latest completed tick when its worker starts,
+        // so FIFO acceptance keeps working under normal gameplay. The
+        // requested tick is retained for observability and the captured tick
+        // is reported in the outcome.
         let mut sim = SimResource::new(factory_sim::Simulation::new_test_world(7));
         let source = sim.snapshot_source();
         let requested_generation = source.generation.load(Ordering::Acquire);
-        let requested_tick = sim.read().tick_count();
+        let requested_tick = sim.completed_tick();
         // The world ticks once after admission (e.g. while another save
-        // occupied the worker), so the requested tick is gone.
+        // occupied the worker).
         sim.write_for_tests().tick();
+        sim.publish_completed_tick(sim.read().tick_count());
+        let live_tick = sim.read().tick_count();
         assert_ne!(
-            sim.read().tick_count(),
-            requested_tick,
+            live_tick, requested_tick,
             "the test must advance the tick after admission"
         );
         let root = std::env::temp_dir().join(format!(
-            "factory-tick-stale-{}-{:?}",
+            "factory-tick-fifo-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
-        let result = run_save_worker(
+        let outcome = run_save_worker(
             PersistenceRequestId::next(),
             requested_generation,
             requested_tick,
-            SaveId::new("tick-stale"),
+            SaveId::new("tick-fifo"),
             SaveKind::Quicksave,
-            "Tick stale".into(),
+            "Tick fifo".into(),
             root.join("probe.factsim"),
             source,
             Arc::new(AtomicU8::new(SaveJobPhase::Queued.encode())),
             Arc::new(AtomicU8::new(SAVE_CANCEL_ACTIVE)),
             Arc::new(AtomicBool::new(false)),
+        )
+        .expect("a queued save must succeed with the latest tick");
+        assert_eq!(
+            outcome.snapshot_tick, live_tick,
+            "the worker must capture the latest completed tick"
+        );
+        assert_eq!(
+            outcome.requested_tick, requested_tick,
+            "the outcome must retain the admission tick for observability"
         );
         assert!(
-            matches!(result, Err(SaveJobError::Stale)),
-            "a queued save whose tick advanced must go stale, got {result:?}"
-        );
-        assert!(
-            !root.join("probe.factsim").exists(),
-            "a stale save must not install its target"
+            root.join("probe.factsim").exists(),
+            "the queued save must commit its target"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
