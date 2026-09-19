@@ -739,13 +739,16 @@ fn install_ready_load(
         return false;
     };
     // A save committed after the worker opened its handle replaces the
-    // target with bytes the candidate never decoded, and an external actor
-    // can replace the path without bumping the process-local epoch.
-    // Installing either would roll the world back, so restart the request
-    // instead: quickload converges on the current bytes once saves settle.
-    // Checked under the artifact lock, so our own writer cannot commit
-    // between the re-observation and the installation below.
-    if ready.is_overtaken() || ready.is_file_replaced() {
+    // target with bytes the candidate never decoded. An external actor can
+    // likewise replace the path without bumping the process-local epoch;
+    // the worker certifies the decoded instance off-thread and carries the
+    // verdict in the candidate (no filesystem work happens on this frame
+    // schedule). Installing either would roll the world back, so restart
+    // the request instead: quickload converges on the current bytes once
+    // saves settle. The epoch half is checked under the artifact lock, so
+    // our own writer cannot commit between the check and the installation
+    // below.
+    if ready.is_overtaken() || !ready.candidate.end_certified {
         drop(_artifact_guard);
         let observed = if state.sim.is_initialized() {
             state.sim.replacement_revision()
@@ -791,6 +794,7 @@ fn install_ready_load(
     let candidate_path = candidate.path.clone();
     let candidate_epoch = candidate.artifact_epoch;
     let candidate_identity = candidate.observed_identity.clone();
+    let candidate_certified = candidate.end_certified;
     // Two nested atomic steps: the artifact guard (held since the overtaken
     // check) blocks our writer from committing between the check and this
     // `install`, which itself swaps the world and publishes the new
@@ -831,6 +835,7 @@ fn install_ready_load(
                         path: candidate_path,
                         artifact_epoch: candidate_epoch,
                         observed_identity: candidate_identity,
+                        end_certified: candidate_certified,
                     },
                 });
                 if status.kind != SaveLoadStatusKind::Error {

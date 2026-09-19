@@ -26,24 +26,27 @@
 //!
 //! * Saves to the same target serialize in FIFO request order, including
 //!   repeated named overwrites of one save.
-//! * Each save captures exactly one completed tick of the requested world.
-//!   The admission tick is recorded lock-free for observability, but a
-//!   queued request captures the latest completed tick of that world when
-//!   its worker starts, so accepted FIFO saves keep working while the
-//!   simulation ticks. A request queued while a different world is installed
-//!   is discarded as stale instead of capturing another world's bytes, and
-//!   the captured tick is reported in the outcome, so requested
-//!   completed-tick identity is never mixed across worlds.
+//! * Each save captures exactly the completed tick recorded at admission.
+//!   Fixed steps defer while an accepted save has not secured its snapshot
+//!   (queued, or running but still capturing), so the world cannot tick out
+//!   from under the requested tick identity; once the worker holds the
+//!   snapshot, ticks resume while encoding and disk I/O proceed in the
+//!   background. A request queued while a different world is installed is
+//!   discarded as stale instead of capturing another world's bytes, and the
+//!   captured tick is reported in the outcome, so requested completed-tick
+//!   identity is never mixed across worlds or ticks.
 //! * Each load result carries its request id and the world generation observed
 //!   when its worker started. A result installs only when its request is still
 //!   the newest and no newer world installation happened after the worker
 //!   started. Out-of-order or superseded completions are discarded, never
 //!   installed over a newer world.
-//! * Each load candidate also records the target's writer epoch and file
-//!   identity before its worker opens the file. A save committed afterwards,
-//!   or an external replacement of the path, no longer matches the decoded
-//!   instance, so the request restarts and converges on the current bytes
-//!   instead of installing a rollback.
+//! * Each load candidate also records the target's writer epoch before its
+//!   worker opens the file, and the worker re-observes the decoded file
+//!   instance after decoding (off-thread) and carries the verdict. A save
+//!   committed afterwards, or an external replacement of the path, fails
+//!   the carried certification, so the request restarts and converges on
+//!   the current bytes instead of installing a rollback. The frame-side
+//!   install boundary stays memory-only.
 //!
 //! # Shutdown and cancellation
 //!

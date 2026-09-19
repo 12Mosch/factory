@@ -19,7 +19,7 @@ use factory_sim::{SaveLimits, Simulation};
 use std::collections::VecDeque;
 use std::fs;
 use std::io::BufReader;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU8, Ordering},
@@ -69,10 +69,15 @@ pub(crate) struct LoadCandidate {
     pub artifact_epoch: u64,
     /// File identity of the open handle the worker decoded. An external
     /// actor (cloud sync, another process) can replace the path without
-    /// bumping the process-local epoch; the frame re-observes the path
-    /// before installation and restarts when it no longer resolves to this
-    /// instance (see [`ReadyLoad::is_file_replaced`]).
+    /// bumping the process-local epoch; the worker re-observes the path
+    /// after decoding and records the verdict below, since the frame-side
+    /// boundary must stay memory-only.
     pub observed_identity: SaveFileMetadataFingerprint,
+    /// Off-thread replacement certification: the path still resolved to
+    /// [`Self::observed_identity`] when decoding finished. The install
+    /// boundary restarts uncertified candidates instead of installing
+    /// obsolete bytes.
+    pub end_certified: bool,
 }
 
 /// A validated candidate retained with its catalog identity for boundary
@@ -92,30 +97,6 @@ impl ReadyLoad {
     /// instead of installing a rollback.
     pub fn is_overtaken(&self) -> bool {
         super::container::save_artifact_epoch(&self.path) != self.candidate.artifact_epoch
-    }
-
-    /// Whether the path no longer resolves to the file instance the worker
-    /// decoded (external replacement). A single targeted open plus metadata
-    /// observation at the install boundary — not a directory scan — checked
-    /// while the artifact lock is held, so our own writer cannot commit
-    /// between the re-observation and the installation below. An unopenable
-    /// path counts as replaced: the restarted worker then surfaces the real
-    /// failure instead of installing obsolete bytes.
-    pub fn is_file_replaced(&self) -> bool {
-        let current = match fs::File::open(&self.path) {
-            Ok(file) => save_file_metadata_fingerprint(&file),
-            Err(_) => return true,
-        };
-        match (
-            &self.candidate.observed_identity.identity,
-            &current.identity,
-        ) {
-            (Some(expected), Some(actual)) => expected != actual,
-            _ => {
-                current.len != self.candidate.observed_identity.len
-                    || current.modified != self.candidate.observed_identity.modified
-            }
-        }
     }
 }
 
@@ -448,6 +429,13 @@ fn run_load_worker(
     if cancel.load(Ordering::Relaxed) {
         return Err(LoadJobError::Cancelled);
     }
+    // Off-thread replacement certification, carried with the candidate: an
+    // external actor can replace the path without bumping the process-local
+    // writer epoch, so re-observe it now (still on the worker) and record
+    // the verdict. The frame-side install boundary stays memory-only and
+    // restarts on an uncertified candidate instead of installing obsolete
+    // bytes.
+    let end_certified = certify_path_unchanged(&path, &observed_identity);
     let tick = simulation.tick_count();
     let player_tile = simulation.player().position_tiles();
     phase.store(LoadJobPhase::ReadyToInstall.encode(), Ordering::Relaxed);
@@ -462,7 +450,27 @@ fn run_load_worker(
         path,
         artifact_epoch,
         observed_identity,
+        end_certified,
     })
+}
+
+/// Whether the path still resolves to the decoded file instance: re-opens
+/// the path and compares against the open handle's fingerprint (stable file
+/// identity when available, length plus mtime otherwise). An unopenable
+/// path counts as changed so the caller restarts and surfaces the real
+/// failure instead of installing obsolete bytes.
+pub(crate) fn certify_path_unchanged(
+    path: &Path,
+    open_identity: &SaveFileMetadataFingerprint,
+) -> bool {
+    let current = match fs::File::open(path) {
+        Ok(file) => save_file_metadata_fingerprint(&file),
+        Err(_) => return false,
+    };
+    match (&open_identity.identity, &current.identity) {
+        (Some(expected), Some(actual)) => expected == actual,
+        _ => current.len == open_identity.len && current.modified == open_identity.modified,
+    }
 }
 
 pub(crate) fn take_completed_loads(pending: &mut PendingLoadJobs) -> Vec<CompletedLoad> {
@@ -640,6 +648,7 @@ mod tests {
                 modified: None,
                 identity: None,
             },
+            end_certified: true,
         };
         let ready = |epoch| ReadyLoad {
             id: SaveId::new("quicksave"),
@@ -663,8 +672,10 @@ mod tests {
     }
 
     #[test]
-    fn replaced_file_is_detected_by_instance_identity() {
-        use super::SaveFileMetadataFingerprint;
+    fn replacement_certification_detects_external_replacement() {
+        // The worker-side certification behind `end_certified`: re-observing
+        // the path off-thread. Unmodified, replaced, and removed paths are
+        // observed synchronously here, so no decode race is involved.
         let dir = std::env::temp_dir().join(format!(
             "factory-load-identity-{}-{:?}",
             std::process::id(),
@@ -674,25 +685,9 @@ mod tests {
         let path = dir.join("quicksave.factsim");
         std::fs::write(&path, vec![0x41u8; 1024]).unwrap();
         let observed = save_file_metadata_fingerprint(&std::fs::File::open(&path).unwrap());
-        let ready = |identity: SaveFileMetadataFingerprint| ReadyLoad {
-            id: SaveId::new("quicksave"),
-            display_name: "Quicksave".into(),
-            request_id: PersistenceRequestId::next(),
-            path: path.clone(),
-            candidate: LoadCandidate {
-                request_id: PersistenceRequestId::next(),
-                observed_generation: 0,
-                simulation: Simulation::new_test_world(11),
-                tick: 0,
-                player_tile: (0.0, 0.0),
-                path: path.clone(),
-                artifact_epoch: super::super::container::save_artifact_epoch(&path),
-                observed_identity: identity,
-            },
-        };
         // Unmodified path still resolves to the decoded instance.
         assert!(
-            !ready(observed.clone()).is_file_replaced(),
+            certify_path_unchanged(&path, &observed),
             "an unmodified path must still resolve to the decoded instance"
         );
         // External atomic replacement (new inode): the old bytes must not
@@ -701,8 +696,15 @@ mod tests {
         std::fs::write(&replacement, vec![0x42u8; 1024]).unwrap();
         std::fs::rename(&replacement, &path).unwrap();
         assert!(
-            ready(observed).is_file_replaced(),
-            "an externally replaced path must restart instead of installing obsolete bytes"
+            !certify_path_unchanged(&path, &observed),
+            "an externally replaced path must fail certification"
+        );
+        // A removed path fails closed: the restart surfaces the real
+        // failure instead of installing obsolete bytes.
+        std::fs::remove_file(&path).unwrap();
+        assert!(
+            !certify_path_unchanged(&path, &observed),
+            "a removed path must fail certification"
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

@@ -87,6 +87,24 @@ impl PendingSaveJobs {
         self.running.is_none() && self.queue.is_empty()
     }
 
+    /// Whether fixed ticks must defer: an accepted save has not yet secured
+    /// its snapshot under the simulation read lock — either waiting in the
+    /// queue, or running but still capturing. Deferring freezes the world so
+    /// it cannot tick out from under the requested completed-tick identity
+    /// between admission and capture; once the worker holds the snapshot
+    /// (encoding onward) ticks resume while I/O proceeds in the background.
+    pub(crate) fn snapshot_unsecured(&self) -> bool {
+        if !self.queue.is_empty() {
+            return true;
+        }
+        self.running.as_ref().is_some_and(|job| {
+            matches!(
+                SaveJobPhase::decode(job.phase.load(Ordering::Relaxed)),
+                SaveJobPhase::Queued | SaveJobPhase::Capturing
+            )
+        })
+    }
+
     pub fn any_running(&self) -> bool {
         self.running
             .as_ref()
@@ -375,11 +393,10 @@ pub(crate) fn queue_save(
     let submission_start = Instant::now();
     let requested_generation = sim.replacement_revision();
     // The completed tick at admission, read lock-free so submission never
-    // blocks on the simulation lock. Queued requests capture the latest
-    // completed tick when their worker starts (see `run_save_worker`), so
-    // FIFO acceptance keeps working while the world ticks; the requested
-    // tick is retained for observability and the captured tick is reported
-    // in the outcome.
+    // blocks on the simulation lock. Fixed ticks defer while this request
+    // has not secured its snapshot (see `snapshot_unsecured`), so the
+    // worker captures exactly this tick; the captured tick is reported in
+    // the outcome.
     let requested_tick = sim.completed_tick();
     let source = sim.snapshot_source();
     let request_id = PersistenceRequestId::next();
@@ -435,11 +452,11 @@ fn run_save_worker(
     // request waited in the queue mutates the same lock, so capturing now
     // would mix the requested tick identity with another world's bytes. The
     // stale request is discarded with the previous save intact instead.
-    // Ticks are intentionally not pinned: a queued request captures the
-    // latest completed tick of the requested world when its worker starts
-    // (preserving FIFO acceptance while the simulation ticks), and the
-    // captured tick is reported in the outcome. `requested_tick` is retained
-    // for observability only.
+    // Tick identity needs no check here: fixed ticks defer while any
+    // accepted save has not secured its snapshot (see
+    // `PendingSaveJobs::snapshot_unsecured`), so the world cannot advance
+    // between admission and this capture. `requested_tick` is retained for
+    // observability and the captured tick is reported in the outcome.
     let capture_generation = source.generation.load(Ordering::Acquire);
     if capture_generation != requested_generation {
         return Err(SaveJobError::Stale);
@@ -627,6 +644,103 @@ mod tests {
         assert!(pending.is_id_pending(&SaveId::new("test")));
         assert_eq!(take_completed(&mut pending).len(), 1);
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn unsecured_saves_defer_fixed_ticks_until_snapshot_secured() {
+        use crate::resources::{FixedStepCatchUpStats, SimProfileStats, UpsStats};
+        use crate::simulation::{SimCommandBacklog, SimCommandResult, tick_sim};
+        use bevy::prelude::{App, Update};
+
+        let mut app = App::new();
+        app.insert_resource(SimResource::new(factory_sim::Simulation::new_test_world(7)))
+            .init_resource::<SimCommandBacklog>()
+            .init_resource::<SimProfileStats>()
+            .init_resource::<FixedStepCatchUpStats>()
+            .init_resource::<PendingSaveJobs>()
+            .init_resource::<UpsStats>()
+            .add_message::<SimCommandResult>()
+            .add_systems(Update, tick_sim);
+
+        let tick = |app: &App| app.world().resource::<SimResource>().read().tick_count();
+        let blocked = |app: &App| {
+            app.world()
+                .resource::<SimProfileStats>()
+                .save_blocked_fixed_ticks
+        };
+        let before = tick(&app);
+        // Idle: ticks advance, nothing blocked.
+        app.update();
+        assert_eq!(tick(&app), before + 1);
+        assert_eq!(blocked(&app), 0);
+
+        // Two accepted saves with no worker started: the queue holds them,
+        // so fixed steps must defer instead of ticking out from under the
+        // requested completed-tick identity.
+        let source = app.world().resource::<SimResource>().snapshot_source();
+        for name in ["freeze-a", "freeze-b"] {
+            app.world_mut()
+                .resource_mut::<PendingSaveJobs>()
+                .queue
+                .push_back(QueuedSave {
+                    request_id: PersistenceRequestId::next(),
+                    id: SaveId::new(name),
+                    kind: SaveKind::Quicksave,
+                    display_name: name.into(),
+                    path: PathBuf::from(format!("{name}.factsim")),
+                    normalized_name: None,
+                    explicit: true,
+                    requested_generation: 0,
+                    requested_tick: before + 1,
+                    source: SnapshotSource {
+                        simulation: Arc::clone(&source.simulation),
+                        generation: Arc::clone(&source.generation),
+                        active_captures: Arc::clone(&source.active_captures),
+                        blocked_fixed_ticks: Arc::clone(&source.blocked_fixed_ticks),
+                    },
+                });
+        }
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(
+            tick(&app),
+            before + 1,
+            "ticks must freeze while accepted saves await their snapshot"
+        );
+        assert_eq!(blocked(&app), 3);
+
+        // Drained queue: ticks resume on the very next step.
+        app.world_mut()
+            .resource_mut::<PendingSaveJobs>()
+            .queue
+            .clear();
+        app.update();
+        assert_eq!(tick(&app), before + 2);
+        assert_eq!(blocked(&app), 3);
+    }
+
+    #[test]
+    fn snapshot_unsecured_tracks_capture_phase() {
+        let (running, release) = test_running_save("phase-probe");
+        let mut pending = PendingSaveJobs {
+            running: Some(running),
+            queue: VecDeque::new(),
+            shutdown: Arc::new(AtomicBool::new(false)),
+        };
+        // Still capturing: the snapshot is not secured, ticks must defer.
+        assert!(pending.snapshot_unsecured());
+        // Snapshot secured (encoding onward): ticks resume while I/O
+        // proceeds in the background.
+        pending
+            .running
+            .as_ref()
+            .expect("worker should be running")
+            .phase
+            .store(SaveJobPhase::Encoding.encode(), Ordering::Relaxed);
+        assert!(!pending.snapshot_unsecured());
+        release.send(()).unwrap();
+        pending.join_running();
     }
 
     #[test]
