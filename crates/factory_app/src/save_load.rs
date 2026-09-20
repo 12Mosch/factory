@@ -1,4 +1,5 @@
 mod catalog;
+pub(crate) mod commit;
 mod compatibility;
 mod container;
 mod freshness;
@@ -14,6 +15,7 @@ pub(crate) use catalog::poll_catalog_scan;
 pub(crate) use catalog::poll_catalog_validation_jobs;
 pub use catalog::{PendingCatalogScan, refresh_catalog_blocking, scan_catalog};
 pub(crate) use catalog::{poll_catalog_scan_system, request_catalog_scan};
+pub(crate) use commit::format_save_success;
 pub(crate) use container::write_save_bytes;
 pub use container::{
     BACKUP_ARTIFACT_MARKER, CONTAINER_MAGIC, CONTAINER_VERSION, MAX_METADATA_BYTES,
@@ -490,7 +492,12 @@ pub(crate) fn poll_save_jobs(
                 metrics.last_total_ms = outcome.total_ms;
                 metrics.last_bytes = outcome.bytes;
                 if job.explicit || status.kind != SaveLoadStatusKind::Error {
-                    status.message = Some(format!("{} saved.", job.display_name));
+                    // A degraded durability barrier is still a commit, never
+                    // an error: the message names the degraded barrier
+                    // explicitly instead of claiming full durability, and no
+                    // overwrite retry is triggered.
+                    status.message =
+                        Some(format_save_success(&job.display_name, &outcome.durability));
                     status.kind = SaveLoadStatusKind::Success;
                     status.last_completed_id = Some(job.id);
                 }
@@ -1175,6 +1182,27 @@ pub fn validate_loadable_file_for_tests(
 ) -> SaveCompatibility {
     let mut internal = std::collections::BTreeMap::new();
     catalog::validation::validate_loadable_file(path, kind, current_hash, &mut internal)
+}
+
+/// Test-only helper building a valid quicksave container for crash/recovery
+/// tests without exposing [`SaveId`] construction to integration tests.
+#[doc(hidden)]
+pub fn quicksave_container_for_tests(seed: u64, ticks: usize) -> Vec<u8> {
+    let mut simulation = factory_sim::Simulation::new_test_world(seed);
+    for _ in 0..ticks {
+        simulation.tick();
+    }
+    let payload = factory_sim::save_to_bytes(&simulation).expect("test world must encode");
+    let metadata = SaveMetadata {
+        schema_version: container::METADATA_SCHEMA_VERSION,
+        id: SaveId::new("quicksave"),
+        display_name: "Quicksave".into(),
+        kind: SaveKind::Quicksave,
+        completed_at_unix_ms: 42,
+        application_version: env!("CARGO_PKG_VERSION").into(),
+        world_seed: None,
+    };
+    container::encode_container(&metadata, &payload).expect("test save must encode")
 }
 
 pub fn format_save_load_error(error: SaveLoadError) -> String {

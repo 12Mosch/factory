@@ -2439,3 +2439,108 @@ fn inaccessible_save_reports_pending_not_corrupt() {
     );
     assert_eq!(compatibility, SaveCompatibility::ValidationPending);
 }
+
+#[test]
+fn subprocess_crash_artifacts_recover_to_one_generation() {
+    use factory_app::save_load::quicksave_container_for_tests;
+    use std::process::Command;
+
+    fn quicksave_bytes(seed: u64, ticks: usize) -> Vec<u8> {
+        quicksave_container_for_tests(seed, ticks)
+    }
+
+    fn crash_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "factory-subprocess-crash-{name}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    let probe = env!("CARGO_BIN_EXE_save_crash_probe");
+    let old_bytes = quicksave_bytes(77, 4);
+    let new_bytes = quicksave_bytes(77, 9);
+    assert_ne!(old_bytes, new_bytes);
+
+    // Crash after commit but before cleanup: the new primary must win and
+    // the leftover backup must be retired by the next scan.
+    for mode in [
+        "temp-pending",
+        "backup-with-primary",
+        "missing-primary-with-backup",
+        "new-primary-old-backup",
+    ] {
+        let root = crash_root(mode);
+        let config = SaveLoadConfig {
+            root_dir: root.clone(),
+            autosave_interval_ticks: 300,
+            autosave_slot_count: 5,
+        };
+        fs::write(root.join("quicksave.factsim"), &old_bytes).unwrap();
+        fs::write(root.join("new-staging.factsim"), &new_bytes).unwrap();
+        fs::write(root.join("old-staging.factsim"), &old_bytes).unwrap();
+
+        let status = Command::new(probe)
+            .arg(&root)
+            .arg(mode)
+            .status()
+            .expect("crash probe must run on Windows and Linux");
+        assert!(
+            !status.success(),
+            "probe mode {mode} must exit uncleanly like a crash"
+        );
+
+        let entries = scan_catalog(&config).unwrap();
+        assert_eq!(entries.len(), 1, "probe mode {mode} must leave one save");
+        let primary = fs::read(root.join("quicksave.factsim")).unwrap();
+        assert!(
+            primary == old_bytes || primary == new_bytes,
+            "probe mode {mode} must recover one complete generation, never a mixture"
+        );
+        // The recovered primary decodes as exactly one generation.
+        let (_, payload) = decode_container(&primary).unwrap();
+        let loaded = load_from_bytes(payload).unwrap();
+        let expected_tick = if primary == old_bytes { 4 } else { 9 };
+        assert_eq!(loaded.tick_count(), expected_tick);
+        // No temporary artifact survives recovery.
+        assert!(
+            !root.join("quicksave.factsim.tmp-probe-1").exists(),
+            "probe mode {mode} must not leave a temp artifact"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    // Ambiguous crash state from a subprocess: recovery preserves both
+    // candidates instead of guessing.
+    let root = crash_root("ambiguous");
+    let config = SaveLoadConfig {
+        root_dir: root.clone(),
+        autosave_interval_ticks: 300,
+        autosave_slot_count: 5,
+    };
+    fs::write(root.join("quicksave.factsim"), &old_bytes).unwrap();
+    fs::write(root.join("new-staging.factsim"), &new_bytes).unwrap();
+    fs::write(root.join("old-staging.factsim"), &old_bytes).unwrap();
+    let status = Command::new(probe)
+        .arg(&root)
+        .arg("ambiguous")
+        .status()
+        .expect("crash probe must run");
+    assert!(!status.success());
+    let entries = scan_catalog(&config).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert!(!entries[0].compatibility.can_load());
+    assert_eq!(
+        fs::read(root.join("quicksave.factsim")).unwrap(),
+        b"corrupt primary"
+    );
+    assert!(root.join("quicksave.factsim.bak-probe-1").exists());
+    assert!(root.join("quicksave.factsim.bak-probe-2").exists());
+    fs::remove_dir_all(root).unwrap();
+}

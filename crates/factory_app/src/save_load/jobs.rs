@@ -355,6 +355,10 @@ pub(crate) struct SaveJobOutcome {
     pub write_ms: f64,
     pub total_ms: f64,
     pub bytes: usize,
+    /// Post-commit durability barrier outcome. A degraded barrier is still a
+    /// commit and must surface as a warning, never as an I/O failure that
+    /// would invite an unsafe overwrite retry.
+    pub durability: super::commit::SaveDurability,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -622,6 +626,7 @@ fn run_save_worker(
         write_ms: (stream_ms - stream.encode_ms).max(0.0),
         total_ms: worker_start.elapsed().as_secs_f64() * 1000.0,
         bytes: stream.total_bytes,
+        durability: stream.durability,
     })
 }
 

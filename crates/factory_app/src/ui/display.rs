@@ -342,10 +342,19 @@ pub(crate) fn persist_display(mut state: ResMut<DisplayState>) {
             write_save_bytes(&state.path, text.as_bytes()).map_err(|error| error.to_string())
         });
     match result {
-        Ok(()) => {
+        Ok(durability) => {
             state.saved = state.confirmed;
             state.retry_after = None;
-            state.status.clear();
+            if let Some(reason) = durability.degraded_reason() {
+                // Committed but unsynced: keep the saved state (no retry that
+                // could overwrite success) while reporting the degraded
+                // barrier instead of a silent durable success.
+                warn!("Display settings installed but not synced: {reason}");
+                state.status =
+                    format!("Display settings saved, but durability is degraded ({reason}).");
+            } else {
+                state.status.clear();
+            }
         }
         Err(error) => {
             warn!("Could not save display settings: {error}");
