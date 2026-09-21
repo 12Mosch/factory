@@ -567,6 +567,21 @@ fn write_save_snapshot_locked(
     let (partial, durability) = write_temporary_and_commit(
         path,
         |writer| {
+            // Partial-I/O simulation: when the Write fault is set, leave a
+            // flushed partial prefix on disk (not just buffered bytes) so
+            // cleanup must remove a real partial file while the previous
+            // save stays intact. Disk-full and permission failures share
+            // this pre-commit contract; locked files surface as
+            // `PermissionDenied`, matching Windows sharing violations.
+            if faults.fails_at(CommitFaultPhase::Write) {
+                writer.write_all(&CONTAINER_MAGIC)?;
+                writer.flush()?;
+                return Err(ContainerError::Io(
+                    faults
+                        .check(CommitFaultPhase::Write)
+                        .expect_err("Write fault must fire"),
+                ));
+            }
             writer.write_all(&CONTAINER_MAGIC)?;
             writer.write_all(&CONTAINER_VERSION.to_le_bytes())?;
             writer.write_all(&metadata_len.to_le_bytes())?;
@@ -622,6 +637,19 @@ fn write_save_bytes_locked(
                 )?;
             } else {
                 check_size(bytes.len() as u64, limits.max_simulation_bytes())?;
+            }
+            // Partial-I/O simulation: flush a real partial prefix before
+            // failing so cleanup removes on-disk partial bytes, not just an
+            // empty buffered file.
+            if faults.fails_at(CommitFaultPhase::Write) {
+                let partial = bytes.len().saturating_add(1) / 2;
+                temp.write_all(&bytes[..partial])?;
+                temp.flush()?;
+                return Err(ContainerError::Io(
+                    faults
+                        .check(CommitFaultPhase::Write)
+                        .expect_err("Write fault must fire"),
+                ));
             }
             temp.write_all(bytes)?;
             Ok(())
@@ -719,9 +747,18 @@ fn write_temporary_and_commit<T>(
         if replaced {
             // The new primary is committed. Cleanup cannot turn that successful
             // save into an error; catalog refresh retries any leftover backup.
-            let _ = discard_save_artifact_with_faults(&backup_path, faults);
-            if faults.check(CommitFaultPhase::SyncParentPost).is_ok() {
-                let _ = sync_parent_directory(path);
+            // When the barrier already failed, cleanup removes files without
+            // issuing further syncs: a later successful parent sync would
+            // otherwise make the rename durable after this commit was already
+            // classified as unsynced, so the degraded verdict must match a
+            // state with no successful barrier after the rename.
+            if durability.degraded_reason().is_some() {
+                let _ = fs::remove_file(&backup_path);
+            } else {
+                let _ = discard_save_artifact_with_faults(&backup_path, faults);
+                if faults.check(CommitFaultPhase::SyncParentPost).is_ok() {
+                    let _ = sync_parent_directory(path);
+                }
             }
         }
         Ok((outcome, durability))
@@ -831,6 +868,11 @@ fn discard_save_artifact_with_faults(path: &Path, faults: &CommitFaults) -> io::
         retire_recovery_artifact(path, faults)
     } else if path.try_exists()? {
         fs::remove_file(path)?;
+        // A post-cleanup sync fault models sync failure after the removal:
+        // files are still removed, only the barrier is skipped.
+        if faults.fails_at(CommitFaultPhase::SyncParentPost) {
+            return Ok(());
+        }
         sync_parent_directory(path)
     } else {
         Ok(())
@@ -903,23 +945,38 @@ fn save_artifacts_for(path: &Path) -> io::Result<Vec<PathBuf>> {
 /// Atomically makes a committed backup ineligible before best-effort deletion.
 fn retire_recovery_artifact(path: &Path, faults: &CommitFaults) -> io::Result<()> {
     faults.check(CommitFaultPhase::Retire)?;
+    // A post-cleanup sync fault removes files without issuing further
+    // barriers: the removal stays visible while durability stays best-effort.
+    let skip_sync = faults.fails_at(CommitFaultPhase::SyncParentPost);
     if !path.try_exists()? {
         return Ok(());
     }
     let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
         fs::remove_file(path)?;
+        if skip_sync {
+            return Ok(());
+        }
         return sync_parent_directory(path);
     };
     let retired = path.with_file_name(format!("{file_name}{RETIRED_ARTIFACT_SUFFIX}"));
     match rename_file_no_replace(path, &retired) {
         Ok(()) => {
-            sync_parent_directory(path)?;
+            if !skip_sync {
+                sync_parent_directory(path)?;
+            }
             let _ = fs::remove_file(retired);
-            let _ = sync_parent_directory(path);
+            if !skip_sync {
+                let _ = sync_parent_directory(path);
+            }
             Ok(())
         }
         Err(rename_error) => match fs::remove_file(path) {
-            Ok(()) => sync_parent_directory(path),
+            Ok(()) => {
+                if skip_sync {
+                    return Ok(());
+                }
+                sync_parent_directory(path)
+            }
             Err(_) => Err(rename_error),
         },
     }
@@ -1235,10 +1292,22 @@ fn sync_installed_file(path: &Path) -> io::Result<()> {
     file_result.and(directory_result)
 }
 
-/// Uses directory fsync as the installation durability barrier elsewhere.
-#[cfg(not(windows))]
+/// Uses directory fsync as the installation durability barrier on Unix.
+#[cfg(unix)]
 fn sync_installed_file(path: &Path) -> io::Result<()> {
     sync_parent_directory(path)
+}
+
+/// Reports degraded durability where no portable barrier exists: there is no
+/// directory durability primitive to confirm the rename, so a commit must
+/// never read as fully durable. Pre-commit directory sync stays a best-effort
+/// no-op so saves still proceed; only the post-commit verdict degrades.
+#[cfg(not(any(unix, windows)))]
+fn sync_installed_file(_path: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "directory durability barrier unavailable on this platform",
+    ))
 }
 
 /// Builds catalog metadata when legacy or malformed metadata is unavailable.
@@ -2002,6 +2071,38 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(fs::read(&path).unwrap(), new_bytes);
         assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn post_cleanup_sync_failure_keeps_committed_save() {
+        let root = fault_test_root("sync-parent-post");
+        let path = root.join("manual-test.factsim");
+        let old_bytes = valid_container_bytes(12, 4, "Old");
+        let new_bytes = valid_container_bytes(12, 8, "New");
+        assert_ne!(old_bytes, new_bytes);
+        write_save_bytes(&path, &old_bytes).unwrap();
+
+        let faults = CommitFaults::fail_at(
+            CommitFaultPhase::SyncParentPost,
+            std::io::ErrorKind::StorageFull,
+        );
+        let durability = write_save_bytes_with_faults(&path, &new_bytes, &faults)
+            .expect("post-cleanup sync failure must not fail a committed save");
+        assert_eq!(durability.degraded_reason(), None);
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            new_bytes,
+            "the committed save wins even when post-cleanup sync fails"
+        );
+        let config = crate::save_load::SaveLoadConfig {
+            root_dir: root.clone(),
+            autosave_interval_ticks: 300,
+            autosave_slot_count: 5,
+        };
+        let entries = crate::save_load::scan_catalog(&config).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(fs::read(&path).unwrap(), new_bytes);
         fs::remove_dir_all(root).unwrap();
     }
 

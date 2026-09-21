@@ -2442,13 +2442,14 @@ fn inaccessible_save_reports_pending_not_corrupt() {
 
 #[test]
 fn subprocess_crash_artifacts_recover_to_one_generation() {
-    use factory_app::save_load::quicksave_container_for_tests;
     use std::process::Command;
 
-    fn quicksave_bytes(seed: u64, ticks: usize) -> Vec<u8> {
-        quicksave_container_for_tests(seed, ticks)
-    }
-
+    // The probe intentionally reconstructs artifact states with plain file
+    // copies instead of running the real commit in the child: crashing the
+    // real path would require shipping a crash hook in production code. The
+    // in-process fault matrix covers the real boundaries; the probe covers
+    // what in-process tests cannot — recovery driven by another OS process
+    // holding no shared mutex or epoch state.
     fn crash_root(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
             "factory-subprocess-crash-{name}-{}-{}",
@@ -2464,9 +2465,40 @@ fn subprocess_crash_artifacts_recover_to_one_generation() {
     }
 
     let probe = env!("CARGO_BIN_EXE_save_crash_probe");
-    let old_bytes = quicksave_bytes(77, 4);
-    let new_bytes = quicksave_bytes(77, 9);
+    // Generate two distinct valid quicksave generations through the real
+    // save path so staging needs no test-only metadata constructors. Time
+    // must advance for ticks to advance: `run_until_tick` has no deadline
+    // and spins forever on a frozen clock.
+    let mut app = test_app(Duration::ZERO, "crash_probe_source");
+    app.world_mut()
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+    run_until_tick(&mut app, 3);
+    freeze_time(&mut app);
+    tap_key(&mut app, KeyCode::F5);
+    drain_save_jobs(&mut app);
+    let source_path = app
+        .world()
+        .resource::<SaveLoadConfig>()
+        .root_dir
+        .join("quicksave.factsim");
+    let old_bytes = fs::read(&source_path).unwrap();
+    let (_, old_payload) = decode_container(&old_bytes).unwrap();
+    let old_tick = load_from_bytes(old_payload).unwrap().tick_count();
+    app.world_mut()
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+    run_until_tick(&mut app, old_tick + 1);
+    freeze_time(&mut app);
+    tap_key(&mut app, KeyCode::F5);
+    drain_save_jobs(&mut app);
+    let new_bytes = fs::read(&source_path).unwrap();
+    let (_, new_payload) = decode_container(&new_bytes).unwrap();
+    let new_tick = load_from_bytes(new_payload).unwrap().tick_count();
     assert_ne!(old_bytes, new_bytes);
+    assert_eq!(new_tick, old_tick + 1);
 
     // Crash after commit but before cleanup: the new primary must win and
     // the leftover backup must be retired by the next scan.
@@ -2506,7 +2538,11 @@ fn subprocess_crash_artifacts_recover_to_one_generation() {
         // The recovered primary decodes as exactly one generation.
         let (_, payload) = decode_container(&primary).unwrap();
         let loaded = load_from_bytes(payload).unwrap();
-        let expected_tick = if primary == old_bytes { 4 } else { 9 };
+        let expected_tick = if primary == old_bytes {
+            old_tick
+        } else {
+            new_tick
+        };
         assert_eq!(loaded.tick_count(), expected_tick);
         // No temporary artifact survives recovery.
         assert!(

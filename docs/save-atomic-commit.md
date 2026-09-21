@@ -41,7 +41,13 @@ process-wide artifact lock serializes directory mutations across threads.
   `SaveDurability::InstalledButUnsynced { reason }`: still a committed save,
   reported as `"<name> saved, but durability is degraded (...)"` with
   `Success` status — never an I/O error, and never an automatic overwrite
-  retry (retrying would replace a committed save).
+  retry (retrying would replace a committed save). Degraded commits skip
+  further post-commit barriers during cleanup (files are still removed) so
+  the verdict matches a state with no successful barrier after the rename;
+  a later successful parent sync would otherwise make the rename durable
+  after it was already classified as unsynced. Degraded durability is
+  always reported, including implicit autosaves landing under an active
+  error status.
 - Step-5 cleanup is best-effort. Leftover backups or `.retired` markers are
   removed by the next recovery scan.
 
@@ -55,9 +61,12 @@ process-wide artifact lock serializes directory mutations across threads.
 
 When stronger durability is unavailable (filesystem without directory
 `fsync`, `sync_all` returning `ENOSYS`/permission, locked handles on
-Windows), the save still commits; status reports degraded durability and no
-retry is scheduled. Pre-commit barrier failures (temp sync, pre-commit
-parent sync, backup) instead fail as I/O with the previous save intact.
+Windows, or platforms with no portable barrier primitive), the save still
+commits; status reports degraded durability and no retry is scheduled.
+Pre-commit barrier failures (temp sync, pre-commit parent sync, backup)
+instead fail as I/O with the previous save intact. Pre-commit directory
+sync stays best-effort so saves proceed where no primitive exists; only
+the post-commit verdict degrades.
 
 ## Single-process / single-writer ownership
 
@@ -99,11 +108,18 @@ candidates — the same rule whole-file recovery implements today.
 Deterministic injection (`CommitFaults`, one failing `CommitFaultPhase` per
 test) covers write, flush, temp sync, pre-commit parent sync, backup,
 rename, durability barrier, retirement, and post-commit parent sync with
-disk-full (`StorageFull`), permission/locked (`PermissionDenied`), and
-partial I/O (`Other`). The `save_crash_probe` binary supplements this with
-subprocess crash states on Windows and Linux (temp-pending,
-backup-with-primary, missing-primary-with-backup, new-primary-old-backup,
-ambiguous). Concurrent catalog scans during commits, intentional-deletion
-resurrection, and cancellation preserving the only recoverable backup are
-covered alongside the existing interruption-phase and ambiguous-backup
-suites.
+disk-full (`StorageFull`), permission/locked (`PermissionDenied`, matching
+Windows sharing violations), and partial I/O (`Other`, leaving a flushed
+partial prefix that cleanup must remove). Post-cleanup sync faults remove
+files without issuing further barriers. The `save_crash_probe` binary
+supplements this with subprocess crash states on Windows and Linux
+(temp-pending, backup-with-primary, missing-primary-with-backup,
+new-primary-old-backup, ambiguous): it reconstructs artifact states with
+plain file copies rather than running the real commit in the child (which
+would require shipping a crash hook in production); the fault matrix covers
+the real boundaries in-process, while the probe covers what in-process
+tests cannot — recovery driven by another OS process holding no shared
+mutex or epoch state. Concurrent catalog scans during commits,
+intentional-deletion resurrection, and cancellation preserving the only
+recoverable backup are covered alongside the existing interruption-phase
+and ambiguous-backup suites.

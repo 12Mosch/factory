@@ -15,7 +15,7 @@ pub(crate) use catalog::poll_catalog_scan;
 pub(crate) use catalog::poll_catalog_validation_jobs;
 pub use catalog::{PendingCatalogScan, refresh_catalog_blocking, scan_catalog};
 pub(crate) use catalog::{poll_catalog_scan_system, request_catalog_scan};
-pub(crate) use commit::format_save_success;
+pub(crate) use commit::{SaveDurability, format_save_success};
 pub(crate) use container::write_save_bytes;
 pub use container::{
     BACKUP_ARTIFACT_MARKER, CONTAINER_MAGIC, CONTAINER_VERSION, MAX_METADATA_BYTES,
@@ -440,6 +440,23 @@ pub(crate) fn handle_save_load_shortcuts(
     }
 }
 
+/// Whether a committed save replaces the UI status.
+///
+/// Routine durable autosaves stay silent while an error is active so they do
+/// not overwrite it. A degraded durability barrier always reports, even for
+/// an implicit autosave under an active error: no other path surfaces that
+/// outcome, and the latest save lacks confirmed durability.
+pub(crate) fn should_report_save_success(
+    explicit: bool,
+    status: SaveLoadStatusKind,
+    durability: &SaveDurability,
+) -> bool {
+    if durability.degraded_reason().is_some() {
+        return true;
+    }
+    explicit || status != SaveLoadStatusKind::Error
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn poll_save_jobs(
     config: Res<SaveLoadConfig>,
@@ -491,7 +508,12 @@ pub(crate) fn poll_save_jobs(
                 metrics.last_write_ms = outcome.write_ms;
                 metrics.last_total_ms = outcome.total_ms;
                 metrics.last_bytes = outcome.bytes;
-                if job.explicit || status.kind != SaveLoadStatusKind::Error {
+                // Degraded durability is always reported, even for an
+                // implicit autosave landing while an earlier error is
+                // active: routine durable autosaves stay silent to avoid
+                // overwriting that error, but a save lacking confirmed
+                // durability must never hide behind it.
+                if should_report_save_success(job.explicit, status.kind, &outcome.durability) {
                     // A degraded durability barrier is still a commit, never
                     // an error: the message names the degraded barrier
                     // explicitly instead of claiming full durability, and no
@@ -1184,27 +1206,6 @@ pub fn validate_loadable_file_for_tests(
     catalog::validation::validate_loadable_file(path, kind, current_hash, &mut internal)
 }
 
-/// Test-only helper building a valid quicksave container for crash/recovery
-/// tests without exposing [`SaveId`] construction to integration tests.
-#[doc(hidden)]
-pub fn quicksave_container_for_tests(seed: u64, ticks: usize) -> Vec<u8> {
-    let mut simulation = factory_sim::Simulation::new_test_world(seed);
-    for _ in 0..ticks {
-        simulation.tick();
-    }
-    let payload = factory_sim::save_to_bytes(&simulation).expect("test world must encode");
-    let metadata = SaveMetadata {
-        schema_version: container::METADATA_SCHEMA_VERSION,
-        id: SaveId::new("quicksave"),
-        display_name: "Quicksave".into(),
-        kind: SaveKind::Quicksave,
-        completed_at_unix_ms: 42,
-        application_version: env!("CARGO_PKG_VERSION").into(),
-        world_seed: None,
-    };
-    container::encode_container(&metadata, &payload).expect("test save must encode")
-}
-
 pub fn format_save_load_error(error: SaveLoadError) -> String {
     match error {
         SaveLoadError::TooLarge => "Cannot load save: it exceeds this build's save size or collection limits.".into(),
@@ -1276,6 +1277,39 @@ fn default_data_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn degraded_autosave_reports_even_under_active_error() {
+        let degraded = SaveDurability::unsynced("injected commit fault");
+        // Implicit autosaves stay silent on routine durable success while an
+        // error is active, but degraded durability must always surface: no
+        // other path reports it.
+        assert!(should_report_save_success(
+            false,
+            SaveLoadStatusKind::Error,
+            &degraded
+        ));
+        assert!(should_report_save_success(
+            true,
+            SaveLoadStatusKind::Error,
+            &degraded
+        ));
+        assert!(should_report_save_success(
+            false,
+            SaveLoadStatusKind::Info,
+            &SaveDurability::Durable
+        ));
+        assert!(!should_report_save_success(
+            false,
+            SaveLoadStatusKind::Error,
+            &SaveDurability::Durable
+        ));
+        assert!(should_report_save_success(
+            true,
+            SaveLoadStatusKind::Error,
+            &SaveDurability::Durable
+        ));
+    }
+
     #[test]
     fn overtaken_load_restarts_with_loading_status() {
         let mut pending = PendingLoadJobs::default();
