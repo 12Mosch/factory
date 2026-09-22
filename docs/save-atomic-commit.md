@@ -14,7 +14,11 @@ recovery in `catalog/recovery.rs`, and the status reporting in
 
 1. Encode the complete save into a sibling temporary file
    `<name>.factsim.tmp-<nonce>`. Flush the buffer, `sync_all` the file,
-   then sync the parent directory. The canonical path is untouched.
+   then sync the parent directory. Missing ancestors are recorded first;
+   the barrier in step 4 syncs every created directory plus the
+   pre-existing parent linking the new chain, so a first save never
+   reports durable while its own directories are still crash-removable.
+   The canonical path is untouched.
 2. Claim the commit point with a single `ACTIVE -> COMMITTING`
    compare-exchange on the request cancel flag. A racing cancel wins and
    aborts without installing; once claimed, cancellation reports too late.
@@ -24,7 +28,8 @@ recovery in `catalog/recovery.rs`, and the status reporting in
    - No primary: install with a no-replace primitive; on a race where a
      primary appeared, fall back to replacement.
 4. **Durability barrier.** Sync the installed file and directory metadata
-   (`sync_installed_file`).
+   (`sync_installed_file`), then every directory created in step 1 plus
+   the pre-existing linking parent.
 5. **Post-commit cleanup.** Retire the backup by renaming it to
    `<backup>.retired` (so a cleanup crash can never leave it eligible for
    recovery), delete it, and sync the parent directory. Failures here never

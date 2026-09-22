@@ -660,6 +660,51 @@ fn write_save_bytes_locked(
     Ok(durability)
 }
 
+/// Upper bound for the ancestor walk below: far beyond any real save-root
+/// nesting, while keeping a pathological path from stalling the commit.
+const MAX_ANCESTOR_WALK: usize = 256;
+
+/// Splits the save directory into newly missing components (child-first)
+/// plus the deepest pre-existing ancestor that links the new chain.
+///
+/// The post-install barrier syncs every created directory and that linking
+/// parent: without those barriers a crash can remove the whole new tree
+/// even though the save itself reported durable.
+fn missing_ancestor_chain(path: &Path) -> (Vec<PathBuf>, Option<PathBuf>) {
+    let mut missing = Vec::new();
+    let mut cursor = path.parent().map(Path::to_path_buf);
+    for _ in 0..MAX_ANCESTOR_WALK {
+        let Some(dir) = cursor else { break };
+        if dir.as_os_str().is_empty() {
+            break;
+        }
+        match dir.try_exists() {
+            Ok(true) => return (missing, Some(dir)),
+            // Unstatable ancestors fail in `create_dir_all` below when they
+            // truly block creation; syncing them post-install is harmless
+            // when they merely raced into existence.
+            _ => {
+                missing.push(dir.clone());
+                cursor = dir.parent().map(Path::to_path_buf);
+            }
+        }
+    }
+    (missing, None)
+}
+
+/// Syncs every created directory plus the pre-existing linking parent so a
+/// first save in a new root is as durable as it reports. Any failure
+/// degrades the commit instead of reading as fully durable.
+fn sync_created_ancestors(missing: &[PathBuf], base: Option<&Path>) -> io::Result<()> {
+    for dir in missing {
+        sync_directory(dir)?;
+    }
+    if let Some(base) = base {
+        sync_directory(base)?;
+    }
+    Ok(())
+}
+
 fn write_temporary_and_commit<T>(
     path: &Path,
     encode: impl FnOnce(&mut BufWriter<fs::File>) -> Result<T, ContainerError>,
@@ -669,6 +714,11 @@ fn write_temporary_and_commit<T>(
     faults
         .check(CommitFaultPhase::CreateDir)
         .map_err(ContainerError::Io)?;
+    // Record the ancestor chain before creating anything: the post-install
+    // barrier syncs every created directory plus the pre-existing parent
+    // that links the new chain, so a first save in a new root never reports
+    // durable while its own directories are still crash-removable.
+    let (missing_ancestors, ancestor_base) = missing_ancestor_chain(path);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -738,10 +788,14 @@ fn write_temporary_and_commit<T>(
         // See `SaveDurability` and `commit::format_save_success`.
         let durability = match faults.sync_barrier_error() {
             Some(error) => SaveDurability::unsynced(error),
-            None => match sync_installed_file(path) {
-                Ok(()) => SaveDurability::Durable,
-                Err(error) => SaveDurability::unsynced(error),
-            },
+            None => {
+                match sync_installed_file(path).and_then(|()| {
+                    sync_created_ancestors(&missing_ancestors, ancestor_base.as_deref())
+                }) {
+                    Ok(()) => SaveDurability::Durable,
+                    Err(error) => SaveDurability::unsynced(error),
+                }
+            }
         };
 
         if replaced {
@@ -1245,11 +1299,39 @@ fn install_new_file(temp_path: &Path, path: &Path, faults: &CommitFaults) -> io:
     Ok(())
 }
 
+/// Flushes one directory's own metadata with a directory fsync on Unix.
+#[cfg(unix)]
+fn sync_directory(dir: &Path) -> io::Result<()> {
+    fs::File::open(dir)?.sync_all()
+}
+
+/// Flushes one directory's own metadata through a backup-semantics handle.
+#[cfg(windows)]
+fn sync_directory(dir: &Path) -> io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    fs::OpenOptions::new()
+        .write(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(dir)?
+        .sync_all()
+}
+
+/// No-op where portable directory fsync is unavailable.
+#[cfg(not(any(unix, windows)))]
+fn sync_directory(_dir: &Path) -> io::Result<()> {
+    Ok(())
+}
+
 /// Flushes containing-directory metadata with a directory fsync on Unix.
 #[cfg(unix)]
 fn sync_parent_directory(path: &Path) -> io::Result<()> {
     match path.parent() {
-        Some(parent) => fs::File::open(parent)?.sync_all(),
+        Some(parent) => sync_directory(parent),
         None => Ok(()),
     }
 }
@@ -1257,20 +1339,10 @@ fn sync_parent_directory(path: &Path) -> io::Result<()> {
 /// Flushes Windows directory metadata through a backup-semantics handle.
 #[cfg(windows)]
 fn sync_parent_directory(path: &Path) -> io::Result<()> {
-    use std::os::windows::fs::OpenOptionsExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    };
-
     let Some(parent) = path.parent() else {
         return Ok(());
     };
-    fs::OpenOptions::new()
-        .write(true)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-        .open(parent)?
-        .sync_all()
+    sync_directory(parent)
 }
 
 /// No-op where portable directory fsync is unavailable.
@@ -2104,6 +2176,35 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(fs::read(&path).unwrap(), new_bytes);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn first_save_in_new_root_reports_durable() {
+        let outer = fault_test_root("new-root");
+        let path = outer.join("brand").join("new").join("manual-test.factsim");
+        assert!(!outer.join("brand").exists());
+        let durability =
+            write_save_bytes(&path, b"first generation").expect("first save must commit");
+        assert_eq!(durability.degraded_reason(), None);
+        assert_eq!(fs::read(&path).unwrap(), b"first generation");
+        fs::remove_dir_all(outer).unwrap();
+    }
+
+    #[test]
+    fn ancestor_sync_failures_degrade_instead_of_reading_durable() {
+        // The barrier must sync every created directory plus the linking
+        // parent; any failure degrades rather than reading as durable.
+        assert!(sync_created_ancestors(&[], None).is_ok());
+        let missing = std::env::temp_dir().join(format!(
+            "factory-no-such-dir-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        assert!(!missing.exists());
+        assert!(
+            sync_created_ancestors(std::slice::from_ref(&missing), None).is_err(),
+            "an unsyncable ancestor must degrade, never read as durable"
+        );
     }
 
     #[test]

@@ -10,7 +10,10 @@
 //!
 //! 1. Encode the complete save into a sibling temporary file
 //!    (`<name>.factsim.tmp-<nonce>`), flush the buffer, `sync_all` the file,
-//!    then sync the parent directory. No canonical path is touched.
+//!    then sync the parent directory. Missing ancestors are recorded first
+//!    (never created yet); the barrier in step 4 syncs every created
+//!    directory plus the pre-existing linking parent. No canonical path is
+//!    touched.
 //! 2. Claim the commit point with a single `ACTIVE -> COMMITTING`
 //!    compare-exchange on the request cancel flag. A racing cancel wins here
 //!    and aborts without installing; once claimed, cancellation is too late.
@@ -24,8 +27,9 @@
 //!    on Unix, `MoveFileExW` on Windows) and retry as a replacement if a
 //!    primary appeared concurrently.
 //! 4. **Durability barrier**: flush the installed file and directory metadata
-//!    (`sync_installed_file`). This barrier may fail while the installation
-//!    itself has already committed.
+//!    (`sync_installed_file`), then every directory created in step 1 plus
+//!    the pre-existing parent linking the new chain. This barrier may fail
+//!    while the installation itself has already committed.
 //! 5. **Post-commit cleanup**: retire the backup (rename to
 //!    `<backup>.retired` so a cleanup crash can never leave it eligible for
 //!    recovery, then delete) and sync the parent directory. Cleanup failures
@@ -145,7 +149,9 @@ pub(crate) enum CommitFaultPhase {
     SyncInstalled,
     /// Retiring the rollback backup after a replacing commit.
     Retire,
-    /// Syncing the parent directory after post-commit cleanup.
+    /// Syncing the parent directory after post-commit cleanup. Covers
+    /// cleanup metadata only: the installation barrier already succeeded,
+    /// so this failure still reports `Durable` and never rolls back.
     SyncParentPost,
 }
 
