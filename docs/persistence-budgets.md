@@ -128,24 +128,25 @@ update both encoder/decoder policy, memory/load budgets and these stress tests.
 Keep the monolithic full-copy format for the measured supported sizes. No
 measurements here justify copy-on-write pages, chunked state, or incremental
 persistence yet. Each admitted save pins its own immutable admission snapshot:
-with `MAX_QUEUED_SAVES = 4`, the request-count ceiling remains five generations,
-but capture also reserves three times its preflight record wire bytes from a
-160 MiB shared concurrency allowance before cloning. An isolated snapshot may
-reserve more, up to the three-times estimate of the 64 MiB wire ceiling, so a
-saveable world is not rejected solely for being large. The reservation follows each snapshot
-through the parked handoff and worker, and is released when the snapshot is
-dropped or a request is cancelled. At the measured large fixture size
-(22,388,172 wire bytes; 60,288,643 retained heap bytes), this admits two
-concurrent generations rather than five. A third fails with a retryable
-memory-budget status before its owned copy is allocated. The three-times
-factor covers this measured fixture with some margin, but wire bytes are not
-an exact bound on Rust heap usage; the allocator peak measurements remain the
-regression guard. With no shared pages there are no worker-retained old pages
+with `MAX_QUEUED_SAVES = 4`, the request-count ceiling remains five generations.
+Capture also charges three times its preflight record wire bytes against a
+160 MiB shared admission allowance before cloning. This is an empirical
+concurrency heuristic, not a bound on retained Rust heap bytes: collection
+capacity and object overhead vary by world. An isolated snapshot may exceed
+the shared allowance, up to the three-times estimate of the 64 MiB wire ceiling,
+so a saveable world is not rejected solely for being large. The reservation
+follows each snapshot through the parked handoff and worker, and is released
+after encoding or when a request is cancelled. At the measured large fixture
+size (22,388,172 wire bytes; 60,288,643 retained heap bytes), the heuristic
+admits two concurrent generations rather than five. A third fails with a
+retryable admission-budget status before its owned copy is allocated. The
+allocator peak measurements remain the heap regression guard. With no shared
+pages there are no worker-retained old pages
 or dirty page copies to add to the accounting. Queued requests retain
 parameters plus the parked-snapshot handoff. During encoding the running snapshot
-coexists with its bounded payload buffer. The snapshot is dropped before
-allocating the similarly bounded app container, and the payload is dropped
-before writing. One save worker runs at a time; accepted manual saves wait in
+coexists with its bounded payload buffer. The snapshot and its reservation
+are dropped immediately after encoding, before flush, sync, and commit work.
+One save worker runs at a time; accepted manual saves wait in
 a bounded FIFO (same-target overwrites serialize in request order) while
 autosaves coalesce by target and drop under backpressure instead of queueing.
 Capture tasks, encoding, and disk I/O run off the frame schedule, so
