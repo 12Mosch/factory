@@ -1064,8 +1064,7 @@ fn legacy_save_without_seed_shows_unknown_but_load_preserves_original_seed() {
 
     app.world_mut().resource_mut::<SaveLoadWindowState>().open = true;
     app.world_mut().resource_mut::<SaveLoadWindowState>().tab = SaveLoadTab::Load;
-    app.update();
-    app.update();
+    refresh_manager(&mut app);
     let texts: Vec<String> = app
         .world_mut()
         .query::<&Text>()
