@@ -14,10 +14,10 @@
 //!
 //! * Save workers: at most [`MAX_SAVE_WORKERS`] running. Each admitted save
 //!   retains its own immutable admission snapshot until its worker encodes
-//!   it, so at most [`MAX_QUEUED_SAVES`] parked plus one running generation
-//!   are retained ([`MAX_RETAINED_SAVE_GENERATIONS`] bounds the running
-//!   worker's share). Queued requests additionally retain only parameters
-//!   plus the parked-snapshot handoff.
+//!   it. Admission also reserves a shared byte allowance from the preflight
+//!   wire size before cloning, so the request-count ceiling is not the only
+//!   limit. [`MAX_RETAINED_SAVE_GENERATIONS`] bounds the running worker's
+//!   share. Queued requests retain parameters plus the parked-snapshot handoff.
 //! * Queued saves: at most [`MAX_QUEUED_SAVES`]. Manual (explicit) saves are
 //!   FIFO; autosaves coalesce by target and apply backpressure by dropping.
 //! * Load workers: at most [`MAX_LOAD_WORKERS`] running with at most
@@ -208,6 +208,8 @@ impl LoadJobPhase {
 pub enum SaveJobError {
     /// World exceeds the snapshot capture budget; previous save is intact.
     CaptureBudget,
+    /// Concurrent snapshots would exceed the admission memory allowance.
+    MemoryBudget,
     /// Simulation lock poisoned; restart is the actionable recovery.
     LockPoisoned,
     /// Snapshot capture failed before any byte was written.
@@ -231,6 +233,10 @@ impl fmt::Display for SaveJobError {
                     "save exceeds this build's snapshot capture budget"
                 )
             }
+            Self::MemoryBudget => write!(
+                formatter,
+                "too many snapshots are being saved; try again when a save finishes"
+            ),
             Self::LockPoisoned => write!(formatter, "simulation lock poisoned"),
             Self::CaptureFailed(detail) => {
                 write!(formatter, "snapshot capture failed: {detail}")

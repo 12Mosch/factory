@@ -315,7 +315,7 @@ pub(super) fn measure_record(
 pub(super) fn preflight_record_sizes(
     fields: &BorrowedRecordFields<'_>,
     limits: crate::SaveLimits,
-) -> Result<(), SaveLoadError> {
+) -> Result<u64, SaveLoadError> {
     let keys = fields.keys();
     if keys.len() > MAX_RECORD_COUNT as usize
         || u64::try_from(keys.len()).unwrap_or(u64::MAX) > limits.max_collection_entries
@@ -342,7 +342,7 @@ pub(super) fn preflight_record_sizes(
     if total > limits.max_encoded_bytes {
         return Err(SaveLoadError::TooLarge);
     }
-    Ok(())
+    Ok(decoded_total)
 }
 
 /// Encodes one record payload from a captured snapshot.

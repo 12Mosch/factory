@@ -252,9 +252,31 @@ pub fn try_capture_record_snapshot_with_limits(
     world_generation: u64,
     limits: crate::SaveLimits,
 ) -> Result<SimulationSaveSnapshot, SaveLoadError> {
+    Ok(
+        try_capture_record_snapshot_with_reservation(sim, world_generation, limits, |_| Some(()))?
+            .expect("unconditional snapshot reservation")
+            .0,
+    )
+}
+
+/// Preflights the record payload, reserves capacity before cloning, and
+/// returns the reservation with the owned snapshot. `None` means capacity was
+/// unavailable; no owned snapshot is allocated in that case.
+pub fn try_capture_record_snapshot_with_reservation<R>(
+    sim: &Simulation,
+    world_generation: u64,
+    limits: crate::SaveLimits,
+    reserve: impl FnOnce(u64) -> Option<R>,
+) -> Result<Option<(SimulationSaveSnapshot, R)>, SaveLoadError> {
     super::save::check_borrowed_snapshot_collections(sim, limits)?;
-    preflight_record_sizes(&BorrowedRecordFields::from_simulation(sim), limits)?;
-    Ok(capture_save_snapshot_in_generation(sim, world_generation))
+    let wire_bytes = preflight_record_sizes(&BorrowedRecordFields::from_simulation(sim), limits)?;
+    let Some(reservation) = reserve(wire_bytes) else {
+        return Ok(None);
+    };
+    Ok(Some((
+        capture_save_snapshot_in_generation(sim, world_generation),
+        reservation,
+    )))
 }
 
 /// Captures the current completed tick with explicit limits, then serializes.
