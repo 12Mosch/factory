@@ -2439,3 +2439,161 @@ fn inaccessible_save_reports_pending_not_corrupt() {
     );
     assert_eq!(compatibility, SaveCompatibility::ValidationPending);
 }
+
+#[test]
+fn subprocess_crash_artifacts_recover_to_one_generation() {
+    use std::process::Command;
+
+    // The probe intentionally reconstructs artifact states with plain file
+    // copies instead of running the real commit in the child: crashing the
+    // real path would require shipping a crash hook in production code. The
+    // in-process fault matrix covers the real boundaries; the probe covers
+    // what in-process tests cannot — recovery driven by another OS process
+    // holding no shared mutex or epoch state.
+    fn crash_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "factory-subprocess-crash-{name}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    // The probe lives under `examples/` (test-only, never shipped), so no
+    // `CARGO_BIN_EXE_<name>` variable exists for it: resolve the example
+    // binary next to this test executable instead. Full `cargo test` links
+    // examples before running tests; a filtered run needs
+    // `cargo build --examples` first.
+    let probe = std::env::current_exe()
+        .expect("test executable path")
+        .parent()
+        .expect("deps directory")
+        .join(format!(
+            "../examples/save_crash_probe{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+    assert!(
+        probe.exists(),
+        "missing example binary; run `cargo build --examples` or full `cargo test` first: {}",
+        probe.display()
+    );
+    // Generate two distinct valid quicksave generations through the real
+    // save path so staging needs no test-only metadata constructors. Time
+    // must advance for ticks to advance: `run_until_tick` has no deadline
+    // and spins forever on a frozen clock.
+    let mut app = test_app(Duration::ZERO, "crash_probe_source");
+    app.world_mut()
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+    run_until_tick(&mut app, 3);
+    freeze_time(&mut app);
+    tap_key(&mut app, KeyCode::F5);
+    drain_save_jobs(&mut app);
+    let source_path = app
+        .world()
+        .resource::<SaveLoadConfig>()
+        .root_dir
+        .join("quicksave.factsim");
+    let old_bytes = fs::read(&source_path).unwrap();
+    let (_, old_payload) = decode_container(&old_bytes).unwrap();
+    let old_tick = load_from_bytes(old_payload).unwrap().tick_count();
+    app.world_mut()
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+    run_until_tick(&mut app, old_tick + 1);
+    freeze_time(&mut app);
+    tap_key(&mut app, KeyCode::F5);
+    drain_save_jobs(&mut app);
+    let new_bytes = fs::read(&source_path).unwrap();
+    let (_, new_payload) = decode_container(&new_bytes).unwrap();
+    let new_tick = load_from_bytes(new_payload).unwrap().tick_count();
+    assert_ne!(old_bytes, new_bytes);
+    assert_eq!(new_tick, old_tick + 1);
+
+    // Crash after commit but before cleanup: the new primary must win and
+    // the leftover backup must be retired by the next scan.
+    for mode in [
+        "temp-pending",
+        "backup-with-primary",
+        "missing-primary-with-backup",
+        "new-primary-old-backup",
+    ] {
+        let root = crash_root(mode);
+        let config = SaveLoadConfig {
+            root_dir: root.clone(),
+            autosave_interval_ticks: 300,
+            autosave_slot_count: 5,
+        };
+        fs::write(root.join("quicksave.factsim"), &old_bytes).unwrap();
+        fs::write(root.join("new-staging.factsim"), &new_bytes).unwrap();
+        fs::write(root.join("old-staging.factsim"), &old_bytes).unwrap();
+
+        let status = Command::new(&probe)
+            .arg(&root)
+            .arg(mode)
+            .status()
+            .expect("crash probe must run on Windows and Linux");
+        assert!(
+            !status.success(),
+            "probe mode {mode} must exit uncleanly like a crash"
+        );
+
+        let entries = scan_catalog(&config).unwrap();
+        assert_eq!(entries.len(), 1, "probe mode {mode} must leave one save");
+        let primary = fs::read(root.join("quicksave.factsim")).unwrap();
+        assert!(
+            primary == old_bytes || primary == new_bytes,
+            "probe mode {mode} must recover one complete generation, never a mixture"
+        );
+        // The recovered primary decodes as exactly one generation.
+        let (_, payload) = decode_container(&primary).unwrap();
+        let loaded = load_from_bytes(payload).unwrap();
+        let expected_tick = if primary == old_bytes {
+            old_tick
+        } else {
+            new_tick
+        };
+        assert_eq!(loaded.tick_count(), expected_tick);
+        // No temporary artifact survives recovery.
+        assert!(
+            !root.join("quicksave.factsim.tmp-probe-1").exists(),
+            "probe mode {mode} must not leave a temp artifact"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    // Ambiguous crash state from a subprocess: recovery preserves both
+    // candidates instead of guessing.
+    let root = crash_root("ambiguous");
+    let config = SaveLoadConfig {
+        root_dir: root.clone(),
+        autosave_interval_ticks: 300,
+        autosave_slot_count: 5,
+    };
+    fs::write(root.join("quicksave.factsim"), &old_bytes).unwrap();
+    fs::write(root.join("new-staging.factsim"), &new_bytes).unwrap();
+    fs::write(root.join("old-staging.factsim"), &old_bytes).unwrap();
+    let status = Command::new(&probe)
+        .arg(&root)
+        .arg("ambiguous")
+        .status()
+        .expect("crash probe must run");
+    assert!(!status.success());
+    let entries = scan_catalog(&config).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert!(!entries[0].compatibility.can_load());
+    assert_eq!(
+        fs::read(root.join("quicksave.factsim")).unwrap(),
+        b"corrupt primary"
+    );
+    assert!(root.join("quicksave.factsim.bak-probe-1").exists());
+    assert!(root.join("quicksave.factsim.bak-probe-2").exists());
+    fs::remove_dir_all(root).unwrap();
+}

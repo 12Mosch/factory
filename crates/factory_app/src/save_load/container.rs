@@ -1,3 +1,4 @@
+use super::commit::{CommitFaultPhase, CommitFaults, SaveDurability};
 use super::lifecycle::{SAVE_CANCEL_ACTIVE, SAVE_CANCEL_COMMITTING};
 use super::{SaveId, SaveKind, SaveMetadata};
 use factory_sim::{
@@ -110,11 +111,15 @@ impl std::fmt::Display for ContainerError {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct StreamWriteMetrics {
     pub total_bytes: usize,
     pub simulation_bytes: usize,
     pub encode_ms: f64,
+    /// Post-commit durability barrier outcome. A degraded barrier is still a
+    /// commit (see [`SaveDurability`]); it must surface in status instead of
+    /// reading as fully durable or failing as I/O.
+    pub durability: SaveDurability,
 }
 
 impl From<io::Error> for ContainerError {
@@ -461,9 +466,27 @@ pub(crate) fn with_save_artifact_lock_shutdown_aware<T>(
     Some(result)
 }
 
-/// Writes and durably installs a complete save without exposing partial contents.
-pub(crate) fn write_save_bytes(path: &Path, bytes: &[u8]) -> Result<(), ContainerError> {
-    with_save_artifact_lock(|| write_save_bytes_locked(path, bytes, SaveLimits::default()))
+/// Writes and installs a complete save without exposing partial contents.
+///
+/// Returns the durability barrier outcome: a degraded barrier is still a
+/// commit (see [`SaveDurability`]), never an error that would invite an
+/// unsafe overwrite retry.
+pub(crate) fn write_save_bytes(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<SaveDurability, ContainerError> {
+    write_save_bytes_with_faults(path, bytes, &CommitFaults::none())
+}
+
+/// Fault-injecting variant of [`write_save_bytes`] for deterministic tests.
+/// Each [`CommitFaultPhase`] failure proves the recovery invariant at one
+/// interrupted boundary (disk-full, permission, locked, partial I/O).
+pub(crate) fn write_save_bytes_with_faults(
+    path: &Path,
+    bytes: &[u8],
+    faults: &CommitFaults,
+) -> Result<SaveDurability, ContainerError> {
+    with_save_artifact_lock(|| write_save_bytes_locked(path, bytes, SaveLimits::default(), faults))
 }
 
 /// Encodes a snapshot through a buffered temporary file and commits it only
@@ -481,8 +504,34 @@ pub(crate) fn write_save_snapshot(
     shutdown: &AtomicBool,
     cancel: &AtomicU8,
 ) -> Option<Result<StreamWriteMetrics, ContainerError>> {
+    write_save_snapshot_with_faults(
+        path,
+        metadata,
+        snapshot,
+        shutdown,
+        cancel,
+        &CommitFaults::none(),
+    )
+}
+
+/// Fault-injecting variant of [`write_save_snapshot`] for deterministic tests.
+pub(crate) fn write_save_snapshot_with_faults(
+    path: &Path,
+    metadata: &SaveMetadata,
+    snapshot: &SimulationSaveSnapshot,
+    shutdown: &AtomicBool,
+    cancel: &AtomicU8,
+    faults: &CommitFaults,
+) -> Option<Result<StreamWriteMetrics, ContainerError>> {
     with_save_artifact_lock_shutdown_aware(shutdown, || {
-        write_save_snapshot_locked(path, metadata, snapshot, SaveLimits::default(), cancel)
+        write_save_snapshot_locked(
+            path,
+            metadata,
+            snapshot,
+            SaveLimits::default(),
+            cancel,
+            faults,
+        )
     })
 }
 
@@ -492,6 +541,7 @@ fn write_save_snapshot_locked(
     snapshot: &SimulationSaveSnapshot,
     limits: SaveLimits,
     cancel: &AtomicU8,
+    faults: &CommitFaults,
 ) -> Result<StreamWriteMetrics, ContainerError> {
     let metadata_text = ron::ser::to_string(metadata)
         .map_err(|error| ContainerError::MetadataEncoding(error.to_string()))?;
@@ -514,9 +564,24 @@ fn write_save_snapshot_locked(
         ..limits
     };
 
-    write_temporary_and_commit(
+    let (partial, durability) = write_temporary_and_commit(
         path,
         |writer| {
+            // Partial-I/O simulation: when the Write fault is set, leave a
+            // flushed partial prefix on disk (not just buffered bytes) so
+            // cleanup must remove a real partial file while the previous
+            // save stays intact. Disk-full and permission failures share
+            // this pre-commit contract; locked files surface as
+            // `PermissionDenied`, matching Windows sharing violations.
+            if faults.fails_at(CommitFaultPhase::Write) {
+                writer.write_all(&CONTAINER_MAGIC)?;
+                writer.flush()?;
+                return Err(ContainerError::Io(
+                    faults
+                        .check(CommitFaultPhase::Write)
+                        .expect_err("Write fault must fire"),
+                ));
+            }
             writer.write_all(&CONTAINER_MAGIC)?;
             writer.write_all(&CONTAINER_VERSION.to_le_bytes())?;
             writer.write_all(&metadata_len.to_le_bytes())?;
@@ -528,14 +593,22 @@ fn write_save_snapshot_locked(
                     .map_err(map_simulation_error)?;
                 payload.written
             };
-            Ok(StreamWriteMetrics {
-                total_bytes: overhead as usize + simulation_bytes,
+            Ok((
+                overhead as usize + simulation_bytes,
                 simulation_bytes,
-                encode_ms: encode_start.elapsed().as_secs_f64() * 1000.0,
-            })
+                encode_start.elapsed().as_secs_f64() * 1000.0,
+            ))
         },
         cancel,
-    )
+        faults,
+    )?;
+    let (total_bytes, simulation_bytes, encode_ms) = partial;
+    Ok(StreamWriteMetrics {
+        total_bytes,
+        simulation_bytes,
+        encode_ms,
+        durability,
+    })
 }
 
 /// Implements save installation while the process-wide artifact lock is held.
@@ -543,11 +616,12 @@ fn write_save_bytes_locked(
     path: &Path,
     bytes: &[u8],
     limits: SaveLimits,
-) -> Result<(), ContainerError> {
+    faults: &CommitFaults,
+) -> Result<SaveDurability, ContainerError> {
     // The synchronous UI path is never cancelled; the worker path threads
     // its request flag through `write_save_snapshot_locked` instead.
     let cancel = AtomicU8::new(SAVE_CANCEL_ACTIVE);
-    write_temporary_and_commit(
+    let ((), durability) = write_temporary_and_commit(
         path,
         |temp| {
             check_size(bytes.len() as u64, limits.max_encoded_bytes)?;
@@ -564,18 +638,122 @@ fn write_save_bytes_locked(
             } else {
                 check_size(bytes.len() as u64, limits.max_simulation_bytes())?;
             }
+            // Partial-I/O simulation: flush a real partial prefix before
+            // failing so cleanup removes on-disk partial bytes, not just an
+            // empty buffered file.
+            if faults.fails_at(CommitFaultPhase::Write) {
+                let partial = bytes.len().saturating_add(1) / 2;
+                temp.write_all(&bytes[..partial])?;
+                temp.flush()?;
+                return Err(ContainerError::Io(
+                    faults
+                        .check(CommitFaultPhase::Write)
+                        .expect_err("Write fault must fire"),
+                ));
+            }
             temp.write_all(bytes)?;
             Ok(())
         },
         &cancel,
-    )
+        faults,
+    )?;
+    Ok(durability)
+}
+
+/// Upper bound for the ancestor walk below: far beyond any real save-root
+/// nesting, while keeping a pathological path from stalling the commit.
+const MAX_ANCESTOR_WALK: usize = 256;
+
+/// Ancestor chain recorded before directory creation: newly missing
+/// components (child-first) plus the deepest pre-existing ancestor linking
+/// the new chain. `complete` is false when the walk hit its bound before
+/// reaching a known parent, in which case the barrier must degrade: links
+/// above the recorded prefix were never covered.
+struct AncestorChain {
+    missing: Vec<PathBuf>,
+    base: Option<PathBuf>,
+    complete: bool,
+}
+
+/// Splits the save directory into newly missing components (child-first)
+/// plus the deepest pre-existing ancestor that links the new chain.
+///
+/// The post-install barrier syncs every created directory and that linking
+/// parent: without those barriers a crash can remove the whole new tree
+/// even though the save itself reported durable.
+fn missing_ancestor_chain(path: &Path) -> AncestorChain {
+    let mut missing = Vec::new();
+    let mut cursor = path.parent().map(Path::to_path_buf);
+    for _ in 0..MAX_ANCESTOR_WALK {
+        let Some(dir) = cursor else { break };
+        if dir.as_os_str().is_empty() {
+            // A relative save root like `saves/quicksave.factsim` links its
+            // top new directory into the current working directory: sync `.`
+            // as the pre-existing linking parent. This matters because the
+            // default save root falls back to relative `saves` when no data
+            // directory is configured.
+            return AncestorChain {
+                missing,
+                base: Some(PathBuf::from(".")),
+                complete: true,
+            };
+        }
+        match dir.try_exists() {
+            Ok(true) => {
+                return AncestorChain {
+                    missing,
+                    base: Some(dir),
+                    complete: true,
+                };
+            }
+            // Unstatable ancestors fail in `create_dir_all` below when they
+            // truly block creation; syncing them post-install is harmless
+            // when they merely raced into existence.
+            _ => {
+                missing.push(dir.clone());
+                cursor = dir.parent().map(Path::to_path_buf);
+            }
+        }
+    }
+    AncestorChain {
+        missing,
+        base: None,
+        complete: false,
+    }
+}
+
+/// Syncs every created directory plus the pre-existing linking parent so a
+/// first save in a new root is as durable as it reports. Any failure
+/// degrades the commit instead of reading as fully durable. With nothing
+/// created, the save directory barrier already covers the linking parent,
+/// so no redundant fsync is issued on the hot path.
+fn sync_created_ancestors(missing: &[PathBuf], base: Option<&Path>) -> io::Result<()> {
+    if missing.is_empty() {
+        return Ok(());
+    }
+    for dir in missing {
+        sync_directory(dir)?;
+    }
+    if let Some(base) = base {
+        sync_directory(base)?;
+    }
+    Ok(())
 }
 
 fn write_temporary_and_commit<T>(
     path: &Path,
     encode: impl FnOnce(&mut BufWriter<fs::File>) -> Result<T, ContainerError>,
     cancel: &AtomicU8,
-) -> Result<T, ContainerError> {
+    faults: &CommitFaults,
+) -> Result<(T, SaveDurability), ContainerError> {
+    faults
+        .check(CommitFaultPhase::CreateDir)
+        .map_err(ContainerError::Io)?;
+    // Record the ancestor chain before creating anything: the post-install
+    // barrier syncs every created directory plus the pre-existing parent
+    // that links the new chain, so a first save in a new root never reports
+    // durable while its own directories are still crash-removable.
+    let chain = missing_ancestor_chain(path);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -589,15 +767,33 @@ fn write_temporary_and_commit<T>(
     let mut installed = false;
 
     let result = (|| {
+        faults
+            .check(CommitFaultPhase::CreateTemp)
+            .map_err(ContainerError::Io)?;
         let temp = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&temp_path)?;
         let mut temp = BufWriter::new(temp);
         let outcome = encode(&mut temp)?;
+        // Fault after the encoder ran but before the flush: the temporary
+        // file holds partial contents that cleanup must remove while the
+        // previous save stays intact.
+        faults
+            .check(CommitFaultPhase::Write)
+            .map_err(ContainerError::Io)?;
+        faults
+            .check(CommitFaultPhase::Flush)
+            .map_err(ContainerError::Io)?;
         temp.flush()?;
+        faults
+            .check(CommitFaultPhase::SyncTemp)
+            .map_err(ContainerError::Io)?;
         temp.get_ref().sync_all()?;
         drop(temp);
+        faults
+            .check(CommitFaultPhase::SyncParentPre)
+            .map_err(ContainerError::Io)?;
         sync_parent_directory(path)?;
 
         // The atomic commit point: the worker claims ACTIVE -> COMMITTING
@@ -620,19 +816,48 @@ fn write_temporary_and_commit<T>(
         {
             return Err(ContainerError::Cancelled);
         }
-        let replaced = commit_temporary_file(path, &temp_path, &backup_path)?;
+        let replaced = commit_temporary_file(path, &temp_path, &backup_path, faults)?;
         installed = true;
-        // Installation has committed. A durability-barrier failure must not be
-        // reported as a failed save because retrying could overwrite success.
-        let _ = sync_installed_file(path);
+        // Installation has committed. A durability-barrier failure degrades
+        // durability instead of failing: retrying could overwrite success.
+        // See `SaveDurability` and `commit::format_save_success`.
+        let durability = match faults.sync_barrier_error() {
+            Some(error) => SaveDurability::unsynced(error),
+            None => {
+                let barrier = sync_installed_file(path)
+                    .and_then(|()| sync_created_ancestors(&chain.missing, chain.base.as_deref()));
+                match barrier {
+                    Ok(()) if chain.complete => SaveDurability::Durable,
+                    // The walk hit its bound before reaching a known linking
+                    // parent: links above the recorded prefix were never
+                    // covered, so the commit degrades even though the
+                    // recorded syncs succeeded.
+                    Ok(()) => SaveDurability::unsynced(
+                        "ancestor chain exceeds walk bound; linking parent unknown",
+                    ),
+                    Err(error) => SaveDurability::unsynced(error),
+                }
+            }
+        };
 
         if replaced {
             // The new primary is committed. Cleanup cannot turn that successful
             // save into an error; catalog refresh retries any leftover backup.
-            let _ = discard_save_artifact(&backup_path);
-            let _ = sync_parent_directory(path);
+            // When the barrier already failed, cleanup removes files without
+            // issuing further syncs: a later successful parent sync would
+            // otherwise make the rename durable after this commit was already
+            // classified as unsynced, so the degraded verdict must match a
+            // state with no successful barrier after the rename.
+            if durability.degraded_reason().is_some() {
+                let _ = fs::remove_file(&backup_path);
+            } else {
+                let _ = discard_save_artifact_with_faults(&backup_path, faults);
+                if faults.check(CommitFaultPhase::SyncParentPost).is_ok() {
+                    let _ = sync_parent_directory(path);
+                }
+            }
         }
-        Ok(outcome)
+        Ok((outcome, durability))
     })();
 
     if result.is_err() {
@@ -696,11 +921,13 @@ pub(crate) fn promote_backup(
     if replace_corrupt_primary {
         match replace_with_existing_file(path, backup_path) {
             Ok(()) => {}
-            Err(_) if !path.try_exists()? => install_new_file(backup_path, path)?,
+            Err(_) if !path.try_exists()? => {
+                install_new_file(backup_path, path, &CommitFaults::none())?
+            }
             Err(error) => return Err(error),
         }
     } else {
-        install_new_file(backup_path, path)?;
+        install_new_file(backup_path, path, &CommitFaults::none())?;
     }
     // Promotion has committed even if a post-rename durability barrier is not
     // available on this filesystem or is temporarily blocked by another handle.
@@ -729,10 +956,19 @@ pub(crate) fn remove_save_and_artifacts(path: &Path) -> io::Result<()> {
 /// Durably removes an artifact, first retiring a backup so cleanup failure can
 /// never leave an old snapshot eligible for automatic recovery.
 pub(crate) fn discard_save_artifact(path: &Path) -> io::Result<()> {
+    discard_save_artifact_with_faults(path, &CommitFaults::none())
+}
+
+fn discard_save_artifact_with_faults(path: &Path, faults: &CommitFaults) -> io::Result<()> {
     if parse_save_artifact(path).is_some_and(|(_, kind)| kind == SaveArtifactKind::Backup) {
-        retire_recovery_artifact(path)
+        retire_recovery_artifact(path, faults)
     } else if path.try_exists()? {
         fs::remove_file(path)?;
+        // A post-cleanup sync fault models sync failure after the removal:
+        // files are still removed, only the barrier is skipped.
+        if faults.fails_at(CommitFaultPhase::SyncParentPost) {
+            return Ok(());
+        }
         sync_parent_directory(path)
     } else {
         Ok(())
@@ -803,39 +1039,60 @@ fn save_artifacts_for(path: &Path) -> io::Result<Vec<PathBuf>> {
 }
 
 /// Atomically makes a committed backup ineligible before best-effort deletion.
-fn retire_recovery_artifact(path: &Path) -> io::Result<()> {
+fn retire_recovery_artifact(path: &Path, faults: &CommitFaults) -> io::Result<()> {
+    faults.check(CommitFaultPhase::Retire)?;
+    // A post-cleanup sync fault removes files without issuing further
+    // barriers: the removal stays visible while durability stays best-effort.
+    let skip_sync = faults.fails_at(CommitFaultPhase::SyncParentPost);
     if !path.try_exists()? {
         return Ok(());
     }
     let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
         fs::remove_file(path)?;
+        if skip_sync {
+            return Ok(());
+        }
         return sync_parent_directory(path);
     };
     let retired = path.with_file_name(format!("{file_name}{RETIRED_ARTIFACT_SUFFIX}"));
     match rename_file_no_replace(path, &retired) {
         Ok(()) => {
-            sync_parent_directory(path)?;
+            if !skip_sync {
+                sync_parent_directory(path)?;
+            }
             let _ = fs::remove_file(retired);
-            let _ = sync_parent_directory(path);
+            if !skip_sync {
+                let _ = sync_parent_directory(path);
+            }
             Ok(())
         }
         Err(rename_error) => match fs::remove_file(path) {
-            Ok(()) => sync_parent_directory(path),
+            Ok(()) => {
+                if skip_sync {
+                    return Ok(());
+                }
+                sync_parent_directory(path)
+            }
             Err(_) => Err(rename_error),
         },
     }
 }
 
 /// Installs a temporary file without a check-then-overwrite window.
-fn commit_temporary_file(path: &Path, temp_path: &Path, backup_path: &Path) -> io::Result<bool> {
+fn commit_temporary_file(
+    path: &Path,
+    temp_path: &Path,
+    backup_path: &Path,
+    faults: &CommitFaults,
+) -> io::Result<bool> {
     if path.try_exists()? {
-        replace_file(path, temp_path, backup_path)?;
+        replace_file(path, temp_path, backup_path, faults)?;
         return Ok(true);
     }
-    match install_new_file(temp_path, path) {
+    match install_new_file(temp_path, path, faults) {
         Ok(()) => Ok(false),
         Err(_) if path.try_exists()? => {
-            replace_file(path, temp_path, backup_path)?;
+            replace_file(path, temp_path, backup_path, faults)?;
             Ok(true)
         }
         Err(error) => Err(error),
@@ -844,27 +1101,50 @@ fn commit_temporary_file(path: &Path, temp_path: &Path, backup_path: &Path) -> i
 
 /// Creates a durable rollback link before atomically replacing the primary.
 #[cfg(unix)]
-fn replace_file(path: &Path, temp_path: &Path, backup_path: &Path) -> io::Result<()> {
+fn replace_file(
+    path: &Path,
+    temp_path: &Path,
+    backup_path: &Path,
+    faults: &CommitFaults,
+) -> io::Result<()> {
+    faults.check(CommitFaultPhase::Backup)?;
     if fs::hard_link(path, backup_path).is_err() {
         fs::copy(path, backup_path)?;
         fs::File::open(backup_path)?.sync_all()?;
     }
     sync_parent_directory(path)?;
+    faults.check(CommitFaultPhase::Rename)?;
     fs::rename(temp_path, path)
 }
 
 /// Atomically replaces the primary and asks Windows to retain its old contents.
 #[cfg(windows)]
-fn replace_file(path: &Path, temp_path: &Path, backup_path: &Path) -> io::Result<()> {
+fn replace_file(
+    path: &Path,
+    temp_path: &Path,
+    backup_path: &Path,
+    faults: &CommitFaults,
+) -> io::Result<()> {
+    // ReplaceFileW is atomic: backup and replacement commit together, so a
+    // fault at either phase prevents the call with the previous save intact.
+    faults.check(CommitFaultPhase::Backup)?;
+    faults.check(CommitFaultPhase::Rename)?;
     replace_file_windows(path, temp_path, Some(backup_path))
 }
 
 /// Portable fallback that copies the rollback snapshot before replacement.
 #[cfg(not(any(unix, windows)))]
-fn replace_file(path: &Path, temp_path: &Path, backup_path: &Path) -> io::Result<()> {
+fn replace_file(
+    path: &Path,
+    temp_path: &Path,
+    backup_path: &Path,
+    faults: &CommitFaults,
+) -> io::Result<()> {
+    faults.check(CommitFaultPhase::Backup)?;
     fs::copy(path, backup_path)?;
     fs::File::open(backup_path)?.sync_all()?;
     sync_parent_directory(path)?;
+    faults.check(CommitFaultPhase::Rename)?;
     fs::rename(temp_path, path)
 }
 
@@ -930,7 +1210,8 @@ fn replace_file_windows(
 
 /// Installs a new Windows file without replacing a destination that appeared.
 #[cfg(windows)]
-fn install_new_file(temp_path: &Path, path: &Path) -> io::Result<()> {
+fn install_new_file(temp_path: &Path, path: &Path, faults: &CommitFaults) -> io::Result<()> {
+    faults.check(CommitFaultPhase::Rename)?;
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_WRITE_THROUGH, MoveFileExW};
 
@@ -957,7 +1238,7 @@ fn install_new_file(temp_path: &Path, path: &Path) -> io::Result<()> {
 /// Renames an artifact on Windows without replacing an existing destination.
 #[cfg(windows)]
 fn rename_file_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
-    install_new_file(source, destination)
+    install_new_file(source, destination, &CommitFaults::none())
 }
 
 /// Uses Linux's atomic no-replace rename when hard links are unavailable.
@@ -1034,7 +1315,8 @@ fn rename_file_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
     target_os = "macos",
     target_os = "ios"
 ))]
-fn install_new_file(temp_path: &Path, path: &Path) -> io::Result<()> {
+fn install_new_file(temp_path: &Path, path: &Path, faults: &CommitFaults) -> io::Result<()> {
+    faults.check(CommitFaultPhase::Rename)?;
     match fs::hard_link(temp_path, path) {
         Ok(()) => {
             let _ = fs::remove_file(temp_path);
@@ -1052,9 +1334,38 @@ fn install_new_file(temp_path: &Path, path: &Path) -> io::Result<()> {
     not(target_os = "macos"),
     not(target_os = "ios")
 ))]
-fn install_new_file(temp_path: &Path, path: &Path) -> io::Result<()> {
+fn install_new_file(temp_path: &Path, path: &Path, faults: &CommitFaults) -> io::Result<()> {
+    faults.check(CommitFaultPhase::Rename)?;
     fs::hard_link(temp_path, path)?;
     let _ = fs::remove_file(temp_path);
+    Ok(())
+}
+
+/// Flushes one directory's own metadata with a directory fsync on Unix.
+#[cfg(unix)]
+fn sync_directory(dir: &Path) -> io::Result<()> {
+    fs::File::open(dir)?.sync_all()
+}
+
+/// Flushes one directory's own metadata through a backup-semantics handle.
+#[cfg(windows)]
+fn sync_directory(dir: &Path) -> io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    fs::OpenOptions::new()
+        .write(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(dir)?
+        .sync_all()
+}
+
+/// No-op where portable directory fsync is unavailable.
+#[cfg(not(any(unix, windows)))]
+fn sync_directory(_dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
@@ -1062,7 +1373,7 @@ fn install_new_file(temp_path: &Path, path: &Path) -> io::Result<()> {
 #[cfg(unix)]
 fn sync_parent_directory(path: &Path) -> io::Result<()> {
     match path.parent() {
-        Some(parent) => fs::File::open(parent)?.sync_all(),
+        Some(parent) => sync_directory(parent),
         None => Ok(()),
     }
 }
@@ -1070,20 +1381,10 @@ fn sync_parent_directory(path: &Path) -> io::Result<()> {
 /// Flushes Windows directory metadata through a backup-semantics handle.
 #[cfg(windows)]
 fn sync_parent_directory(path: &Path) -> io::Result<()> {
-    use std::os::windows::fs::OpenOptionsExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    };
-
     let Some(parent) = path.parent() else {
         return Ok(());
     };
-    fs::OpenOptions::new()
-        .write(true)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-        .open(parent)?
-        .sync_all()
+    sync_directory(parent)
 }
 
 /// No-op where portable directory fsync is unavailable.
@@ -1105,10 +1406,22 @@ fn sync_installed_file(path: &Path) -> io::Result<()> {
     file_result.and(directory_result)
 }
 
-/// Uses directory fsync as the installation durability barrier elsewhere.
-#[cfg(not(windows))]
+/// Uses directory fsync as the installation durability barrier on Unix.
+#[cfg(unix)]
 fn sync_installed_file(path: &Path) -> io::Result<()> {
     sync_parent_directory(path)
+}
+
+/// Reports degraded durability where no portable barrier exists: there is no
+/// directory durability primitive to confirm the rename, so a commit must
+/// never read as fully durable. Pre-commit directory sync stays a best-effort
+/// no-op so saves still proceed; only the post-commit verdict degrades.
+#[cfg(not(any(unix, windows)))]
+fn sync_installed_file(_path: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "directory durability barrier unavailable on this platform",
+    ))
 }
 
 /// Builds catalog metadata when legacy or malformed metadata is unavailable.
@@ -1382,8 +1695,15 @@ mod tests {
         };
         let bounded = root.join("bounded.factsim");
         let cancel = AtomicU8::new(SAVE_CANCEL_ACTIVE);
-        write_save_snapshot_locked(&bounded, &metadata("Framing"), &snapshot, exact, &cancel)
-            .unwrap();
+        write_save_snapshot_locked(
+            &bounded,
+            &metadata("Framing"),
+            &snapshot,
+            exact,
+            &cancel,
+            &CommitFaults::none(),
+        )
+        .unwrap();
         assert_eq!(fs::read(&bounded).unwrap().len() as u64, total);
         let short = SaveLimits {
             max_encoded_bytes: total - 1,
@@ -1395,7 +1715,8 @@ mod tests {
                 &metadata("Framing"),
                 &snapshot,
                 short,
-                &cancel
+                &cancel,
+                &CommitFaults::none(),
             )
             .is_err()
         );
@@ -1473,7 +1794,7 @@ mod tests {
         write_save_bytes(&path, b"previous valid save").unwrap();
 
         let cancel = AtomicU8::new(SAVE_CANCEL_ACTIVE);
-        let result: Result<(), ContainerError> = write_temporary_and_commit(
+        let result: Result<((), SaveDurability), ContainerError> = write_temporary_and_commit(
             &path,
             |writer| {
                 writer.write_all(b"partial replacement")?;
@@ -1482,6 +1803,7 @@ mod tests {
                 )))
             },
             &cancel,
+            &CommitFaults::none(),
         );
         assert!(matches!(result, Err(ContainerError::Io(_))));
         assert_eq!(fs::read(&path).unwrap(), b"previous valid save");
@@ -1570,7 +1892,7 @@ mod tests {
         ));
         let path = root.join("manual-boundary.factsim");
         with_save_artifact_lock(|| {
-            write_save_bytes_locked(&path, &bytes, limits).unwrap();
+            write_save_bytes_locked(&path, &bytes, limits, &CommitFaults::none()).unwrap();
             assert_eq!(
                 load_simulation_from_reader(&mut fs::File::open(&path).unwrap(), limits)
                     .unwrap()
@@ -1580,7 +1902,7 @@ mod tests {
             let mut oversized = bytes.clone();
             oversized.push(0);
             assert!(matches!(
-                write_save_bytes_locked(&path, &oversized, limits),
+                write_save_bytes_locked(&path, &oversized, limits, &CommitFaults::none()),
                 Err(ContainerError::TooLarge)
             ));
             assert_eq!(fs::read(&path).unwrap(), bytes);
@@ -1660,10 +1982,20 @@ mod tests {
             "installation must defer while the artifact lock is held"
         );
         drop(_held);
-        assert!(
-            try_acquire_save_artifact_lock().is_some(),
-            "installation must proceed once the artifact lock is free"
-        );
+        // Other test threads may briefly hold the process-wide lock (fault
+        // matrix, concurrent scans); poll until it frees instead of
+        // asserting on a single racy acquisition.
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if try_acquire_save_artifact_lock().is_some() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "installation must proceed once the artifact lock is free"
+            );
+            std::thread::yield_now();
+        }
     }
 
     #[test]
@@ -1696,5 +2028,473 @@ mod tests {
             ),
             Err(ContainerError::Io(_))
         ));
+    }
+
+    fn fault_test_root(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "factory-commit-fault-{}-{}-{:?}",
+            name,
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn valid_container_bytes(seed: u64, ticks: usize, name: &str) -> Vec<u8> {
+        let mut simulation = Simulation::new_test_world(seed);
+        for _ in 0..ticks {
+            simulation.tick();
+        }
+        let payload = save_to_bytes(&simulation).unwrap();
+        encode_container(&metadata(name), &payload).unwrap()
+    }
+
+    fn valid_quicksave_bytes(seed: u64, ticks: usize) -> Vec<u8> {
+        let mut simulation = Simulation::new_test_world(seed);
+        for _ in 0..ticks {
+            simulation.tick();
+        }
+        let payload = save_to_bytes(&simulation).unwrap();
+        let quicksave_metadata = SaveMetadata {
+            schema_version: METADATA_SCHEMA_VERSION,
+            id: SaveId::new("quicksave"),
+            display_name: "Quicksave".into(),
+            kind: SaveKind::Quicksave,
+            completed_at_unix_ms: 42,
+            application_version: env!("CARGO_PKG_VERSION").into(),
+            world_seed: None,
+        };
+        encode_container(&quicksave_metadata, &payload).unwrap()
+    }
+
+    #[test]
+    fn commit_faults_before_rename_preserve_previous_save() {
+        use std::io::ErrorKind;
+
+        let phases = [
+            CommitFaultPhase::CreateDir,
+            CommitFaultPhase::CreateTemp,
+            CommitFaultPhase::Write,
+            CommitFaultPhase::Flush,
+            CommitFaultPhase::SyncTemp,
+            CommitFaultPhase::SyncParentPre,
+            CommitFaultPhase::Backup,
+            CommitFaultPhase::Rename,
+        ];
+        // Disk-full, permission/locked, and partial I/O share the pre-commit
+        // contract: the previous save stays intact and no artifact leaks.
+        let kinds = [
+            ErrorKind::StorageFull,
+            ErrorKind::PermissionDenied,
+            ErrorKind::Other,
+        ];
+        for phase in phases {
+            for kind in kinds {
+                let root = fault_test_root(&format!("{phase:?}-{kind:?}"));
+                let path = root.join("manual-test.factsim");
+                write_save_bytes(&path, b"previous valid save").unwrap();
+                let faults = CommitFaults::fail_at(phase, kind);
+                let result = write_save_bytes_with_faults(&path, b"new save", &faults);
+                assert!(
+                    matches!(result, Err(ContainerError::Io(_))),
+                    "phase {phase:?} with {kind:?} must fail pre-commit, got {result:?}"
+                );
+                assert_eq!(
+                    fs::read(&path).unwrap(),
+                    b"previous valid save",
+                    "phase {phase:?} with {kind:?} must leave the previous save intact"
+                );
+                assert_eq!(
+                    fs::read_dir(&root).unwrap().count(),
+                    1,
+                    "phase {phase:?} with {kind:?} must not leak temporary artifacts"
+                );
+                fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn sync_barrier_failure_still_commits_with_degraded_durability() {
+        use std::io::ErrorKind;
+
+        for kind in [ErrorKind::PermissionDenied, ErrorKind::StorageFull] {
+            let root = fault_test_root(&format!("barrier-{kind:?}"));
+            let path = root.join("manual-test.factsim");
+            write_save_bytes(&path, b"previous").unwrap();
+            let faults = CommitFaults::fail_at(CommitFaultPhase::SyncInstalled, kind);
+            let durability = write_save_bytes_with_faults(&path, b"committed", &faults)
+                .expect("a failed durability barrier must still commit");
+            assert_eq!(
+                durability.degraded_reason(),
+                Some("injected commit fault"),
+                "barrier failure with {kind:?} must degrade, not read as durable"
+            );
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                b"committed",
+                "barrier failure must not roll back the committed save"
+            );
+            assert_eq!(
+                fs::read_dir(&root).unwrap().count(),
+                1,
+                "committed save must clean its temporary artifact"
+            );
+            // The degraded commit is a success, never an error that would
+            // invite an unsafe overwrite retry.
+            let message = crate::save_load::commit::format_save_success("Quicksave", &durability);
+            assert!(
+                message.contains("durability is degraded"),
+                "degraded commit must not read as fully durable: {message}"
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn retire_failure_keeps_committed_save_for_next_scan() {
+        let root = fault_test_root("retire");
+        let path = root.join("manual-test.factsim");
+        let old_bytes = valid_container_bytes(11, 4, "Old");
+        let new_bytes = valid_container_bytes(11, 8, "New");
+        assert_ne!(old_bytes, new_bytes);
+        write_save_bytes(&path, &old_bytes).unwrap();
+
+        let faults = CommitFaults::fail_at(
+            CommitFaultPhase::Retire,
+            std::io::ErrorKind::PermissionDenied,
+        );
+        let durability = write_save_bytes_with_faults(&path, &new_bytes, &faults)
+            .expect("retirement failure must not fail a committed save");
+        assert_eq!(durability.degraded_reason(), None);
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            new_bytes,
+            "the committed save wins even when retirement fails"
+        );
+        // The rollback backup remains for the next catalog scan, which drops
+        // it because the primary is valid — the save is never rolled back.
+        let config = crate::save_load::SaveLoadConfig {
+            root_dir: root.clone(),
+            autosave_interval_ticks: 300,
+            autosave_slot_count: 5,
+        };
+        let entries = crate::save_load::scan_catalog(&config).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(fs::read(&path).unwrap(), new_bytes);
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn post_cleanup_sync_failure_keeps_committed_save() {
+        let root = fault_test_root("sync-parent-post");
+        let path = root.join("manual-test.factsim");
+        let old_bytes = valid_container_bytes(12, 4, "Old");
+        let new_bytes = valid_container_bytes(12, 8, "New");
+        assert_ne!(old_bytes, new_bytes);
+        write_save_bytes(&path, &old_bytes).unwrap();
+
+        let faults = CommitFaults::fail_at(
+            CommitFaultPhase::SyncParentPost,
+            std::io::ErrorKind::StorageFull,
+        );
+        let durability = write_save_bytes_with_faults(&path, &new_bytes, &faults)
+            .expect("post-cleanup sync failure must not fail a committed save");
+        assert_eq!(durability.degraded_reason(), None);
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            new_bytes,
+            "the committed save wins even when post-cleanup sync fails"
+        );
+        let config = crate::save_load::SaveLoadConfig {
+            root_dir: root.clone(),
+            autosave_interval_ticks: 300,
+            autosave_slot_count: 5,
+        };
+        let entries = crate::save_load::scan_catalog(&config).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(fs::read(&path).unwrap(), new_bytes);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn first_save_in_new_root_reports_durable() {
+        let outer = fault_test_root("new-root");
+        let path = outer.join("brand").join("new").join("manual-test.factsim");
+        assert!(!outer.join("brand").exists());
+        let durability =
+            write_save_bytes(&path, b"first generation").expect("first save must commit");
+        assert_eq!(durability.degraded_reason(), None);
+        assert_eq!(fs::read(&path).unwrap(), b"first generation");
+        fs::remove_dir_all(outer).unwrap();
+    }
+
+    #[test]
+    fn missing_chain_links_relative_roots_to_working_dir() {
+        let name = format!(
+            "factory-rel-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        );
+        assert!(!Path::new(&name).exists());
+        let target = Path::new(&name).join("quicksave.factsim");
+        let chain = missing_ancestor_chain(&target);
+        assert_eq!(chain.missing, vec![PathBuf::from(&name)]);
+        assert_eq!(
+            chain.base,
+            Some(PathBuf::from(".")),
+            "a relative root links into the working directory"
+        );
+        assert!(chain.complete);
+    }
+
+    #[test]
+    fn deep_ancestor_chain_without_linking_parent_degrades() {
+        let outer = fault_test_root("deep-root");
+        let mut dir = outer.clone();
+        for _ in 0..MAX_ANCESTOR_WALK + 32 {
+            dir.push("d");
+        }
+        let path = dir.join("quicksave.factsim");
+        let durability =
+            write_save_bytes(&path, b"deep generation").expect("deep save must commit");
+        assert!(
+            durability.degraded_reason().is_some(),
+            "a chain past the walk bound has no known linking parent and must never read as durable"
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"deep generation");
+        fs::remove_dir_all(outer).unwrap();
+    }
+
+    /// Removes a uniquely named relative test directory on drop, even on
+    /// panic, so a failure never leaves stray paths in the working tree.
+    struct RemoveRelativeDir(PathBuf);
+
+    impl Drop for RemoveRelativeDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn relative_save_root_syncs_linking_parent() {
+        // Genuinely relative, previously nonexistent save root under the
+        // existing working directory: the process-wide CWD is never
+        // mutated, so parallel tests cannot observe this test. The nonce
+        // name keeps it disjoint from every other test's paths.
+        let name = format!(
+            "factory-rel-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        );
+        let _cleanup = RemoveRelativeDir(PathBuf::from(&name));
+        assert!(!Path::new(&name).exists());
+        let target = Path::new(&name).join("quicksave.factsim");
+        let durability = write_save_bytes(&target, b"relative first generation")
+            .expect("relative save must commit");
+        assert_eq!(durability.degraded_reason(), None);
+        assert_eq!(fs::read(&target).unwrap(), b"relative first generation");
+    }
+
+    #[test]
+    fn ancestor_sync_failures_degrade_instead_of_reading_durable() {
+        // The barrier must sync every created directory plus the linking
+        // parent; any failure degrades rather than reading as durable.
+        assert!(sync_created_ancestors(&[], None).is_ok());
+        let missing = std::env::temp_dir().join(format!(
+            "factory-no-such-dir-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        assert!(!missing.exists());
+        assert!(
+            sync_created_ancestors(std::slice::from_ref(&missing), None).is_err(),
+            "an unsyncable ancestor must degrade, never read as durable"
+        );
+    }
+
+    #[test]
+    fn cancel_cannot_remove_the_only_recoverable_backup() {
+        use crate::save_load::SaveLoadConfig;
+
+        let root = fault_test_root("cancel-recoverable");
+        let path = root.join("quicksave.factsim");
+        let backup_bytes = valid_quicksave_bytes(21, 4);
+        // Crash state: no primary, exactly one valid backup.
+        let backup_path = path.with_file_name(format!(
+            "quicksave.factsim{}crash-cancel",
+            BACKUP_ARTIFACT_MARKER
+        ));
+        fs::write(&backup_path, &backup_bytes).unwrap();
+        assert!(!path.exists());
+
+        // A new save cancelled before its commit point must remove only its
+        // own temporary artifact, never the pre-existing recoverable backup.
+        let cancel = AtomicU8::new(crate::save_load::lifecycle::SAVE_CANCEL_REQUESTED);
+        let snapshot = try_capture_save_snapshot(&Simulation::new_test_world(21), 1).unwrap();
+        let shutdown = AtomicBool::new(false);
+        let result = write_save_snapshot_with_faults(
+            &path,
+            &metadata("Replacement"),
+            &snapshot,
+            &shutdown,
+            &cancel,
+            &CommitFaults::none(),
+        );
+        assert!(matches!(result, Some(Err(ContainerError::Cancelled))));
+        assert!(
+            backup_path.exists(),
+            "cancellation must preserve the only recoverable backup"
+        );
+        assert!(!path.exists());
+
+        // Recovery still promotes the preserved backup.
+        let config = SaveLoadConfig {
+            root_dir: root.clone(),
+            autosave_interval_ticks: 300,
+            autosave_slot_count: 5,
+        };
+        let entries = crate::save_load::scan_catalog(&config).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(fs::read(&path).unwrap(), backup_bytes);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_scan_during_commit_preserves_one_generation() {
+        use crate::save_load::SaveLoadConfig;
+
+        let root = fault_test_root("concurrent-scan");
+        let path = root.join("quicksave.factsim");
+        let old_bytes = valid_quicksave_bytes(31, 4);
+        let new_bytes = valid_quicksave_bytes(31, 9);
+        write_save_bytes(&path, &old_bytes).unwrap();
+        let config = SaveLoadConfig {
+            root_dir: root.clone(),
+            autosave_interval_ticks: 300,
+            autosave_slot_count: 5,
+        };
+
+        let scan_config = config.clone();
+        let scanner = std::thread::spawn(move || {
+            for _ in 0..8 {
+                let _ = crate::save_load::scan_catalog(&scan_config);
+            }
+        });
+        for _ in 0..4 {
+            write_save_bytes(&path, &new_bytes).unwrap();
+            write_save_bytes(&path, &old_bytes).unwrap();
+        }
+        scanner.join().unwrap();
+
+        // The scan worker and the writer serialize on the artifact lock, so
+        // the directory never exposes a mixture: the primary is exactly one
+        // complete generation and decodes.
+        let primary = fs::read(&path).unwrap();
+        assert!(
+            primary == old_bytes || primary == new_bytes,
+            "concurrent scan must never mix snapshot generations"
+        );
+        let entries = crate::save_load::scan_catalog(&config).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(fs::read(&path).unwrap(), primary);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_preserves_ambiguous_backups_and_discards_corrupt() {
+        use crate::save_load::SaveLoadConfig;
+
+        let root = fault_test_root("ambiguous");
+        let path = root.join("quicksave.factsim");
+        let valid_bytes = valid_quicksave_bytes(41, 4);
+        write_save_bytes(&path, &valid_bytes).unwrap();
+
+        // A corrupt backup next to a valid primary is discarded.
+        let corrupt = path.with_file_name(format!(
+            "quicksave.factsim{BACKUP_ARTIFACT_MARKER}corrupt-1"
+        ));
+        fs::write(&corrupt, b"invalid backup").unwrap();
+        let config = SaveLoadConfig {
+            root_dir: root.clone(),
+            autosave_interval_ticks: 300,
+            autosave_slot_count: 5,
+        };
+        let entries = crate::save_load::scan_catalog(&config).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(fs::read(&path).unwrap(), valid_bytes);
+        assert!(!corrupt.exists());
+
+        // Two different valid backups with a corrupt primary are ambiguous:
+        // recovery preserves both instead of guessing.
+        let other_bytes = valid_quicksave_bytes(41, 9);
+        assert_ne!(valid_bytes, other_bytes);
+        fs::write(&path, b"corrupt primary").unwrap();
+        let backup_one = path.with_file_name(format!(
+            "quicksave.factsim{BACKUP_ARTIFACT_MARKER}ambiguous-1"
+        ));
+        let backup_two = path.with_file_name(format!(
+            "quicksave.factsim{BACKUP_ARTIFACT_MARKER}ambiguous-2"
+        ));
+        fs::write(&backup_one, &valid_bytes).unwrap();
+        fs::write(&backup_two, &other_bytes).unwrap();
+        let entries = crate::save_load::scan_catalog(&config).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].compatibility.can_load());
+        assert_eq!(fs::read(&path).unwrap(), b"corrupt primary");
+        assert!(backup_one.exists() && backup_two.exists());
+
+        // Removing one candidate resolves the ambiguity: the survivor promotes.
+        fs::remove_file(&backup_two).unwrap();
+        let entries = crate::save_load::scan_catalog(&config).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(fs::read(&path).unwrap(), valid_bytes);
+
+        // Identical duplicates are deduplicated: two copies of one valid
+        // backup with a corrupt primary still promote exactly that
+        // generation instead of preserving a false ambiguity.
+        fs::write(&path, b"corrupt primary").unwrap();
+        fs::write(&backup_one, &valid_bytes).unwrap();
+        fs::write(&backup_two, &valid_bytes).unwrap();
+        let entries = crate::save_load::scan_catalog(&config).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(fs::read(&path).unwrap(), valid_bytes);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn deletion_cannot_resurrect_an_old_generation() {
+        use crate::save_load::SaveLoadConfig;
+
+        let root = fault_test_root("delete-no-resurrect");
+        let path = root.join("quicksave.factsim");
+        let bytes = valid_quicksave_bytes(51, 4);
+        write_save_bytes(&path, &bytes).unwrap();
+        let backup =
+            path.with_file_name(format!("quicksave.factsim{BACKUP_ARTIFACT_MARKER}doomed-1"));
+        let temporary =
+            path.with_file_name(format!("quicksave.factsim{TEMP_ARTIFACT_MARKER}doomed-1"));
+        fs::write(&backup, &bytes).unwrap();
+        fs::write(&temporary, &bytes).unwrap();
+
+        remove_save_and_artifacts(&path).unwrap();
+        assert!(!path.exists());
+        assert!(!backup.exists());
+        assert!(!temporary.exists());
+
+        let config = SaveLoadConfig {
+            root_dir: root.clone(),
+            autosave_interval_ticks: 300,
+            autosave_slot_count: 5,
+        };
+        let entries = crate::save_load::scan_catalog(&config).unwrap();
+        assert!(
+            entries.is_empty(),
+            "intentional deletion must not resurrect an old generation"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }
