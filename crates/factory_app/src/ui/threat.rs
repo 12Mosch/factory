@@ -71,8 +71,23 @@ pub struct ThreatUiState {
     /// The cards the alert root's children were last built from; the root is
     /// only rebuilt when `cards` diverges from this.
     rendered_cards: VecDeque<ThreatEvent>,
+    /// The symbol preference the rendered cards were formatted with. Alert
+    /// labels embed the preference, so toggling it must rebuild the cards
+    /// even when the queue itself is unchanged.
+    rendered_symbols_enabled: Option<bool>,
     /// The snapshot the HUD panel text was last formatted from.
     rendered_panel: Option<ThreatSnapshot>,
+}
+
+/// Reports whether the alert root must be rebuilt. Cards depend on both the
+/// queued events and the symbol preference baked into their labels.
+pub fn threat_cards_need_rebuild(
+    cards: &VecDeque<ThreatEvent>,
+    rendered_cards: &VecDeque<ThreatEvent>,
+    symbols_enabled: bool,
+    rendered_symbols_enabled: Option<bool>,
+) -> bool {
+    cards != rendered_cards || rendered_symbols_enabled != Some(symbols_enabled)
 }
 
 pub fn setup_threat_ui(
@@ -121,11 +136,17 @@ pub fn sync_threat_ui(
     while state.cards.len() > 3 {
         state.cards.pop_front();
     }
-    if state.cards == state.rendered_cards {
+    let symbols_enabled = preferences.as_deref().is_none_or(|p| p.status_symbols);
+    if !threat_cards_need_rebuild(
+        &state.cards,
+        &state.rendered_cards,
+        symbols_enabled,
+        state.rendered_symbols_enabled,
+    ) {
         return;
     }
     state.rendered_cards = state.cards.clone();
-    let symbols_enabled = preferences.as_deref().is_none_or(|p| p.status_symbols);
+    state.rendered_symbols_enabled = Some(symbols_enabled);
     for root in &roots {
         commands
             .entity(root)
@@ -223,6 +244,30 @@ pub fn threat_accessible_glyph(kind: ThreatEventKind) -> &'static str {
 mod tests {
     use super::*;
     use bevy::{asset::AssetPlugin, scene::ScenePlugin};
+
+    fn test_event(kind: ThreatEventKind) -> ThreatEvent {
+        ThreatEvent {
+            sequence: 0,
+            tick: 0,
+            kind,
+            location: ThreatLocation::Exact { x: 0, y: 0 },
+        }
+    }
+
+    #[test]
+    fn cards_rebuild_on_symbol_toggle_without_queue_change() {
+        let cards = VecDeque::from([test_event(ThreatEventKind::RaidLaunched)]);
+        // Same queue, toggled preference: must rebuild so stale prefixes clear.
+        assert!(threat_cards_need_rebuild(&cards, &cards, false, Some(true)));
+        assert!(threat_cards_need_rebuild(&cards, &cards, true, Some(false)));
+        // Same queue, same preference: no rebuild.
+        assert!(!threat_cards_need_rebuild(&cards, &cards, true, Some(true)));
+        // Changed queue: rebuild regardless of preference.
+        let other = VecDeque::from([test_event(ThreatEventKind::BaseDestroyed)]);
+        assert!(threat_cards_need_rebuild(&other, &cards, true, Some(true)));
+        // Never rendered: rebuild.
+        assert!(threat_cards_need_rebuild(&cards, &cards, true, None));
+    }
 
     fn scene_test_app() -> App {
         let mut app = App::new();

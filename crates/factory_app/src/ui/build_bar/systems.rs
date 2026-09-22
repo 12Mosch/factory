@@ -185,6 +185,18 @@ pub(crate) fn handle_build_bar_button_clicks(
     }
 }
 
+/// Assigns the selection border width, writing `Node` only when it differs.
+/// `Node` participates in layout, so unconditional writes would invalidate
+/// layout every frame for every slot.
+fn set_slot_border_width(node: &mut Node, selected: bool) {
+    let width = UiRect::all(Val::Px(
+        crate::ui::accessibility::selection_border_width_px(selected),
+    ));
+    if node.border != width {
+        node.border = width;
+    }
+}
+
 /// Whether a hotbar selection is researched. Terrain items are gated by
 /// owning the item rather than by an entity unlock, so they always pass.
 fn selection_unlocked(
@@ -208,6 +220,8 @@ pub(crate) fn update_build_bar_visuals(
         let Some(selection) = hotbar.slot(button.slot_index) else {
             *background = BackgroundColor(Color::srgba(0.055, 0.055, 0.055, 0.80));
             *border = BorderColor::all(Color::srgba(0.30, 0.30, 0.28, 0.50));
+            // An emptied slot must not keep a selected slot's thicker border.
+            set_slot_border_width(&mut node, false);
             continue;
         };
         let selected = build_state.selected == Some(selection);
@@ -220,10 +234,7 @@ pub(crate) fn update_build_bar_visuals(
             Color::srgba(0.44, 0.43, 0.39, 0.70)
         });
         // Shape as well as hue: selected slots draw a thicker border.
-        let width = Val::Px(crate::ui::accessibility::selection_border_width_px(
-            selected,
-        ));
-        node.border = UiRect::all(width);
+        set_slot_border_width(&mut node, selected);
     }
 
     for (marker, mut text, mut color) in &mut count_texts {
@@ -359,5 +370,48 @@ pub(crate) fn update_build_status_text(
     for (mut text, mut text_color) in &mut texts {
         text.0 = message.clone();
         *text_color = TextColor(color);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::build::resources::HotbarState;
+    use crate::ui::accessibility::selection_border_width_px;
+    use factory_sim::Simulation;
+
+    #[test]
+    fn emptied_slot_resets_selection_border_width() {
+        let mut app = App::new();
+        app.insert_resource(SimResource::new(Simulation::new_test_world(0)))
+            .init_resource::<HotbarState>()
+            .init_resource::<BuildPlacementState>()
+            .add_systems(Update, update_build_bar_visuals);
+        let slot = app
+            .world_mut()
+            .spawn((
+                BuildSlotButton { slot_index: 0 },
+                Interaction::None,
+                BackgroundColor(Color::BLACK),
+                BorderColor::all(Color::BLACK),
+                Node {
+                    border: UiRect::all(Val::Px(selection_border_width_px(true))),
+                    ..default()
+                },
+            ))
+            .id();
+        app.update();
+
+        let border = app
+            .world()
+            .entity(slot)
+            .get::<Node>()
+            .expect("slot should keep its layout node")
+            .border;
+        assert_eq!(
+            border,
+            UiRect::all(Val::Px(selection_border_width_px(false))),
+            "an emptied slot must not keep the selected border width"
+        );
     }
 }

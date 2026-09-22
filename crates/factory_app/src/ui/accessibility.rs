@@ -7,7 +7,6 @@ use bevy::sprite::Text2dShadow;
 use bevy::window::PrimaryWindow;
 use serde::{Deserialize, Serialize};
 
-use crate::map::resources::MapOverlay;
 use crate::save_load::SaveLoadConfig;
 use crate::ui::settings::{SettingsTab, SettingsWindowState};
 
@@ -360,7 +359,7 @@ pub(crate) fn spawn_accessibility_settings_content(
 
     spawn_heading(parent, "Status symbols");
     parent.spawn((
-        Text::new("Prefixes machine, threat, signal, and build status with text symbols so state never depends on color alone."),
+        Text::new("Prefixes machine, threat, and build status with text symbols so state never depends on color alone."),
         TextFont::from_font_size(12.0),
         TextColor(Color::srgb(0.72, 0.76, 0.69)),
     ));
@@ -388,15 +387,9 @@ fn spawn_heading(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, text: 
     ));
 }
 
-/// Spawns a minimum-size accessibility control and its interaction marker.
-fn spawn_control_button(
-    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
-    label: &str,
-    scale_action: Option<UiScaleAction>,
-    selected: bool,
-) {
-    let mut button = parent.spawn((
-        Button,
+/// Shared 44px button chrome for accessibility controls.
+fn accessibility_button_bundle(selected: bool) -> (Node, BackgroundColor, BorderColor) {
+    (
         Node {
             min_width: Val::Px(52.0),
             min_height: Val::Px(MIN_ACCESSIBLE_HIT_TARGET_PX),
@@ -416,17 +409,33 @@ fn spawn_control_button(
         } else {
             Color::srgb(0.43, 0.53, 0.38)
         }),
-    ));
-    if let Some(action) = scale_action {
-        button.insert(UiScaleButton(action));
-    } else {
-        button.insert(ReadableHighContrastButton);
-    }
+    )
+}
+
+/// Attaches the shared label treatment to an accessibility button.
+fn finish_accessibility_button(button: &mut EntityCommands, label: &str) {
     button.with_child((
         Text::new(label),
         TextFont::from_font_size(14.0),
         TextColor(Color::WHITE),
     ));
+}
+
+/// Spawns a minimum-size accessibility control and its interaction marker.
+fn spawn_control_button(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    label: &str,
+    scale_action: Option<UiScaleAction>,
+    selected: bool,
+) {
+    let (node, background, border) = accessibility_button_bundle(selected);
+    let mut button = parent.spawn((Button, node, background, border));
+    if let Some(action) = scale_action {
+        button.insert(UiScaleButton(action));
+    } else {
+        button.insert(ReadableHighContrastButton);
+    }
+    finish_accessibility_button(&mut button, label);
 }
 
 /// Spawns an accessibility toggle with a 44px hit target and its marker.
@@ -436,28 +445,8 @@ fn spawn_accessibility_toggle(
     toggle: AccessibilityToggle,
     selected: bool,
 ) {
-    let mut button = parent.spawn((
-        Button,
-        Node {
-            min_width: Val::Px(52.0),
-            min_height: Val::Px(MIN_ACCESSIBLE_HIT_TARGET_PX),
-            padding: UiRect::horizontal(Val::Px(12.0)),
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
-            border: UiRect::all(Val::Px(2.0)),
-            ..default()
-        },
-        BackgroundColor(if selected {
-            Color::srgb(0.24, 0.34, 0.18)
-        } else {
-            Color::srgb(0.07, 0.09, 0.075)
-        }),
-        BorderColor::all(if selected {
-            Color::srgb(0.82, 0.94, 0.40)
-        } else {
-            Color::srgb(0.43, 0.53, 0.38)
-        }),
-    ));
+    let (node, background, border) = accessibility_button_bundle(selected);
+    let mut button = parent.spawn((Button, node, background, border));
     match toggle {
         AccessibilityToggle::HighContrast => {
             button.insert(ReadableHighContrastButton);
@@ -469,27 +458,67 @@ fn spawn_accessibility_toggle(
             button.insert(StatusSymbolsButton);
         }
     }
-    button.with_child((
-        Text::new(label),
-        TextFont::from_font_size(14.0),
-        TextColor(Color::WHITE),
-    ));
+    finish_accessibility_button(&mut button, label);
 }
 
 /// Loads preferences once at startup and establishes the persistence baseline.
+/// Legacy or out-of-range files are upgraded in place so the next startup
+/// reads a versioned record.
 pub(crate) fn load_persisted_ui_preferences(
     config: Res<SaveLoadConfig>,
     mut preferences: ResMut<UiPreferences>,
     mut persistence: ResMut<UiPreferencesPersistenceState>,
 ) {
     let path = ui_preferences_path(&config);
-    let file = read_ui_preferences_file(&path).unwrap_or_default();
-    preferences.settings_path = path;
+    let text = fs::read_to_string(&path).ok();
+    let raw = text
+        .as_deref()
+        .and_then(|text| ron::from_str::<UiPreferencesFile>(text).ok());
+    let file = raw
+        .clone()
+        .map(|mut raw| {
+            raw.normalize();
+            raw
+        })
+        .unwrap_or_default();
+    // Normalization is lossy (missing version, clamped scale): when it
+    // changed anything, the on-disk record is stale and must be rewritten.
+    // Basing `last_saved` on the normalized value alone would mark the stale
+    // file as saved and never upgrade it. Note the parsed struct cannot
+    // reveal a missing version on its own: `#[serde(default)]` fills it from
+    // `Default`, so an explicit probe detects legacy records.
+    #[derive(Deserialize)]
+    struct VersionProbe {
+        version: Option<u32>,
+    }
+    let migrated = match (&text, &raw) {
+        (Some(text), Some(raw)) => {
+            ron::from_str::<VersionProbe>(text)
+                .ok()
+                .is_none_or(|probe| probe.version.is_none())
+                || *raw != file
+        }
+        _ => false,
+    };
+    preferences.settings_path = path.clone();
     preferences.set_scale_percent(file.scale_percent);
     preferences.readable_high_contrast = file.readable_high_contrast;
     preferences.reduced_motion = file.reduced_motion;
     preferences.status_symbols = file.status_symbols;
-    persistence.last_saved = Some(UiPreferencesFile::from_preferences(&preferences));
+    let normalized = UiPreferencesFile::from_preferences(&preferences);
+    if migrated {
+        // Best effort: a failure leaves no baseline so the update-time save
+        // retries promptly instead of treating the legacy file as current.
+        if write_ui_preferences_file(&path, &normalized).is_ok() {
+            persistence.last_saved = Some(normalized);
+            persistence.retry_after = None;
+        } else {
+            persistence.last_saved = None;
+            persistence.retry_after = Some(Duration::ZERO);
+        }
+    } else {
+        persistence.last_saved = Some(normalized);
+    }
 }
 
 /// Persists changed preferences and retries transient failures with backoff.
@@ -795,8 +824,9 @@ fn apply_world_label_style(
 }
 
 /// Reports whether a control meets the minimum accessible hit target.
+/// Both axes must meet the 44px minimum.
 pub fn accessible_hit_target_met(width_px: f32, height_px: f32) -> bool {
-    width_px >= MIN_ACCESSIBLE_HIT_TARGET_PX && height_px >= MIN_ACCESSIBLE_HIT_TARGET_PX - 8.0
+    width_px >= MIN_ACCESSIBLE_HIT_TARGET_PX && height_px >= MIN_ACCESSIBLE_HIT_TARGET_PX
 }
 
 /// Collapses frame-interpolation motion when reduced motion is enabled.
@@ -875,46 +905,6 @@ pub fn format_accessible_threat_label(
         format!("{} {label}", threat_alert_glyph(kind))
     } else {
         label.to_string()
-    }
-}
-
-/// Shape/text alternative for a rail-signal aspect.
-pub fn rail_signal_glyph(aspect: factory_sim::RailSignalAspect) -> &'static str {
-    use factory_sim::RailSignalAspect as Aspect;
-    match aspect {
-        Aspect::Clear => "[GO]",
-        Aspect::Reserved => "[WAIT]",
-        Aspect::Blocked => "[STOP]",
-    }
-}
-
-/// Human-readable rail-signal state that does not depend on lamp hue.
-pub fn rail_signal_accessible_label(aspect: factory_sim::RailSignalAspect) -> &'static str {
-    use factory_sim::RailSignalAspect as Aspect;
-    match aspect {
-        Aspect::Clear => "Clear",
-        Aspect::Reserved => "Caution",
-        Aspect::Blocked => "Stop",
-    }
-}
-
-/// Shape/text alternative for a circuit wire color.
-pub fn circuit_wire_glyph(color: factory_sim::WireColor) -> &'static str {
-    match color {
-        factory_sim::WireColor::Red => "[R]",
-        factory_sim::WireColor::Green => "[G]",
-    }
-}
-
-/// Shape/text alternative for a map overlay toggle.
-pub fn map_overlay_glyph(overlay: MapOverlay) -> &'static str {
-    match overlay {
-        MapOverlay::Pollution => "[P]",
-        MapOverlay::Resources => "[R]",
-        MapOverlay::PowerNetworks => "[E]",
-        MapOverlay::ProductionProblems => "[!]",
-        MapOverlay::Enemies => "[X]",
-        MapOverlay::ConstructionPlans => "[C]",
     }
 }
 
@@ -1015,6 +1005,52 @@ mod tests {
     }
 
     #[test]
+    fn legacy_file_upgrades_in_place_on_load() {
+        use crate::save_load::SaveLoadConfig;
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("factory-ui-migrate-{unique}"));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("ui-settings.ron"), "(scale_percent:125)").unwrap();
+
+        let mut app = App::new();
+        app.insert_resource(SaveLoadConfig {
+            root_dir: root.clone(),
+            ..default()
+        })
+        .init_resource::<UiPreferences>()
+        .init_resource::<UiPreferencesPersistenceState>()
+        .add_systems(Startup, load_persisted_ui_preferences);
+        app.update();
+
+        let preferences = app.world().resource::<UiPreferences>();
+        assert_eq!(preferences.scale_percent, 125);
+        assert!(!preferences.reduced_motion);
+        assert!(preferences.status_symbols);
+        // The legacy record is rewritten as versioned so the next startup
+        // reads it without migration.
+        assert_eq!(
+            read_ui_preferences_file(&root.join("ui-settings.ron")),
+            Some(UiPreferencesFile {
+                version: ACCESSIBILITY_PREFS_VERSION,
+                scale_percent: 125,
+                readable_high_contrast: false,
+                reduced_motion: false,
+                status_symbols: true,
+            })
+        );
+        assert!(
+            fs::read_to_string(root.join("ui-settings.ron"))
+                .unwrap()
+                .contains("version")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn failed_preference_write_retries_after_the_backoff() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1075,7 +1111,7 @@ mod tests {
 
     #[test]
     fn status_symbols_are_unique_per_domain() {
-        use factory_sim::{MachineStatus, RailSignalAspect, ThreatEventKind, WireColor};
+        use factory_sim::{MachineStatus, ThreatEventKind};
         use std::collections::HashSet;
 
         let machine = [
@@ -1103,23 +1139,6 @@ mod tests {
         ]
         .map(threat_alert_glyph);
         assert_eq!(threats.iter().collect::<HashSet<_>>().len(), threats.len());
-
-        let signals = [
-            RailSignalAspect::Clear,
-            RailSignalAspect::Reserved,
-            RailSignalAspect::Blocked,
-        ]
-        .map(rail_signal_glyph);
-        assert_eq!(signals.iter().collect::<HashSet<_>>().len(), signals.len());
-
-        let wires = [WireColor::Red, WireColor::Green].map(circuit_wire_glyph);
-        assert_ne!(wires[0], wires[1]);
-
-        let overlays = MapOverlay::ALL.map(map_overlay_glyph);
-        assert_eq!(
-            overlays.iter().collect::<HashSet<_>>().len(),
-            overlays.len()
-        );
 
         assert_ne!(build_validity_glyph(true), build_validity_glyph(false));
     }
@@ -1156,6 +1175,10 @@ mod tests {
         assert_eq!(reduced_motion_overstep(false, 0.7), 0.7);
         assert!(accessible_hit_target_met(52.0, 44.0));
         assert!(!accessible_hit_target_met(32.0, 32.0));
+        assert!(
+            !accessible_hit_target_met(52.0, 36.0),
+            "both axes must meet the 44px minimum"
+        );
         assert_eq!(
             MIN_ACCESSIBLE_HIT_TARGET_PX, 44.0,
             "hit targets follow the 44px guideline"

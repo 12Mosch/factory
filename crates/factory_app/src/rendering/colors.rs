@@ -209,10 +209,10 @@ pub(crate) fn rail_ballast_color() -> Color {
 /// nobody has, yellow for one somebody is on their way into, red for one
 /// somebody is standing in.
 ///
-/// Hue alone is not the signal: UI surfaces pair each aspect with
-/// [`crate::ui::accessibility::rail_signal_glyph`] text (`[GO]`/`[WAIT]`/`[STOP]`),
-/// and the three lamp colors are luminance-separated so they stay ordered
-/// even when red-green hues merge.
+/// The three lamp colors are luminance-separated (reserved > clear > blocked)
+/// so the ordering survives even when red-green hues merge. Rail aspect has
+/// no text tag in the world view; the signal state is readable from the lamp
+/// ordering alongside the surrounding rail context.
 pub(crate) fn rail_signal_color(aspect: factory_sim::RailSignalAspect) -> Color {
     match aspect {
         factory_sim::RailSignalAspect::Clear => Color::srgb(0.24, 0.80, 0.36),
@@ -536,7 +536,6 @@ mod tests {
 
     #[test]
     fn rail_signal_aspects_stay_ordered_by_luminance() {
-        use crate::ui::accessibility::rail_signal_glyph;
         use factory_sim::RailSignalAspect as Aspect;
         let clear = relative_luminance(rail_signal_color(Aspect::Clear));
         let reserved = relative_luminance(rail_signal_color(Aspect::Reserved));
@@ -545,14 +544,10 @@ mod tests {
             reserved > clear && clear > blocked,
             "signal luminance should order reserved > clear > blocked, got {reserved:.3} {clear:.3} {blocked:.3}"
         );
-        assert_ne!(
-            rail_signal_glyph(Aspect::Clear),
-            rail_signal_glyph(Aspect::Blocked)
-        );
-        assert_ne!(
-            rail_signal_glyph(Aspect::Reserved),
-            rail_signal_glyph(Aspect::Blocked)
-        );
+        assert!(status_colors_distinguishable(
+            rail_signal_color(Aspect::Reserved),
+            rail_signal_color(Aspect::Blocked)
+        ));
     }
 
     #[test]
