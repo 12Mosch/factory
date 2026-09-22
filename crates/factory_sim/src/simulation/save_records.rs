@@ -259,7 +259,7 @@ pub fn try_capture_record_snapshot_with_limits(
     )
 }
 
-/// Preflights the record payload, reserves capacity before cloning, and
+/// Preflights the framed record size, reserves capacity before cloning, and
 /// returns the reservation with the owned snapshot. `None` means capacity was
 /// unavailable; no owned snapshot is allocated in that case.
 pub fn try_capture_record_snapshot_with_reservation<R>(
@@ -269,8 +269,8 @@ pub fn try_capture_record_snapshot_with_reservation<R>(
     reserve: impl FnOnce(u64) -> Option<R>,
 ) -> Result<Option<(SimulationSaveSnapshot, R)>, SaveLoadError> {
     super::save::check_borrowed_snapshot_collections(sim, limits)?;
-    let wire_bytes = preflight_record_sizes(&BorrowedRecordFields::from_simulation(sim), limits)?;
-    let Some(reservation) = reserve(wire_bytes) else {
+    let framed_bytes = preflight_record_sizes(&BorrowedRecordFields::from_simulation(sim), limits)?;
+    let Some(reservation) = reserve(framed_bytes) else {
         return Ok(None);
     };
     Ok(Some((
@@ -719,6 +719,26 @@ mod tests {
             loaded.tick();
             assert_eq!(loaded.state_hash(), sim.state_hash());
         }
+    }
+
+    #[test]
+    fn reservation_preflight_includes_chunk_manifest_and_header() {
+        let mut sim = record_test_sim();
+        for y in 0..4 {
+            for x in 0..4 {
+                sim.ensure_chunk_generated(ChunkCoord { x, y });
+            }
+        }
+        let mut framed_bytes = 0;
+        let (snapshot, ()) =
+            try_capture_record_snapshot_with_reservation(&sim, 0, SaveLimits::default(), |bytes| {
+                framed_bytes = bytes;
+                Some(())
+            })
+            .unwrap()
+            .unwrap();
+        let encoded = save_snapshot_records_to_bytes(&snapshot).unwrap();
+        assert_eq!(framed_bytes, encoded.len() as u64);
     }
 
     #[test]

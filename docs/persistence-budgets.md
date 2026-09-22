@@ -129,18 +129,24 @@ Keep the monolithic full-copy format for the measured supported sizes. No
 measurements here justify copy-on-write pages, chunked state, or incremental
 persistence yet. Each admitted save pins its own immutable admission snapshot:
 with `MAX_QUEUED_SAVES = 4`, the request-count ceiling remains five generations.
-Capture also charges three times its preflight record wire bytes against a
+Capture also charges three times its preflight framed record bytes against a
 160 MiB shared admission allowance before cloning. This is an empirical
 concurrency heuristic, not a bound on retained Rust heap bytes: collection
 capacity and object overhead vary by world. An isolated snapshot may exceed
-the shared allowance, up to the three-times estimate of the 64 MiB wire ceiling,
+the shared allowance, up to the three-times estimate of the 64 MiB wire ceiling
+plus record framing,
 so a saveable world is not rejected solely for being large. The reservation
 follows each snapshot through the parked handoff and worker, and is released
 after encoding or when a request is cancelled. At the measured large fixture
 size (22,388,172 wire bytes; 60,288,643 retained heap bytes), the heuristic
-admits two concurrent generations rather than five. A third fails with a
+admits two concurrent generations rather than five. Requests receive admission
+decisions in FIFO order even when their capture tasks finish preflight out of
+order. A third fails with a
 retryable admission-budget status before its owned copy is allocated. The
-allocator peak measurements remain the heap regression guard. With no shared
+small fixture retains 2,751,517 heap bytes for 1,133,358 encoded bytes;
+the request-count ceiling limits fixed per-snapshot overhead to five copies.
+These measurements do not turn the 3× heuristic into a heap guarantee.
+The allocator peak measurements remain the heap regression guard. With no shared
 pages there are no worker-retained old pages
 or dirty page copies to add to the accounting. Queued requests retain
 parameters plus the parked-snapshot handoff. During encoding the running snapshot
@@ -149,6 +155,9 @@ are dropped immediately after encoding, before flush, sync, and commit work.
 One save worker runs at a time; accepted manual saves wait in
 a bounded FIFO (same-target overwrites serialize in request order) while
 autosaves coalesce by target and drop under backpressure instead of queueing.
+An autosave rejected by the asynchronous admission heuristic remains silent
+and retries when retained snapshots drain, without waiting a full autosave
+interval.
 Capture tasks, encoding, and disk I/O run off the frame schedule, so
 submission never blocks on the simulation lock. Fixed steps defer only while
 an admission capture is in flight (bounded by capture duration, not queue or

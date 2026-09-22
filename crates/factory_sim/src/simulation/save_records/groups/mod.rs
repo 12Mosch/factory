@@ -310,6 +310,7 @@ pub(super) fn measure_record(
 
 /// Bounds every planned record's encoded size from borrowed state, before
 /// any cloning: per-record, aggregate decoded, and framed artifact totals.
+/// Returns the complete framed record size for admission accounting.
 /// An oversized world fails here, while the simulation read lock can be
 /// released without duplicating the world first.
 pub(super) fn preflight_record_sizes(
@@ -342,7 +343,7 @@ pub(super) fn preflight_record_sizes(
     if total > limits.max_encoded_bytes {
         return Err(SaveLoadError::TooLarge);
     }
-    Ok(decoded_total)
+    Ok(total)
 }
 
 /// Encodes one record payload from a captured snapshot.

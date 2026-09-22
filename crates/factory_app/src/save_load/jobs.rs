@@ -18,7 +18,7 @@ use factory_sim::{
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
     atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     mpsc,
 };
@@ -48,6 +48,64 @@ const MAX_SNAPSHOT_ADMISSION_BYTES: u64 = 160 * 1024 * 1024;
 struct SnapshotReservation {
     bytes: u64,
     used: Arc<AtomicU64>,
+}
+
+#[derive(Default)]
+struct AdmissionOrder {
+    pending: Mutex<VecDeque<PersistenceRequestId>>,
+    ready: Condvar,
+}
+
+struct AdmissionTurn {
+    id: PersistenceRequestId,
+    order: Arc<AdmissionOrder>,
+}
+
+impl AdmissionOrder {
+    fn register(self: &Arc<Self>, id: PersistenceRequestId) -> AdmissionTurn {
+        self.pending.lock().unwrap().push_back(id);
+        AdmissionTurn {
+            id,
+            order: Arc::clone(self),
+        }
+    }
+
+    fn remove(&self, id: PersistenceRequestId) {
+        self.pending.lock().unwrap().retain(|&entry| entry != id);
+        self.ready.notify_all();
+    }
+}
+
+impl AdmissionTurn {
+    fn reserve(
+        &self,
+        used: &Arc<AtomicU64>,
+        wire_bytes: u64,
+        cancel: &AtomicU8,
+    ) -> Option<SnapshotReservation> {
+        let mut pending = self.order.pending.lock().unwrap();
+        loop {
+            if cancel.load(Ordering::Relaxed) != SAVE_CANCEL_ACTIVE {
+                return None;
+            }
+            if pending.front() == Some(&self.id) {
+                let reservation = SnapshotReservation::try_new(used, wire_bytes);
+                pending.pop_front();
+                self.order.ready.notify_all();
+                return reservation;
+            }
+            if !pending.contains(&self.id) {
+                return None;
+            }
+            pending = self.order.ready.wait(pending).unwrap();
+        }
+    }
+}
+
+impl Drop for AdmissionTurn {
+    fn drop(&mut self) {
+        self.order.remove(self.id);
+    }
 }
 
 impl SnapshotReservation {
@@ -96,6 +154,7 @@ pub struct PendingSaveJobs {
     running: Option<RunningSave>,
     queue: VecDeque<QueuedSave>,
     reserved_snapshot_bytes: Arc<AtomicU64>,
+    admission_order: Arc<AdmissionOrder>,
     /// Teardown signal shared with the running worker. Set on drop so a
     /// worker waiting on the artifact lock — possibly held by a detached
     /// scan worker — aborts instead of stalling shutdown through it. A
@@ -138,6 +197,11 @@ struct RunningSave {
 }
 
 impl PendingSaveJobs {
+    pub(crate) fn admission_drained(&self) -> bool {
+        self.admission_order.pending.lock().unwrap().is_empty()
+            && self.reserved_snapshot_bytes.load(Ordering::Acquire) == 0
+    }
+
     pub fn is_empty(&self) -> bool {
         self.running.is_none() && self.queue.is_empty()
     }
@@ -239,6 +303,7 @@ impl PendingSaveJobs {
                 queued
                     .cancel
                     .store(SAVE_CANCEL_REQUESTED, Ordering::Relaxed);
+                self.admission_order.remove(queued.request_id);
             }
         }
         let before = self.queue.len();
@@ -262,6 +327,7 @@ impl PendingSaveJobs {
                 Err(SAVE_CANCEL_COMMITTING) => {}
                 Err(_) => {}
             }
+            self.admission_order.remove(running.request_id);
         }
         cancelled
     }
@@ -366,6 +432,12 @@ impl Drop for PendingSaveJobs {
             thread::sleep(Duration::from_millis(1));
         }
         self.shutdown.store(true, Ordering::Relaxed);
+        for queued in &self.queue {
+            queued
+                .cancel
+                .store(SAVE_CANCEL_REQUESTED, Ordering::Relaxed);
+            self.admission_order.remove(queued.request_id);
+        }
         self.queue.clear();
         self.join_running();
     }
@@ -459,6 +531,8 @@ pub(crate) fn queue_save(
     let source = sim.capture_source();
     let cancel = Arc::new(AtomicU8::new(SAVE_CANCEL_ACTIVE));
     let worker_cancel = Arc::clone(&cancel);
+    let request_id = PersistenceRequestId::next();
+    let turn = pending.admission_order.register(request_id);
     let reserved_snapshot_bytes = Arc::clone(&pending.reserved_snapshot_bytes);
     let (parked_tx, parked_rx) = mpsc::channel();
     thread::spawn(move || {
@@ -466,12 +540,12 @@ pub(crate) fn queue_save(
             requested_generation,
             source,
             worker_cancel,
+            turn,
             reserved_snapshot_bytes,
             claim,
             parked_tx,
         );
     });
-    let request_id = PersistenceRequestId::next();
     pending.queue.push_back(QueuedSave {
         request_id,
         id: id.clone(),
@@ -506,6 +580,7 @@ fn admission_capture_task(
     requested_generation: u64,
     source: AdmissionCaptureSource,
     cancel: Arc<AtomicU8>,
+    turn: AdmissionTurn,
     reserved_snapshot_bytes: Arc<AtomicU64>,
     _claim: AdmissionCaptureClaim,
     parked: mpsc::Sender<Result<ParkedSnapshot, SaveJobError>>,
@@ -514,6 +589,7 @@ fn admission_capture_task(
         requested_generation,
         &source,
         &cancel,
+        &turn,
         &reserved_snapshot_bytes,
     );
     let _ = parked.send(outcome);
@@ -523,6 +599,7 @@ fn capture_admission(
     requested_generation: u64,
     source: &AdmissionCaptureSource,
     cancel: &AtomicU8,
+    turn: &AdmissionTurn,
     reserved_snapshot_bytes: &Arc<AtomicU64>,
 ) -> Result<ParkedSnapshot, SaveJobError> {
     if cancel.load(Ordering::Relaxed) != SAVE_CANCEL_ACTIVE {
@@ -560,13 +637,19 @@ fn capture_admission(
         &sim,
         capture_generation,
         SaveLimits::default(),
-        |wire_bytes| SnapshotReservation::try_new(reserved_snapshot_bytes, wire_bytes),
+        |wire_bytes| turn.reserve(reserved_snapshot_bytes, wire_bytes, cancel),
     )
     .map_err(|error| match error {
         factory_sim::SaveLoadError::TooLarge => SaveJobError::CaptureBudget,
         _ => SaveJobError::CaptureFailed(format!("{error:?}")),
     })?
-    .ok_or(SaveJobError::AdmissionBudget)?;
+    .ok_or_else(|| {
+        if cancel.load(Ordering::Relaxed) != SAVE_CANCEL_ACTIVE {
+            SaveJobError::Cancelled
+        } else {
+            SaveJobError::AdmissionBudget
+        }
+    })?;
     let snapshot_capture_ms = snapshot_start.elapsed().as_secs_f64() * 1000.0;
     let mut parked = ParkedSnapshot {
         snapshot,
@@ -744,6 +827,19 @@ pub(crate) fn system_path(config: &SaveLoadConfig, kind: &SaveKind) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_turn() -> AdmissionTurn {
+        Arc::new(AdmissionOrder::default()).register(PersistenceRequestId::next())
+    }
+
+    fn test_capture_admission(
+        generation: u64,
+        source: &AdmissionCaptureSource,
+        cancel: &AtomicU8,
+        reserved: &Arc<AtomicU64>,
+    ) -> Result<ParkedSnapshot, SaveJobError> {
+        capture_admission(generation, source, cancel, &test_turn(), reserved)
+    }
     use std::time::Duration;
 
     fn test_running_save(id: &str) -> (RunningSave, std::sync::mpsc::SyncSender<()>) {
@@ -777,6 +873,7 @@ mod tests {
             running: Some(running),
             queue: VecDeque::new(),
             reserved_snapshot_bytes: Arc::new(AtomicU64::new(0)),
+            admission_order: Arc::new(AdmissionOrder::default()),
             shutdown: Arc::new(AtomicBool::new(false)),
         };
 
@@ -882,7 +979,7 @@ mod tests {
         let cancel = AtomicU8::new(SAVE_CANCEL_ACTIVE);
         let retained = Arc::new(AtomicU64::new(0));
 
-        let parked = capture_admission(requested_generation, &source, &cancel, &retained)
+        let parked = test_capture_admission(requested_generation, &source, &cancel, &retained)
             .expect("admission capture should park the requested tick");
         assert_eq!(
             parked.snapshot.identity().tick,
@@ -892,7 +989,7 @@ mod tests {
 
         // A world installed after admission is stale, never mixed into the
         // requested identity.
-        let stale = capture_admission(
+        let stale = test_capture_admission(
             requested_generation.wrapping_add(1),
             &source,
             &cancel,
@@ -905,7 +1002,7 @@ mod tests {
 
         // A cancel racing the capture wins before any snapshot is retained.
         cancel.store(SAVE_CANCEL_REQUESTED, Ordering::Relaxed);
-        let cancelled = capture_admission(requested_generation, &source, &cancel, &retained);
+        let cancelled = test_capture_admission(requested_generation, &source, &cancel, &retained);
         assert!(
             matches!(cancelled, Err(SaveJobError::Cancelled)),
             "a pre-capture cancel must win without retaining a snapshot"
@@ -942,7 +1039,7 @@ mod tests {
         let cancel = AtomicU8::new(SAVE_CANCEL_ACTIVE);
         retained.store(MAX_SNAPSHOT_ADMISSION_BYTES, Ordering::Release);
         assert!(matches!(
-            capture_admission(sim.replacement_revision(), &source, &cancel, &retained),
+            test_capture_admission(sim.replacement_revision(), &source, &cancel, &retained),
             Err(SaveJobError::AdmissionBudget)
         ));
         assert_eq!(
@@ -952,12 +1049,41 @@ mod tests {
     }
 
     #[test]
+    fn admission_reservations_follow_request_order_under_contention() {
+        let order = Arc::new(AdmissionOrder::default());
+        let first = order.register(PersistenceRequestId::next());
+        let second = order.register(PersistenceRequestId::next());
+        let third = order.register(PersistenceRequestId::next());
+        let used = Arc::new(AtomicU64::new(0));
+        let cancel = Arc::new(AtomicU8::new(SAVE_CANCEL_ACTIVE));
+        let wire_bytes = 70 * 1024 * 1024 / SNAPSHOT_RESERVATION_MULTIPLIER;
+
+        let third_used = Arc::clone(&used);
+        let third_cancel = Arc::clone(&cancel);
+        let third_handle =
+            thread::spawn(move || third.reserve(&third_used, wire_bytes, &third_cancel));
+        let second_used = Arc::clone(&used);
+        let second_cancel = Arc::clone(&cancel);
+        let second_handle =
+            thread::spawn(move || second.reserve(&second_used, wire_bytes, &second_cancel));
+
+        // The later tasks may reach the turnstile first, but cannot consume
+        // capacity ahead of the first request.
+        let first_reservation = first.reserve(&used, wire_bytes, &cancel).unwrap();
+        let second_reservation = second_handle.join().unwrap().unwrap();
+        assert!(third_handle.join().unwrap().is_none());
+        drop(first_reservation);
+        drop(second_reservation);
+        assert_eq!(used.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
     fn cancelling_a_parked_save_releases_its_admission_estimate() {
         let sim = SimResource::new(factory_sim::Simulation::new_test_world(7));
         let mut pending = PendingSaveJobs::default();
         let (sender, receiver) = mpsc::channel();
         let cancel = AtomicU8::new(SAVE_CANCEL_ACTIVE);
-        let parked = capture_admission(
+        let parked = test_capture_admission(
             sim.replacement_revision(),
             &sim.capture_source(),
             &cancel,
@@ -1004,6 +1130,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             queue: VecDeque::from([queued]),
             reserved_snapshot_bytes: Arc::new(AtomicU64::new(0)),
+            admission_order: Arc::new(AdmissionOrder::default()),
         };
         assert!(pending.cancel(&SaveId::new("queued")));
         assert!(pending.queue.is_empty());
@@ -1038,6 +1165,7 @@ mod tests {
             running: Some(running),
             queue: VecDeque::new(),
             reserved_snapshot_bytes: Arc::new(AtomicU64::new(0)),
+            admission_order: Arc::new(AdmissionOrder::default()),
             shutdown: Arc::new(AtomicBool::new(false)),
         };
         assert!(
@@ -1076,6 +1204,7 @@ mod tests {
             requested,
             source,
             Arc::clone(&cancel),
+            test_turn(),
             Arc::new(AtomicU64::new(0)),
             sim.claim_admission_capture(),
             parked_tx,
@@ -1192,6 +1321,7 @@ mod tests {
             requested,
             source,
             Arc::clone(&worker_cancel),
+            test_turn(),
             Arc::new(AtomicU64::new(0)),
             sim.claim_admission_capture(),
             parked_tx,
@@ -1256,6 +1386,7 @@ mod tests {
             requested_generation,
             sim.capture_source(),
             Arc::new(AtomicU8::new(SAVE_CANCEL_ACTIVE)),
+            test_turn(),
             Arc::new(AtomicU64::new(0)),
             sim.claim_admission_capture(),
             parked_tx,
