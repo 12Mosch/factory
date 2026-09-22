@@ -2254,6 +2254,10 @@ mod tests {
     #[test]
     fn deep_ancestor_chain_without_linking_parent_degrades() {
         let outer = fault_test_root("deep-root");
+        // This test deliberately exceeds MAX_PATH on Windows. Canonicalizing
+        // the existing root yields an extended path for drive and UNC roots.
+        #[cfg(windows)]
+        let outer = fs::canonicalize(outer).unwrap();
         let mut dir = outer.clone();
         for _ in 0..MAX_ANCESTOR_WALK + 32 {
             dir.push("d");
