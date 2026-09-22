@@ -664,13 +664,24 @@ fn write_save_bytes_locked(
 /// nesting, while keeping a pathological path from stalling the commit.
 const MAX_ANCESTOR_WALK: usize = 256;
 
+/// Ancestor chain recorded before directory creation: newly missing
+/// components (child-first) plus the deepest pre-existing ancestor linking
+/// the new chain. `complete` is false when the walk hit its bound before
+/// reaching a known parent, in which case the barrier must degrade: links
+/// above the recorded prefix were never covered.
+struct AncestorChain {
+    missing: Vec<PathBuf>,
+    base: Option<PathBuf>,
+    complete: bool,
+}
+
 /// Splits the save directory into newly missing components (child-first)
 /// plus the deepest pre-existing ancestor that links the new chain.
 ///
 /// The post-install barrier syncs every created directory and that linking
 /// parent: without those barriers a crash can remove the whole new tree
 /// even though the save itself reported durable.
-fn missing_ancestor_chain(path: &Path) -> (Vec<PathBuf>, Option<PathBuf>) {
+fn missing_ancestor_chain(path: &Path) -> AncestorChain {
     let mut missing = Vec::new();
     let mut cursor = path.parent().map(Path::to_path_buf);
     for _ in 0..MAX_ANCESTOR_WALK {
@@ -681,10 +692,20 @@ fn missing_ancestor_chain(path: &Path) -> (Vec<PathBuf>, Option<PathBuf>) {
             // as the pre-existing linking parent. This matters because the
             // default save root falls back to relative `saves` when no data
             // directory is configured.
-            return (missing, Some(PathBuf::from(".")));
+            return AncestorChain {
+                missing,
+                base: Some(PathBuf::from(".")),
+                complete: true,
+            };
         }
         match dir.try_exists() {
-            Ok(true) => return (missing, Some(dir)),
+            Ok(true) => {
+                return AncestorChain {
+                    missing,
+                    base: Some(dir),
+                    complete: true,
+                };
+            }
             // Unstatable ancestors fail in `create_dir_all` below when they
             // truly block creation; syncing them post-install is harmless
             // when they merely raced into existence.
@@ -694,7 +715,11 @@ fn missing_ancestor_chain(path: &Path) -> (Vec<PathBuf>, Option<PathBuf>) {
             }
         }
     }
-    (missing, None)
+    AncestorChain {
+        missing,
+        base: None,
+        complete: false,
+    }
 }
 
 /// Syncs every created directory plus the pre-existing linking parent so a
@@ -728,7 +753,7 @@ fn write_temporary_and_commit<T>(
     // barrier syncs every created directory plus the pre-existing parent
     // that links the new chain, so a first save in a new root never reports
     // durable while its own directories are still crash-removable.
-    let (missing_ancestors, ancestor_base) = missing_ancestor_chain(path);
+    let chain = missing_ancestor_chain(path);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -799,10 +824,17 @@ fn write_temporary_and_commit<T>(
         let durability = match faults.sync_barrier_error() {
             Some(error) => SaveDurability::unsynced(error),
             None => {
-                match sync_installed_file(path).and_then(|()| {
-                    sync_created_ancestors(&missing_ancestors, ancestor_base.as_deref())
-                }) {
-                    Ok(()) => SaveDurability::Durable,
+                let barrier = sync_installed_file(path)
+                    .and_then(|()| sync_created_ancestors(&chain.missing, chain.base.as_deref()));
+                match barrier {
+                    Ok(()) if chain.complete => SaveDurability::Durable,
+                    // The walk hit its bound before reaching a known linking
+                    // parent: links above the recorded prefix were never
+                    // covered, so the commit degrades even though the
+                    // recorded syncs succeeded.
+                    Ok(()) => SaveDurability::unsynced(
+                        "ancestor chain exceeds walk bound; linking parent unknown",
+                    ),
                     Err(error) => SaveDurability::unsynced(error),
                 }
             }
@@ -2209,18 +2241,40 @@ mod tests {
         );
         assert!(!Path::new(&name).exists());
         let target = Path::new(&name).join("quicksave.factsim");
-        let (missing, base) = missing_ancestor_chain(&target);
-        assert_eq!(missing, vec![PathBuf::from(&name)]);
+        let chain = missing_ancestor_chain(&target);
+        assert_eq!(chain.missing, vec![PathBuf::from(&name)]);
         assert_eq!(
-            base,
+            chain.base,
             Some(PathBuf::from(".")),
             "a relative root links into the working directory"
         );
+        assert!(chain.complete);
     }
 
-    /// Restores the working directory even when the test panics. Only this
-    /// test mutates the process-wide CWD, and every other test resolves
-    /// absolute paths, so no parallel test can observe the switch.
+    #[test]
+    fn deep_ancestor_chain_without_linking_parent_degrades() {
+        let outer = fault_test_root("deep-root");
+        let mut dir = outer.clone();
+        for _ in 0..MAX_ANCESTOR_WALK + 32 {
+            dir.push("d");
+        }
+        let path = dir.join("quicksave.factsim");
+        let durability =
+            write_save_bytes(&path, b"deep generation").expect("deep save must commit");
+        assert!(
+            durability.degraded_reason().is_some(),
+            "a chain past the walk bound has no known linking parent and must never read as durable"
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"deep generation");
+        fs::remove_dir_all(outer).unwrap();
+    }
+
+    /// Serializes the single test that switches the process-wide working
+    /// directory. Any future test mutating the CWD must hold this lock too;
+    /// tests resolving absolute paths never observe the switch.
+    static CWD_SWITCH_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Restores the working directory even when the test panics.
     struct RestoreCwd(PathBuf);
 
     impl RestoreCwd {
@@ -2247,6 +2301,7 @@ mod tests {
             std::process::id(),
             std::thread::current().id()
         );
+        let _cwd_lock = CWD_SWITCH_LOCK.lock().unwrap();
         let _guard = RestoreCwd::enter(&workdir);
         let durability = write_save_bytes(
             Path::new(&name).join("quicksave.factsim").as_path(),

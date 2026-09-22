@@ -28,8 +28,11 @@
 //!    primary appeared concurrently.
 //! 4. **Durability barrier**: flush the installed file and directory metadata
 //!    (`sync_installed_file`), then every directory created in step 1 plus
-//!    the pre-existing parent linking the new chain. This barrier may fail
-//!    while the installation itself has already committed.
+//!    the pre-existing parent linking the new chain. When the ancestor walk
+//!    hits its bound before reaching a known parent, the chain is incomplete
+//!    and the commit degrades: uncovered links above the recorded prefix
+//!    must never read as durable. This barrier may fail while the
+//!    installation itself has already committed.
 //! 5. **Post-commit cleanup**: retire the backup (rename to
 //!    `<backup>.retired` so a cleanup crash can never leave it eligible for
 //!    recovery, then delete) and sync the parent directory. Cleanup failures

@@ -29,7 +29,10 @@ recovery in `catalog/recovery.rs`, and the status reporting in
      primary appeared, fall back to replacement.
 4. **Durability barrier.** Sync the installed file and directory metadata
    (`sync_installed_file`), then every directory created in step 1 plus
-   the pre-existing linking parent.
+   the pre-existing linking parent. When the ancestor walk hits its bound
+   before reaching a known parent, the commit degrades to
+   `InstalledButUnsynced` instead of claiming `Durable` over uncovered
+   links.
 5. **Post-commit cleanup.** Retire the backup by renaming it to
    `<backup>.retired` (so a cleanup crash can never leave it eligible for
    recovery), delete it, and sync the parent directory. Failures here never
