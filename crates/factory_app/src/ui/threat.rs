@@ -8,6 +8,7 @@ use crate::map::resources::{MapDisplaySettings, MapOverlay, MapViewState};
 use crate::resources::SimResource;
 use crate::save_load::PresentationReloadToken;
 use crate::threat_events::ThreatEventCursor;
+use crate::ui::accessibility::{UiPreferences, format_accessible_threat_label, threat_alert_glyph};
 
 const TICKS_PER_SECOND: u64 = SIM_TICKS_PER_SECOND as u64;
 /// How long an alert card stays on screen before it expires.
@@ -92,6 +93,7 @@ pub fn sync_threat_ui(
     sim: Res<SimResource>,
     reload: Option<Res<PresentationReloadToken>>,
     mut state: ResMut<ThreatUiState>,
+    preferences: Option<Res<UiPreferences>>,
     mut panel: Query<&mut Text, With<ThreatPanelText>>,
     roots: Query<Entity, With<ThreatAlertRoot>>,
 ) {
@@ -123,6 +125,7 @@ pub fn sync_threat_ui(
         return;
     }
     state.rendered_cards = state.cards.clone();
+    let symbols_enabled = preferences.as_deref().is_none_or(|p| p.status_symbols);
     for root in &roots {
         commands
             .entity(root)
@@ -130,6 +133,7 @@ pub fn sync_threat_ui(
             .with_children(|parent| {
                 for event in state.cards.iter().rev() {
                     let (label, color) = event_style(event.kind);
+                    let label = format_accessible_threat_label(event.kind, label, symbols_enabled);
                     parent
                         .spawn((
                             Button,
@@ -208,6 +212,11 @@ fn event_style(kind: ThreatEventKind) -> (&'static str, Color) {
         }
         ThreatEventKind::BaseDestroyed => ("Enemy colony destroyed", Color::srgb(0.5, 0.9, 0.45)),
     }
+}
+
+/// Symbol tag for a threat kind so alerts never depend on orange/red hue alone.
+pub fn threat_accessible_glyph(kind: ThreatEventKind) -> &'static str {
+    threat_alert_glyph(kind)
 }
 
 #[cfg(test)]

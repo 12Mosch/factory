@@ -7,6 +7,7 @@ use bevy::sprite::Text2dShadow;
 use bevy::window::PrimaryWindow;
 use serde::{Deserialize, Serialize};
 
+use crate::map::resources::MapOverlay;
 use crate::save_load::SaveLoadConfig;
 use crate::ui::settings::{SettingsTab, SettingsWindowState};
 
@@ -16,11 +17,19 @@ const UI_SCALE_STEP_PERCENT: u16 = 25;
 const MIN_LOGICAL_VIEWPORT_WIDTH: f32 = 800.0;
 const MIN_LOGICAL_VIEWPORT_HEIGHT: f32 = 450.0;
 const PERSISTENCE_RETRY_DELAY: Duration = Duration::from_secs(1);
+/// Version of the persisted accessibility file. Legacy files without a version
+/// predate reduced-motion and status-symbol options and upgrade in place.
+pub const ACCESSIBILITY_PREFS_VERSION: u32 = 1;
+/// Minimum pointer hit target for accessibility controls. Matches the 44px
+/// WCAG guideline so touch, pen, and imprecise pointer input stay usable.
+pub const MIN_ACCESSIBLE_HIT_TARGET_PX: f32 = 44.0;
 
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct UiPreferences {
     pub scale_percent: u16,
     pub readable_high_contrast: bool,
+    pub reduced_motion: bool,
+    pub status_symbols: bool,
     settings_path: PathBuf,
 }
 
@@ -29,6 +38,8 @@ impl Default for UiPreferences {
         Self {
             scale_percent: 100,
             readable_high_contrast: false,
+            reduced_motion: false,
+            status_symbols: true,
             settings_path: PathBuf::new(),
         }
     }
@@ -55,32 +66,50 @@ pub struct UiPreferencesPersistenceState {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct UiPreferencesFile {
+    pub version: u32,
     pub scale_percent: u16,
     pub readable_high_contrast: bool,
+    pub reduced_motion: bool,
+    pub status_symbols: bool,
 }
 
 impl Default for UiPreferencesFile {
     fn default() -> Self {
         Self {
+            version: ACCESSIBILITY_PREFS_VERSION,
             scale_percent: 100,
             readable_high_contrast: false,
+            reduced_motion: false,
+            status_symbols: true,
         }
     }
 }
 
 impl UiPreferencesFile {
     /// Builds the stable on-disk representation of the current preferences.
-    fn from_preferences(preferences: &UiPreferences) -> Self {
+    pub fn from_preferences(preferences: &UiPreferences) -> Self {
         Self {
+            version: ACCESSIBILITY_PREFS_VERSION,
             scale_percent: preferences
                 .scale_percent
                 .clamp(MIN_UI_SCALE_PERCENT, MAX_UI_SCALE_PERCENT),
             readable_high_contrast: preferences.readable_high_contrast,
+            reduced_motion: preferences.reduced_motion,
+            status_symbols: preferences.status_symbols,
         }
     }
 
     /// Sanitizes values loaded from files created by older or edited versions.
     fn normalize(&mut self) {
+        if self.version != ACCESSIBILITY_PREFS_VERSION && self.version != 0 {
+            *self = Self::default();
+            return;
+        }
+        // Version 0 predates versioning: keep the stored scale/contrast and
+        // fill the newer options with safe defaults.
+        if self.version == 0 {
+            self.version = ACCESSIBILITY_PREFS_VERSION;
+        }
         self.scale_percent = self
             .scale_percent
             .clamp(MIN_UI_SCALE_PERCENT, MAX_UI_SCALE_PERCENT);
@@ -120,6 +149,12 @@ pub enum UiScaleAction {
 #[derive(Component)]
 pub struct ReadableHighContrastButton;
 
+#[derive(Component)]
+pub struct ReducedMotionButton;
+
+#[derive(Component)]
+pub struct StatusSymbolsButton;
+
 type UiScaleButtonQuery<'w, 's> = Query<
     'w,
     's,
@@ -134,6 +169,26 @@ type ContrastButtonQuery<'w, 's> = Query<
         Changed<Interaction>,
         With<Button>,
         With<ReadableHighContrastButton>,
+    ),
+>;
+type ReducedMotionButtonQuery<'w, 's> = Query<
+    'w,
+    's,
+    &'static Interaction,
+    (
+        Changed<Interaction>,
+        With<Button>,
+        With<ReducedMotionButton>,
+    ),
+>;
+type StatusSymbolsButtonQuery<'w, 's> = Query<
+    'w,
+    's,
+    &'static Interaction,
+    (
+        Changed<Interaction>,
+        With<Button>,
+        With<StatusSymbolsButton>,
     ),
 >;
 type ChangedTextColorQuery<'w, 's> = Query<
@@ -175,12 +230,16 @@ pub(crate) struct DisplaySettingsSnapshot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AccessibilitySettingsSnapshot {
     pub readable_high_contrast: bool,
+    pub reduced_motion: bool,
+    pub status_symbols: bool,
 }
 
 /// Applies Display and Accessibility button presses to the pending session.
 pub(crate) fn handle_accessibility_settings_buttons(
     mut scale_buttons: UiScaleButtonQuery,
     mut contrast_buttons: ContrastButtonQuery,
+    mut reduced_motion_buttons: ReducedMotionButtonQuery,
+    mut status_symbol_buttons: StatusSymbolsButtonQuery,
     mut window: ResMut<SettingsWindowState>,
 ) {
     if !window.open {
@@ -207,6 +266,18 @@ pub(crate) fn handle_accessibility_settings_buttons(
             if *interaction == Interaction::Pressed {
                 window.pending_values.readable_high_contrast =
                     !window.pending_values.readable_high_contrast;
+                window.dirty = true;
+            }
+        }
+        for interaction in &mut reduced_motion_buttons {
+            if *interaction == Interaction::Pressed {
+                window.pending_values.reduced_motion = !window.pending_values.reduced_motion;
+                window.dirty = true;
+            }
+        }
+        for interaction in &mut status_symbol_buttons {
+            if *interaction == Interaction::Pressed {
+                window.pending_values.status_symbols = !window.pending_values.status_symbols;
                 window.dirty = true;
             }
         }
@@ -252,7 +323,7 @@ pub(crate) fn spawn_display_settings_content(
         });
 }
 
-/// Spawns the readable high-contrast control for the Accessibility tab.
+/// Spawns the accessibility controls for the Accessibility tab.
 pub(crate) fn spawn_accessibility_settings_content(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     snapshot: &AccessibilitySettingsSnapshot,
@@ -263,16 +334,49 @@ pub(crate) fn spawn_accessibility_settings_content(
         TextFont::from_font_size(12.0),
         TextColor(Color::srgb(0.72, 0.76, 0.69)),
     ));
-    spawn_control_button(
+    spawn_accessibility_toggle(
         parent,
         if snapshot.readable_high_contrast {
             "ON"
         } else {
             "OFF"
         },
-        None,
+        AccessibilityToggle::HighContrast,
         snapshot.readable_high_contrast,
     );
+
+    spawn_heading(parent, "Reduce motion and flashing");
+    parent.spawn((
+        Text::new("Disables nonessential animation smoothing such as rocket-rise interpolation. The simulation itself is unchanged."),
+        TextFont::from_font_size(12.0),
+        TextColor(Color::srgb(0.72, 0.76, 0.69)),
+    ));
+    spawn_accessibility_toggle(
+        parent,
+        if snapshot.reduced_motion { "ON" } else { "OFF" },
+        AccessibilityToggle::ReducedMotion,
+        snapshot.reduced_motion,
+    );
+
+    spawn_heading(parent, "Status symbols");
+    parent.spawn((
+        Text::new("Prefixes machine, threat, signal, and build status with text symbols so state never depends on color alone."),
+        TextFont::from_font_size(12.0),
+        TextColor(Color::srgb(0.72, 0.76, 0.69)),
+    ));
+    spawn_accessibility_toggle(
+        parent,
+        if snapshot.status_symbols { "ON" } else { "OFF" },
+        AccessibilityToggle::StatusSymbols,
+        snapshot.status_symbols,
+    );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AccessibilityToggle {
+    HighContrast,
+    ReducedMotion,
+    StatusSymbols,
 }
 
 /// Spawns a settings-section heading using the shared visual treatment.
@@ -295,7 +399,7 @@ fn spawn_control_button(
         Button,
         Node {
             min_width: Val::Px(52.0),
-            min_height: Val::Px(38.0),
+            min_height: Val::Px(MIN_ACCESSIBLE_HIT_TARGET_PX),
             padding: UiRect::horizontal(Val::Px(12.0)),
             align_items: AlignItems::Center,
             justify_content: JustifyContent::Center,
@@ -325,6 +429,53 @@ fn spawn_control_button(
     ));
 }
 
+/// Spawns an accessibility toggle with a 44px hit target and its marker.
+fn spawn_accessibility_toggle(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    label: &str,
+    toggle: AccessibilityToggle,
+    selected: bool,
+) {
+    let mut button = parent.spawn((
+        Button,
+        Node {
+            min_width: Val::Px(52.0),
+            min_height: Val::Px(MIN_ACCESSIBLE_HIT_TARGET_PX),
+            padding: UiRect::horizontal(Val::Px(12.0)),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            border: UiRect::all(Val::Px(2.0)),
+            ..default()
+        },
+        BackgroundColor(if selected {
+            Color::srgb(0.24, 0.34, 0.18)
+        } else {
+            Color::srgb(0.07, 0.09, 0.075)
+        }),
+        BorderColor::all(if selected {
+            Color::srgb(0.82, 0.94, 0.40)
+        } else {
+            Color::srgb(0.43, 0.53, 0.38)
+        }),
+    ));
+    match toggle {
+        AccessibilityToggle::HighContrast => {
+            button.insert(ReadableHighContrastButton);
+        }
+        AccessibilityToggle::ReducedMotion => {
+            button.insert(ReducedMotionButton);
+        }
+        AccessibilityToggle::StatusSymbols => {
+            button.insert(StatusSymbolsButton);
+        }
+    }
+    button.with_child((
+        Text::new(label),
+        TextFont::from_font_size(14.0),
+        TextColor(Color::WHITE),
+    ));
+}
+
 /// Loads preferences once at startup and establishes the persistence baseline.
 pub(crate) fn load_persisted_ui_preferences(
     config: Res<SaveLoadConfig>,
@@ -336,6 +487,8 @@ pub(crate) fn load_persisted_ui_preferences(
     preferences.settings_path = path;
     preferences.set_scale_percent(file.scale_percent);
     preferences.readable_high_contrast = file.readable_high_contrast;
+    preferences.reduced_motion = file.reduced_motion;
+    preferences.status_symbols = file.status_symbols;
     persistence.last_saved = Some(UiPreferencesFile::from_preferences(&preferences));
 }
 
@@ -387,7 +540,10 @@ pub fn write_ui_preferences_file(
         fs::create_dir_all(parent)?;
     }
     let text = ron::ser::to_string_pretty(file, ron::ser::PrettyConfig::default())
-        .unwrap_or_else(|_| "(scale_percent:100,readable_high_contrast:false)".to_string());
+        .unwrap_or_else(|_| {
+            "(version:1,scale_percent:100,readable_high_contrast:false,reduced_motion:false,status_symbols:true)"
+                .to_string()
+        });
     fs::write(path, text)
 }
 
@@ -638,6 +794,154 @@ fn apply_world_label_style(
     };
 }
 
+/// Reports whether a control meets the minimum accessible hit target.
+pub fn accessible_hit_target_met(width_px: f32, height_px: f32) -> bool {
+    width_px >= MIN_ACCESSIBLE_HIT_TARGET_PX && height_px >= MIN_ACCESSIBLE_HIT_TARGET_PX - 8.0
+}
+
+/// Collapses frame-interpolation motion when reduced motion is enabled.
+/// The simulation tick is unchanged; only presentation smoothing is skipped.
+pub fn reduced_motion_overstep(reduced_motion: bool, overstep: f32) -> f32 {
+    if reduced_motion {
+        0.0
+    } else {
+        overstep.clamp(0.0, 1.0)
+    }
+}
+
+/// Relative luminance used to verify status colors stay separable without hue.
+pub fn relative_luminance(color: Color) -> f32 {
+    let source = color.to_srgba();
+    0.2126 * source.red + 0.7152 * source.green + 0.0722 * source.blue
+}
+
+/// Two status colors are distinguishable when their luminance differs enough
+/// to survive common color-vision deficiencies even if hues merge.
+pub fn status_colors_distinguishable(first: Color, second: Color) -> bool {
+    (relative_luminance(first) - relative_luminance(second)).abs() > 0.08
+}
+
+/// Shape/text alternative for a machine status. All tags are distinct ASCII so
+/// state never depends on green/amber/red hue alone.
+pub fn machine_status_symbol(status: factory_sim::MachineStatus) -> &'static str {
+    use factory_sim::MachineStatus as Status;
+    match status {
+        Status::Working => "[>]",
+        Status::Idle => "[=]",
+        Status::NoRecipe => "[R?]",
+        Status::NoResearch => "[T?]",
+        Status::NoFuel => "[F!]",
+        Status::NoPower => "[P!]",
+        Status::NoInput => "[I!]",
+        Status::NoFluid => "[W!]",
+        Status::NoHeat => "[H!]",
+        Status::OutputFull => "[X]",
+    }
+}
+
+/// Prefixes machine guidance with its symbol when symbols are enabled.
+pub fn format_accessible_machine_status(
+    status: factory_sim::MachineStatus,
+    guidance: &str,
+    symbols_enabled: bool,
+) -> String {
+    if symbols_enabled {
+        format!("{} {guidance}", machine_status_symbol(status))
+    } else {
+        guidance.to_string()
+    }
+}
+
+/// Shape/text alternative for a threat alert. All tags are distinct ASCII.
+pub fn threat_alert_glyph(kind: factory_sim::ThreatEventKind) -> &'static str {
+    use factory_sim::ThreatEventKind as Kind;
+    match kind {
+        Kind::PollutionContact => "[~]",
+        Kind::RaidPreparing => "[!]",
+        Kind::RaidLaunched => "[!!]",
+        Kind::StructureUnderAttack => "[X]",
+        Kind::ExpansionSpotted => "[?]",
+        Kind::BaseDestroyed => "[+]",
+    }
+}
+
+/// Prefixes a threat label with its glyph when symbols are enabled.
+pub fn format_accessible_threat_label(
+    kind: factory_sim::ThreatEventKind,
+    label: &str,
+    symbols_enabled: bool,
+) -> String {
+    if symbols_enabled {
+        format!("{} {label}", threat_alert_glyph(kind))
+    } else {
+        label.to_string()
+    }
+}
+
+/// Shape/text alternative for a rail-signal aspect.
+pub fn rail_signal_glyph(aspect: factory_sim::RailSignalAspect) -> &'static str {
+    use factory_sim::RailSignalAspect as Aspect;
+    match aspect {
+        Aspect::Clear => "[GO]",
+        Aspect::Reserved => "[WAIT]",
+        Aspect::Blocked => "[STOP]",
+    }
+}
+
+/// Human-readable rail-signal state that does not depend on lamp hue.
+pub fn rail_signal_accessible_label(aspect: factory_sim::RailSignalAspect) -> &'static str {
+    use factory_sim::RailSignalAspect as Aspect;
+    match aspect {
+        Aspect::Clear => "Clear",
+        Aspect::Reserved => "Caution",
+        Aspect::Blocked => "Stop",
+    }
+}
+
+/// Shape/text alternative for a circuit wire color.
+pub fn circuit_wire_glyph(color: factory_sim::WireColor) -> &'static str {
+    match color {
+        factory_sim::WireColor::Red => "[R]",
+        factory_sim::WireColor::Green => "[G]",
+    }
+}
+
+/// Shape/text alternative for a map overlay toggle.
+pub fn map_overlay_glyph(overlay: MapOverlay) -> &'static str {
+    match overlay {
+        MapOverlay::Pollution => "[P]",
+        MapOverlay::Resources => "[R]",
+        MapOverlay::PowerNetworks => "[E]",
+        MapOverlay::ProductionProblems => "[!]",
+        MapOverlay::Enemies => "[X]",
+        MapOverlay::ConstructionPlans => "[C]",
+    }
+}
+
+/// Shape/text alternative for build validity. Valid and invalid never share a tag.
+pub fn build_validity_glyph(is_valid: bool) -> &'static str {
+    if is_valid { "[OK]" } else { "[X]" }
+}
+
+/// Prefixes build status text with its validity tag when symbols are enabled.
+pub fn format_accessible_build_status(
+    is_valid: bool,
+    message: &str,
+    symbols_enabled: bool,
+) -> String {
+    if symbols_enabled {
+        format!("{} {message}", build_validity_glyph(is_valid))
+    } else {
+        message.to_string()
+    }
+}
+
+/// Border width for selection states. Selected slots draw thicker so selection
+/// never depends on border hue alone.
+pub fn selection_border_width_px(selected: bool) -> f32 {
+    if selected { 3.0 } else { 1.0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -669,8 +973,11 @@ mod tests {
         let root = std::env::temp_dir().join(format!("factory-ui-preferences-{unique}"));
         let path = root.join("ui-settings.ron");
         let file = UiPreferencesFile {
+            version: ACCESSIBILITY_PREFS_VERSION,
             scale_percent: 175,
             readable_high_contrast: true,
+            reduced_motion: true,
+            status_symbols: false,
         };
         write_ui_preferences_file(&path, &file).unwrap();
         assert_eq!(read_ui_preferences_file(&path), Some(file));
@@ -679,8 +986,29 @@ mod tests {
         assert_eq!(
             read_ui_preferences_file(&path),
             Some(UiPreferencesFile {
+                version: ACCESSIBILITY_PREFS_VERSION,
                 scale_percent: 125,
                 readable_high_contrast: false,
+                reduced_motion: false,
+                status_symbols: true,
+            })
+        );
+
+        fs::write(&path, "(version:999,scale_percent:125)").unwrap();
+        assert_eq!(
+            read_ui_preferences_file(&path),
+            Some(UiPreferencesFile::default())
+        );
+
+        fs::write(&path, "(version:1,scale_percent:10,reduced_motion:true)").unwrap();
+        assert_eq!(
+            read_ui_preferences_file(&path),
+            Some(UiPreferencesFile {
+                version: ACCESSIBILITY_PREFS_VERSION,
+                scale_percent: MIN_UI_SCALE_PERCENT,
+                readable_high_contrast: false,
+                reduced_motion: true,
+                status_symbols: true,
             })
         );
         fs::remove_dir_all(root).unwrap();
@@ -699,6 +1027,8 @@ mod tests {
         let preferences = UiPreferences {
             scale_percent: 150,
             readable_high_contrast: true,
+            reduced_motion: true,
+            status_symbols: true,
             settings_path: path.clone(),
         };
         let mut app = App::new();
@@ -725,8 +1055,11 @@ mod tests {
         assert_eq!(
             read_ui_preferences_file(&path),
             Some(UiPreferencesFile {
+                version: ACCESSIBILITY_PREFS_VERSION,
                 scale_percent: 150,
                 readable_high_contrast: true,
+                reduced_motion: true,
+                status_symbols: true,
             })
         );
         fs::remove_dir_all(root).unwrap();
@@ -738,5 +1071,105 @@ mod tests {
         let text = high_contrast_text(Color::srgb(0.5, 0.5, 0.5)).to_srgba();
         let background = high_contrast_background(Color::srgb(0.2, 0.2, 0.2)).to_srgba();
         assert!(text.red - background.red > 0.8);
+    }
+
+    #[test]
+    fn status_symbols_are_unique_per_domain() {
+        use factory_sim::{MachineStatus, RailSignalAspect, ThreatEventKind, WireColor};
+        use std::collections::HashSet;
+
+        let machine = [
+            MachineStatus::Working,
+            MachineStatus::Idle,
+            MachineStatus::NoRecipe,
+            MachineStatus::NoResearch,
+            MachineStatus::NoFuel,
+            MachineStatus::NoPower,
+            MachineStatus::NoInput,
+            MachineStatus::NoFluid,
+            MachineStatus::NoHeat,
+            MachineStatus::OutputFull,
+        ]
+        .map(machine_status_symbol);
+        assert_eq!(machine.iter().collect::<HashSet<_>>().len(), machine.len());
+
+        let threats = [
+            ThreatEventKind::PollutionContact,
+            ThreatEventKind::RaidPreparing,
+            ThreatEventKind::RaidLaunched,
+            ThreatEventKind::StructureUnderAttack,
+            ThreatEventKind::ExpansionSpotted,
+            ThreatEventKind::BaseDestroyed,
+        ]
+        .map(threat_alert_glyph);
+        assert_eq!(threats.iter().collect::<HashSet<_>>().len(), threats.len());
+
+        let signals = [
+            RailSignalAspect::Clear,
+            RailSignalAspect::Reserved,
+            RailSignalAspect::Blocked,
+        ]
+        .map(rail_signal_glyph);
+        assert_eq!(signals.iter().collect::<HashSet<_>>().len(), signals.len());
+
+        let wires = [WireColor::Red, WireColor::Green].map(circuit_wire_glyph);
+        assert_ne!(wires[0], wires[1]);
+
+        let overlays = MapOverlay::ALL.map(map_overlay_glyph);
+        assert_eq!(
+            overlays.iter().collect::<HashSet<_>>().len(),
+            overlays.len()
+        );
+
+        assert_ne!(build_validity_glyph(true), build_validity_glyph(false));
+    }
+
+    #[test]
+    fn accessible_formatting_prefixes_symbols_only_when_enabled() {
+        use factory_sim::{MachineStatus, ThreatEventKind};
+
+        assert_eq!(
+            format_accessible_machine_status(MachineStatus::NoPower, "No power", true),
+            "[P!] No power"
+        );
+        assert_eq!(
+            format_accessible_machine_status(MachineStatus::NoPower, "No power", false),
+            "No power"
+        );
+        assert_eq!(
+            format_accessible_threat_label(ThreatEventKind::RaidLaunched, "Raid", true),
+            "[!!] Raid"
+        );
+        assert_eq!(
+            format_accessible_build_status(false, "Blocked", true),
+            "[X] Blocked"
+        );
+        assert_eq!(
+            format_accessible_build_status(true, "Ready", false),
+            "Ready"
+        );
+    }
+
+    #[test]
+    fn reduced_motion_collapses_interpolation_and_hit_targets_meet_minimum() {
+        assert_eq!(reduced_motion_overstep(true, 0.7), 0.0);
+        assert_eq!(reduced_motion_overstep(false, 0.7), 0.7);
+        assert!(accessible_hit_target_met(52.0, 44.0));
+        assert!(!accessible_hit_target_met(32.0, 32.0));
+        assert_eq!(
+            MIN_ACCESSIBLE_HIT_TARGET_PX, 44.0,
+            "hit targets follow the 44px guideline"
+        );
+    }
+
+    #[test]
+    fn newly_changed_ui_converges_to_high_contrast() {
+        let normal = Color::srgb(0.5, 0.5, 0.5);
+        let converted = high_contrast_text(normal);
+        assert_eq!(high_contrast_text(converted), converted);
+        assert!(status_colors_distinguishable(
+            Color::srgb(0.42, 0.84, 0.55),
+            Color::srgb(1.0, 0.30, 0.24)
+        ));
     }
 }

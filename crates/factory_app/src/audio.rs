@@ -646,6 +646,41 @@ fn sound_cooldown_ticks(event: SoundEvent) -> u64 {
     }
 }
 
+/// Readable visual equivalent for a sound event. Essential alerts are never
+/// audio-only: enemy warnings surface as threat cards plus the threat panel,
+/// rocket transitions as the launch banner plus silo status text, research as
+/// the technology panel state, crafting/mining as queue and progress UI, and
+/// placement feedback as build status text plus the ghost preview tint.
+pub fn sound_visual_equivalent(event: SoundEvent) -> Option<&'static str> {
+    match event {
+        SoundEvent::UiClick | SoundEvent::AudioTest => None,
+        SoundEvent::Place => Some("Build status text and ghost preview"),
+        SoundEvent::PlaceError => Some("Build status error text and red preview tint"),
+        SoundEvent::ManualMineTick => Some("Mining progress bar"),
+        SoundEvent::ManualMineComplete => Some("Inventory gain message"),
+        SoundEvent::CraftComplete => Some("Crafting queue completion"),
+        SoundEvent::ResearchComplete => Some("Technology panel unlock state"),
+        SoundEvent::EnemyWarning => Some("Threat alert card and threat panel"),
+        SoundEvent::RocketSeal { .. } | SoundEvent::RocketLaunch { .. } => {
+            Some("Rocket launch banner and silo status text")
+        }
+    }
+}
+
+/// Essential alerts must have a readable visual equivalent.
+pub fn sound_is_essential_alert(event: SoundEvent) -> bool {
+    matches!(
+        event,
+        SoundEvent::PlaceError
+            | SoundEvent::ManualMineComplete
+            | SoundEvent::CraftComplete
+            | SoundEvent::ResearchComplete
+            | SoundEvent::EnemyWarning
+            | SoundEvent::RocketSeal { .. }
+            | SoundEvent::RocketLaunch { .. }
+    )
+}
+
 fn spatial_sound_translation(sim: &factory_sim::Simulation, event: SoundEvent) -> Option<Vec3> {
     let entity_id = match event {
         SoundEvent::RocketSeal { entity_id } | SoundEvent::RocketLaunch { entity_id } => entity_id,
@@ -871,5 +906,35 @@ mod tests {
 
         assert_eq!(loaded, file);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn essential_alerts_are_never_audio_only() {
+        use factory_sim::EntityId;
+
+        let essential = [
+            SoundEvent::PlaceError,
+            SoundEvent::ManualMineComplete,
+            SoundEvent::CraftComplete,
+            SoundEvent::ResearchComplete,
+            SoundEvent::EnemyWarning,
+            SoundEvent::RocketSeal {
+                entity_id: EntityId::new(1),
+            },
+            SoundEvent::RocketLaunch {
+                entity_id: EntityId::new(1),
+            },
+        ];
+        for event in essential {
+            assert!(
+                sound_is_essential_alert(event),
+                "{event:?} should be essential"
+            );
+            assert!(
+                sound_visual_equivalent(event).is_some(),
+                "{event:?} must have a readable visual equivalent"
+            );
+        }
+        assert!(!sound_is_essential_alert(SoundEvent::UiClick));
     }
 }
