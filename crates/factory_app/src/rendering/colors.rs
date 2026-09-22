@@ -169,9 +169,9 @@ pub(crate) fn circuit_wire_color(color: factory_sim::WireColor) -> Color {
     }
 }
 
-/// Wire thickness per color so red versus green never depends on hue alone.
+/// Wire thickness per color so red versus green differs by more than hue.
 /// Green draws thicker; red keeps the thin baseline. Both stay legible over
-/// dense builds and remain distinct under red-green deficiencies.
+/// dense builds.
 pub(crate) fn circuit_wire_thickness(color: factory_sim::WireColor) -> f32 {
     match color {
         factory_sim::WireColor::Red => 2.0,
@@ -209,10 +209,10 @@ pub(crate) fn rail_ballast_color() -> Color {
 /// nobody has, yellow for one somebody is on their way into, red for one
 /// somebody is standing in.
 ///
-/// The three lamp colors are luminance-separated (reserved > clear > blocked)
-/// so the ordering survives even when red-green hues merge. Rail aspect has
-/// no text tag in the world view; the signal state is readable from the lamp
-/// ordering alongside the surrounding rail context.
+/// The three lamp colors are ordered by approximate channel brightness
+/// (reserved > clear > blocked), reducing reliance on red-green hue alone.
+/// Rail aspect has no text tag in the world view; this ordering is a
+/// lightness heuristic, not a verified deficiency simulation.
 pub(crate) fn rail_signal_color(aspect: factory_sim::RailSignalAspect) -> Color {
     match aspect {
         factory_sim::RailSignalAspect::Clear => Color::srgb(0.24, 0.80, 0.36),

@@ -42,11 +42,13 @@ Settings Accessibility tab with Apply/Reset semantics shared with other tabs.
 | Selection | Selected border hue | Selected slots also draw a 3px border vs 1px unselected, plus background change |
 | Enemies | Red units | Distinct square sprites + threat panel counts + map markers; audio warning always paired with cards |
 
-Luminance separation is verified headlessly (`status_colors_distinguishable`,
-rail/circuit tests). Hue conventions (railway red/yellow/green, wire red/green)
-are kept; wired shape and text alternatives carry the distinction under
-deuteranopia/protanopia/tritanopia where they exist (machines, threats, build
-status, wire thickness, selection width).
+Lightness ordering is checked headlessly (`status_colors_distinguishable`,
+rail/circuit tests): the helper compares approximate sRGB-channel brightness,
+not linearized luminance, and the 0.08 threshold is a heuristic rather than a
+protanopia/deuteranopia/tritanopia simulation. Hue conventions (railway
+red/yellow/green, wire red/green) are kept; wired shape and text alternatives
+reduce hue reliance where they exist (machines, threats, build status, wire
+thickness, selection width).
 
 ## Alerts are never audio-only
 
@@ -87,8 +89,9 @@ above (rail signals: luminance ordering only) plus world-label enlargement.
   ordering distinguishes it when hues merge.
 - No screen reader or OS high-contrast theme integration.
 - No keyboard-only full playthrough; world placement still needs a pointer.
-- No color-blind simulation preview in-game; verification is via luminance and
-  glyph uniqueness tests.
+- No color-blind simulation preview in-game; automated checks cover a
+  lightness-ordering heuristic and glyph uniqueness only, not formal CVD
+  verification.
 - World sprite hues are not remapped by high-contrast mode (see scope).
 - Reduced-motion currently covers rocket-rise interpolation only; no other
   motion sources were found to gate.

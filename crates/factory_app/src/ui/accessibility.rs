@@ -60,6 +60,10 @@ impl UiPreferences {
 pub struct UiPreferencesPersistenceState {
     last_saved: Option<UiPreferencesFile>,
     retry_after: Option<Duration>,
+    /// Set when the on-disk record has an unknown future version. This
+    /// version cannot round-trip its unknown fields, so no write to that path
+    /// is safe for the session; in-memory preferences still apply.
+    unsupported_version: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -497,15 +501,24 @@ pub(crate) fn load_persisted_ui_preferences(
     struct VersionProbe {
         version: u32,
     }
-    let migrated = match (&text, &raw) {
-        (Some(text), Some(raw)) => {
-            let version = ron::from_str::<VersionProbe>(text)
-                .ok()
-                .map(|probe| probe.version)
-                .unwrap_or(0);
-            let known = version == 0 || version == ACCESSIBILITY_PREFS_VERSION;
-            known && (version == 0 || *raw != file)
-        }
+    let probed = text.as_deref().and_then(|text| {
+        ron::from_str::<VersionProbe>(text)
+            .ok()
+            .map(|probe| probe.version)
+    });
+    // A present version that is neither legacy (0) nor current names a newer
+    // application: its unknown fields cannot round-trip here.
+    persistence.unsupported_version =
+        probed.is_some_and(|version| version != 0 && version != ACCESSIBILITY_PREFS_VERSION);
+    let migrated = match (probed, &raw) {
+        // Legacy records predate versioning; struct defaults mask the gap
+        // (`raw == file` even though the disk record is unversioned), so they
+        // always rewrite.
+        (Some(0), Some(_)) => true,
+        // Supported versions rewrite only when normalization changed a value.
+        (Some(version), Some(raw)) if version == ACCESSIBILITY_PREFS_VERSION => *raw != file,
+        // Missing/corrupt records have nothing parseable to upgrade, and
+        // future versions must never be touched.
         _ => false,
     };
     preferences.settings_path = path.clone();
@@ -514,7 +527,11 @@ pub(crate) fn load_persisted_ui_preferences(
     preferences.reduced_motion = file.reduced_motion;
     preferences.status_symbols = file.status_symbols;
     let normalized = UiPreferencesFile::from_preferences(&preferences);
-    if migrated {
+    if persistence.unsupported_version {
+        // Never touch a newer application's record: not on load, and (via
+        // the save guard below) not on later edits either.
+        persistence.last_saved = Some(normalized);
+    } else if migrated {
         // Best effort: a failure leaves no baseline so the update-time save
         // retries promptly instead of treating the legacy file as current.
         if write_ui_preferences_file(&path, &normalized).is_ok() {
@@ -530,12 +547,18 @@ pub(crate) fn load_persisted_ui_preferences(
 }
 
 /// Persists changed preferences and retries transient failures with backoff.
+/// Never writes while an unsupported future version owns the path: this
+/// version cannot round-trip its unknown fields, so any write would destroy
+/// newer-application data.
 pub(crate) fn save_ui_preferences_if_changed(
     time: Res<Time<Real>>,
     preferences: Res<UiPreferences>,
     mut persistence: ResMut<UiPreferencesPersistenceState>,
 ) {
     if preferences.settings_path.as_os_str().is_empty() {
+        return;
+    }
+    if persistence.unsupported_version {
         return;
     }
     let file = UiPreferencesFile::from_preferences(&preferences);
@@ -842,12 +865,6 @@ pub fn accessible_hit_target_met(width_px: f32, height_px: f32) -> bool {
     width_px >= MIN_ACCESSIBLE_HIT_TARGET_PX && height_px >= MIN_ACCESSIBLE_HIT_TARGET_PX
 }
 
-/// Physical size of a logical control at the given effective UI scale.
-/// Pinned by test at the supported 75–200% scales.
-pub fn physical_hit_size_px(logical_px: f32, effective_scale: f32) -> f32 {
-    logical_px * effective_scale
-}
-
 /// Collapses frame-interpolation motion when reduced motion is enabled.
 /// The simulation tick is unchanged; only presentation smoothing is skipped.
 pub fn reduced_motion_overstep(reduced_motion: bool, overstep: f32) -> f32 {
@@ -858,14 +875,17 @@ pub fn reduced_motion_overstep(reduced_motion: bool, overstep: f32) -> f32 {
     }
 }
 
-/// Relative luminance used to verify status colors stay separable without hue.
+/// Approximate brightness from weighted sRGB channels. This is not linearized
+/// relative luminance and not a color-vision-deficiency simulation; it only
+/// measures overall lightness.
 pub fn relative_luminance(color: Color) -> f32 {
     let source = color.to_srgba();
     0.2126 * source.red + 0.7152 * source.green + 0.0722 * source.blue
 }
 
-/// Two status colors are distinguishable when their luminance differs enough
-/// to survive common color-vision deficiencies even if hues merge.
+/// Two status colors count as separable without hue when their approximate
+/// brightness differs by more than 0.08. This is a lightness-ordering
+/// heuristic, not a protanopia/deuteranopia/tritanopia simulation.
 pub fn status_colors_distinguishable(first: Color, second: Color) -> bool {
     (relative_luminance(first) - relative_luminance(second)).abs() > 0.08
 }
@@ -1087,6 +1107,7 @@ mod tests {
             root_dir: root.clone(),
             ..default()
         })
+        .init_resource::<Time<Real>>()
         .init_resource::<UiPreferences>()
         .init_resource::<UiPreferencesPersistenceState>()
         .add_systems(Startup, load_persisted_ui_preferences);
@@ -1106,6 +1127,19 @@ mod tests {
         assert_eq!(
             fs::read_to_string(root.join("ui-settings.ron")).unwrap(),
             original
+        );
+
+        // Editing preferences must not overwrite the future record either:
+        // this version cannot round-trip its unknown fields.
+        app.world_mut()
+            .resource_mut::<UiPreferences>()
+            .set_scale_percent(150);
+        app.add_systems(Update, save_ui_preferences_if_changed);
+        app.update();
+        assert_eq!(
+            fs::read_to_string(root.join("ui-settings.ron")).unwrap(),
+            original,
+            "a later edit must not destroy the unsupported-version file"
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -1242,20 +1276,6 @@ mod tests {
         assert_eq!(
             MIN_ACCESSIBLE_HIT_TARGET_PX, 44.0,
             "hit targets follow the 44px guideline"
-        );
-        // Logical minimum, physical reality: the 44px conformance claim is in
-        // scale-independent logical pixels, matching CSS px under zoom.
-        assert_eq!(
-            physical_hit_size_px(MIN_ACCESSIBLE_HIT_TARGET_PX, 0.75),
-            33.0
-        );
-        assert_eq!(
-            physical_hit_size_px(MIN_ACCESSIBLE_HIT_TARGET_PX, 1.0),
-            44.0
-        );
-        assert_eq!(
-            physical_hit_size_px(MIN_ACCESSIBLE_HIT_TARGET_PX, 2.0),
-            88.0
         );
     }
 
