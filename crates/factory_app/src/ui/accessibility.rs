@@ -487,16 +487,24 @@ pub(crate) fn load_persisted_ui_preferences(
     // file as saved and never upgrade it. Note the parsed struct cannot
     // reveal a missing version on its own: `#[serde(default)]` fills it from
     // `Default`, so an explicit probe detects legacy records.
-    #[derive(Deserialize)]
+    //
+    // Unknown future versions are never rewritten: they load as runtime
+    // defaults so forward-version data survives a downgrade. Only known
+    // records (missing/version-0 legacy, or supported-version values such as
+    // a clamped scale) are upgraded in place.
+    #[derive(Deserialize, Default)]
+    #[serde(default)]
     struct VersionProbe {
-        version: Option<u32>,
+        version: u32,
     }
     let migrated = match (&text, &raw) {
         (Some(text), Some(raw)) => {
-            ron::from_str::<VersionProbe>(text)
+            let version = ron::from_str::<VersionProbe>(text)
                 .ok()
-                .is_none_or(|probe| probe.version.is_none())
-                || *raw != file
+                .map(|probe| probe.version)
+                .unwrap_or(0);
+            let known = version == 0 || version == ACCESSIBILITY_PREFS_VERSION;
+            known && (version == 0 || *raw != file)
         }
         _ => false,
     };
@@ -824,9 +832,20 @@ fn apply_world_label_style(
 }
 
 /// Reports whether a control meets the minimum accessible hit target.
-/// Both axes must meet the 44px minimum.
+/// Both axes must meet the 44px minimum. Sizes are logical pixels: Bevy's
+/// `UiScale` maps them to physical pixels, so at a 75% interface scale a
+/// 44px control picks at 33 physical pixels. That is the platform-consistent
+/// interpretation (WCAG target size is measured in scale-independent CSS px,
+/// not physical px) and the scale itself is the user's explicit size choice;
+/// the responsive scale floor keeps the viewport usable.
 pub fn accessible_hit_target_met(width_px: f32, height_px: f32) -> bool {
     width_px >= MIN_ACCESSIBLE_HIT_TARGET_PX && height_px >= MIN_ACCESSIBLE_HIT_TARGET_PX
+}
+
+/// Physical size of a logical control at the given effective UI scale.
+/// Pinned by test at the supported 75–200% scales.
+pub fn physical_hit_size_px(logical_px: f32, effective_scale: f32) -> f32 {
+    logical_px * effective_scale
 }
 
 /// Collapses frame-interpolation motion when reduced motion is enabled.
@@ -1051,6 +1070,47 @@ mod tests {
     }
 
     #[test]
+    fn future_version_loads_defaults_without_rewriting() {
+        use crate::save_load::SaveLoadConfig;
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("factory-ui-future-{unique}"));
+        fs::create_dir_all(&root).unwrap();
+        let original = "(version:999,scale_percent:125)";
+        fs::write(root.join("ui-settings.ron"), original).unwrap();
+
+        let mut app = App::new();
+        app.insert_resource(SaveLoadConfig {
+            root_dir: root.clone(),
+            ..default()
+        })
+        .init_resource::<UiPreferences>()
+        .init_resource::<UiPreferencesPersistenceState>()
+        .add_systems(Startup, load_persisted_ui_preferences);
+        app.update();
+
+        // Unknown versions fall back to safe runtime defaults ...
+        let preferences = app.world().resource::<UiPreferences>();
+        let defaults = UiPreferences::default();
+        assert_eq!(preferences.scale_percent, defaults.scale_percent);
+        assert_eq!(
+            preferences.readable_high_contrast,
+            defaults.readable_high_contrast
+        );
+        assert_eq!(preferences.reduced_motion, defaults.reduced_motion);
+        assert_eq!(preferences.status_symbols, defaults.status_symbols);
+        // ... without destroying forward-version data on disk.
+        assert_eq!(
+            fs::read_to_string(root.join("ui-settings.ron")).unwrap(),
+            original
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn failed_preference_write_retries_after_the_backoff() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1182,6 +1242,20 @@ mod tests {
         assert_eq!(
             MIN_ACCESSIBLE_HIT_TARGET_PX, 44.0,
             "hit targets follow the 44px guideline"
+        );
+        // Logical minimum, physical reality: the 44px conformance claim is in
+        // scale-independent logical pixels, matching CSS px under zoom.
+        assert_eq!(
+            physical_hit_size_px(MIN_ACCESSIBLE_HIT_TARGET_PX, 0.75),
+            33.0
+        );
+        assert_eq!(
+            physical_hit_size_px(MIN_ACCESSIBLE_HIT_TARGET_PX, 1.0),
+            44.0
+        );
+        assert_eq!(
+            physical_hit_size_px(MIN_ACCESSIBLE_HIT_TARGET_PX, 2.0),
+            88.0
         );
     }
 

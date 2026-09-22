@@ -6,9 +6,11 @@ are listed at the end.
 
 ## Settings (persisted, versioned)
 
-`ui-settings.ron` is versioned (`version: 1`). Unknown versions reset to safe
-defaults; legacy files without a version keep their scale/contrast, gain
-defaults for the newer options, and are upgraded to a versioned record on load.
+`ui-settings.ron` is versioned (`version: 1`). Unknown future versions load
+safe runtime defaults without rewriting the file, so newer-version data
+survives a downgrade; legacy files without a version keep their scale/contrast,
+gain defaults for the newer options, and are upgraded to a versioned record on
+load.
 
 - Interface scale: 75–200%, responsive-clamped so the logical viewport stays
   usable. Persisted.
@@ -62,6 +64,10 @@ banner, technology panel, crafting queue, mining progress, build status);
 no essential alert is audio-only.
 
 ## Hit targets and focus
+
+Sizes below are logical pixels: they scale with the user's chosen interface
+scale (75–200%), matching how CSS px behave under browser zoom — the WCAG
+target-size guideline is likewise scale-independent.
 
 - Accessibility toggles: min 52x44px.
 - Settings tabs/actions: min 102x44px.
