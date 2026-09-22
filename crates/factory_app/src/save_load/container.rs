@@ -2254,6 +2254,10 @@ mod tests {
     #[test]
     fn deep_ancestor_chain_without_linking_parent_degrades() {
         let outer = fault_test_root("deep-root");
+        // This test deliberately exceeds MAX_PATH on Windows. Use an extended
+        // path so the filesystem can create the chain being tested.
+        #[cfg(windows)]
+        let outer = PathBuf::from(format!(r"\\?\{}", outer.display()));
         let mut dir = outer.clone();
         for _ in 0..MAX_ANCESTOR_WALK + 32 {
             dir.push("d");
