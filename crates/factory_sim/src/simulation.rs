@@ -1080,7 +1080,7 @@ pub use self::save_records::{
     save_records_to_writer_with_limits, save_snapshot_records_to_bytes,
     save_snapshot_records_to_bytes_with_limits, save_snapshot_records_to_writer,
     save_snapshot_records_to_writer_with_limits, try_capture_record_snapshot,
-    try_capture_record_snapshot_with_limits,
+    try_capture_record_snapshot_with_limits, try_capture_record_snapshot_with_reservation,
 };
 pub use self::scripted::{
     scripted_inputs_for_chemical_science_factory, scripted_inputs_for_red_science_factory,

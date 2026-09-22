@@ -91,6 +91,22 @@ pub struct SaveLoadMetrics {
 #[derive(Resource, Default)]
 pub struct AutosaveState {
     pub last_autosave_tick: u64,
+    retry_after_admission_drains: bool,
+}
+
+impl AutosaveState {
+    fn should_attempt(&self, tick: u64, interval: u64, admission_drained: bool) -> bool {
+        if self.retry_after_admission_drains {
+            admission_drained
+        } else {
+            tick >= self.last_autosave_tick.saturating_add(interval)
+        }
+    }
+
+    fn admitted(&mut self, tick: u64) {
+        self.last_autosave_tick = tick;
+        self.retry_after_admission_drains = false;
+    }
 }
 
 #[derive(Resource, Default)]
@@ -111,6 +127,7 @@ pub(crate) fn initialize_save_state(
     } else {
         0
     };
+    autosave.retry_after_admission_drains = false;
     if let Err(error) = refresh_catalog_blocking(&config, &mut catalog) {
         set_error(&mut status, format!("Cannot refresh save catalog: {error}"));
     }
@@ -465,6 +482,7 @@ pub(crate) fn poll_save_jobs(
     mut pending_scan: ResMut<PendingCatalogScan>,
     mut status: ResMut<SaveLoadStatus>,
     mut metrics: ResMut<SaveLoadMetrics>,
+    mut autosave: ResMut<AutosaveState>,
 ) {
     for job in jobs::take_completed(&mut pending) {
         match job.result {
@@ -544,6 +562,11 @@ pub(crate) fn poll_save_jobs(
                     status.last_completed_id = None;
                 }
             }
+            Err(SaveJobError::AdmissionBudget) if !job.explicit => {
+                // Implicit autosaves drop silently under transient save
+                // pressure, then retry once retained snapshots drain.
+                autosave.retry_after_admission_drains = true;
+            }
             Err(error) => {
                 set_error(
                     &mut status,
@@ -567,12 +590,14 @@ pub(crate) fn run_autosave(
         return;
     }
     let tick = sim.read().tick_count();
-    if tick
-        < autosave
-            .last_autosave_tick
-            .saturating_add(config.autosave_interval_ticks)
-        || config.autosave_slot_count == 0
-    {
+    if config.autosave_slot_count == 0 {
+        return;
+    }
+    if !autosave.should_attempt(
+        tick,
+        config.autosave_interval_ticks,
+        pending.admission_drained(),
+    ) {
         return;
     }
     // No `any_running` gate: autosaves coalesce by target when a save is
@@ -588,7 +613,7 @@ pub(crate) fn run_autosave(
         &mut metrics,
         false,
     ) {
-        autosave.last_autosave_tick = tick;
+        autosave.admitted(tick);
     }
 }
 
@@ -1181,6 +1206,7 @@ pub(crate) fn enter_swapped_world(state: &mut LoadState, tick: u64, player_tile:
     *state.equipment_window = EquipmentWindowState::default();
     state.window.open = false;
     state.autosave.last_autosave_tick = tick;
+    state.autosave.retry_after_admission_drains = false;
     *state.map_cache = MapTextureCache::default();
     state.map_details.clear();
     state.map_uploads.commands.clear();
@@ -1277,6 +1303,21 @@ fn default_data_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejected_autosave_retries_when_snapshot_admission_drains() {
+        let mut autosave = AutosaveState {
+            last_autosave_tick: 100,
+            retry_after_admission_drains: false,
+        };
+        assert!(autosave.should_attempt(200, 100, false));
+        autosave.admitted(200);
+        autosave.retry_after_admission_drains = true;
+        assert!(!autosave.should_attempt(201, 100, false));
+        assert!(autosave.should_attempt(201, 100, true));
+        autosave.admitted(201);
+        assert!(!autosave.should_attempt(202, 100, true));
+    }
     #[test]
     fn degraded_autosave_reports_even_under_active_error() {
         let degraded = SaveDurability::unsynced("injected commit fault");

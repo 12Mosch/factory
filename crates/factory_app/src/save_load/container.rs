@@ -2,9 +2,11 @@ use super::commit::{CommitFaultPhase, CommitFaults, SaveDurability};
 use super::lifecycle::{SAVE_CANCEL_ACTIVE, SAVE_CANCEL_COMMITTING};
 use super::{SaveId, SaveKind, SaveMetadata};
 use factory_sim::{
-    RECORD_MAGIC, SAVE_HEADER_SIZE, SaveLimits, SaveLoadError, Simulation, SimulationSaveSnapshot,
-    load_from_reader_with_limits, save_snapshot_records_to_writer_with_limits,
+    RECORD_MAGIC, SAVE_HEADER_SIZE, SaveLimits, SaveLoadError, Simulation,
+    load_from_reader_with_limits,
 };
+#[cfg(test)]
+use factory_sim::{SimulationSaveSnapshot, save_snapshot_records_to_writer_with_limits};
 use std::collections::BTreeMap;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -336,7 +338,7 @@ pub(crate) fn load_simulation_from_reader(
 
 /// Keeps external reader failures distinct from malformed simulation bytes so
 /// recovery never replaces a primary that merely became temporarily unreadable.
-fn map_simulation_error(error: SaveLoadError) -> ContainerError {
+pub(super) fn map_simulation_error(error: SaveLoadError) -> ContainerError {
     match error {
         SaveLoadError::TooLarge => ContainerError::TooLarge,
         error => match error.into_io_error() {
@@ -497,6 +499,7 @@ pub(crate) fn write_save_bytes_with_faults(
 /// the caller reports cancellation. Abandoning the wait never loses a
 /// save: nothing has committed yet, and leftover temp artifacts are
 /// recovered next startup.
+#[cfg(test)]
 pub(crate) fn write_save_snapshot(
     path: &Path,
     metadata: &SaveMetadata,
@@ -504,17 +507,35 @@ pub(crate) fn write_save_snapshot(
     shutdown: &AtomicBool,
     cancel: &AtomicU8,
 ) -> Option<Result<StreamWriteMetrics, ContainerError>> {
-    write_save_snapshot_with_faults(
-        path,
-        metadata,
-        snapshot,
-        shutdown,
-        cancel,
-        &CommitFaults::none(),
-    )
+    write_save_snapshot_with_encoder(path, metadata, shutdown, cancel, |mut writer, limits| {
+        save_snapshot_records_to_writer_with_limits(snapshot, &mut writer, limits)
+            .map_err(map_simulation_error)
+    })
+}
+
+/// The encoder owns any worker snapshot and reservation it captures. They
+/// drop as soon as encoding returns, before flush, sync, and commit work.
+pub(crate) fn write_save_snapshot_with_encoder(
+    path: &Path,
+    metadata: &SaveMetadata,
+    shutdown: &AtomicBool,
+    cancel: &AtomicU8,
+    encode: impl FnOnce(&mut dyn Write, SaveLimits) -> Result<(), ContainerError>,
+) -> Option<Result<StreamWriteMetrics, ContainerError>> {
+    with_save_artifact_lock_shutdown_aware(shutdown, || {
+        write_save_snapshot_locked_with_encoder(
+            path,
+            metadata,
+            SaveLimits::default(),
+            cancel,
+            &CommitFaults::none(),
+            encode,
+        )
+    })
 }
 
 /// Fault-injecting variant of [`write_save_snapshot`] for deterministic tests.
+#[cfg(test)]
 pub(crate) fn write_save_snapshot_with_faults(
     path: &Path,
     metadata: &SaveMetadata,
@@ -524,17 +545,21 @@ pub(crate) fn write_save_snapshot_with_faults(
     faults: &CommitFaults,
 ) -> Option<Result<StreamWriteMetrics, ContainerError>> {
     with_save_artifact_lock_shutdown_aware(shutdown, || {
-        write_save_snapshot_locked(
+        write_save_snapshot_locked_with_encoder(
             path,
             metadata,
-            snapshot,
             SaveLimits::default(),
             cancel,
             faults,
+            |mut writer, limits| {
+                save_snapshot_records_to_writer_with_limits(snapshot, &mut writer, limits)
+                    .map_err(map_simulation_error)
+            },
         )
     })
 }
 
+#[cfg(test)]
 fn write_save_snapshot_locked(
     path: &Path,
     metadata: &SaveMetadata,
@@ -542,6 +567,27 @@ fn write_save_snapshot_locked(
     limits: SaveLimits,
     cancel: &AtomicU8,
     faults: &CommitFaults,
+) -> Result<StreamWriteMetrics, ContainerError> {
+    write_save_snapshot_locked_with_encoder(
+        path,
+        metadata,
+        limits,
+        cancel,
+        faults,
+        |mut writer, limits| {
+            save_snapshot_records_to_writer_with_limits(snapshot, &mut writer, limits)
+                .map_err(map_simulation_error)
+        },
+    )
+}
+
+fn write_save_snapshot_locked_with_encoder(
+    path: &Path,
+    metadata: &SaveMetadata,
+    limits: SaveLimits,
+    cancel: &AtomicU8,
+    faults: &CommitFaults,
+    encode: impl FnOnce(&mut dyn Write, SaveLimits) -> Result<(), ContainerError>,
 ) -> Result<StreamWriteMetrics, ContainerError> {
     let metadata_text = ron::ser::to_string(metadata)
         .map_err(|error| ContainerError::MetadataEncoding(error.to_string()))?;
@@ -589,8 +635,7 @@ fn write_save_snapshot_locked(
             let encode_start = Instant::now();
             let simulation_bytes = {
                 let mut payload = LimitedWriter::new(writer, payload_maximum);
-                save_snapshot_records_to_writer_with_limits(snapshot, &mut payload, record_limits)
-                    .map_err(map_simulation_error)?;
+                encode(&mut payload, record_limits)?;
                 payload.written
             };
             Ok((
