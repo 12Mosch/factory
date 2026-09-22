@@ -9,6 +9,7 @@ use factory_sim::{
 use crate::constants::{MACHINE_BAR_HEIGHT, MACHINE_BAR_WIDTH};
 use crate::interaction::machine_kind::{OpenMachineKind, open_machine_kind};
 use crate::resources::SimResource;
+use crate::ui::accessibility::{UiPreferences, format_accessible_machine_status};
 use crate::ui::formatting::format_rocket_silo_operational_status;
 use crate::ui::inventory_panel::{InventoryPanel, spawn_labeled_slot, spawn_slot_button};
 use crate::ui::resources::OpenContainer;
@@ -66,8 +67,10 @@ pub(crate) fn spawn_machine_guidance(
 ) {
     let (guidance, status) = machine_guidance_for_entity(sim, entity_id)
         .expect("machine guidance is only spawned for a diagnosed machine");
+    // Spawned windows default to symbols on; live updates reconcile the toggle.
+    let accessible = format_accessible_machine_status(status, &guidance, true);
     root.spawn((
-        Text::new(guidance),
+        Text::new(accessible),
         TextFont::from_font_size(11.0),
         TextColor(machine_guidance_color(status)),
         TextLayout::justify(Justify::Left),
@@ -118,6 +121,7 @@ fn machine_guidance_color(status: MachineStatus) -> Color {
 pub(crate) fn update_machine_guidance(
     sim: Res<SimResource>,
     open_container: Res<OpenContainer>,
+    preferences: Res<UiPreferences>,
     mut guidance: Query<(&mut Text, &mut TextColor), With<MachineGuidanceText>>,
 ) {
     let guidance_state = open_container
@@ -126,9 +130,11 @@ pub(crate) fn update_machine_guidance(
     let Some((guidance_text, status)) = guidance_state else {
         return;
     };
+    let accessible =
+        format_accessible_machine_status(status, &guidance_text, preferences.status_symbols);
 
     for (mut text, mut color) in &mut guidance {
-        text.0.clone_from(&guidance_text);
+        text.0.clone_from(&accessible);
         color.0 = machine_guidance_color(status);
     }
 }

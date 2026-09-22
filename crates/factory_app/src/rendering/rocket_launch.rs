@@ -39,6 +39,7 @@ pub(crate) struct RocketLaunchRenderParams<'w> {
     reload: Option<Res<'w, PresentationReloadToken>>,
     pool: ResMut<'w, RocketLaunchRenderPool>,
     fixed_time: Option<Res<'w, Time<Fixed>>>,
+    preferences: Option<Res<'w, crate::ui::accessibility::UiPreferences>>,
 }
 
 pub(crate) fn rocket_rise_translation(footprint: &EntityFootprint, progress: f32) -> Vec3 {
@@ -64,12 +65,15 @@ pub(crate) fn sync_rocket_launch_rendering(
         reload,
         mut pool,
         fixed_time,
+        preferences,
     } = params;
     let reload_token = reload.as_deref().map_or(0, |token| token.value);
-    let overstep = fixed_time
+    let raw_overstep = fixed_time
         .as_deref()
         .map_or(0.0, Time::<Fixed>::overstep_fraction)
         .clamp(0.0, 1.0);
+    let reduced = preferences.as_deref().is_some_and(|p| p.reduced_motion);
+    let overstep = crate::ui::accessibility::reduced_motion_overstep(reduced, raw_overstep);
     let sim = sim.read();
     let needed = visible_rising_rockets(&sim, &visible_entity_ids.ids, overstep);
 

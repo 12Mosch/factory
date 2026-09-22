@@ -646,6 +646,12 @@ fn sound_cooldown_ticks(event: SoundEvent) -> u64 {
     }
 }
 
+/// Visual equivalents for essential alerts live in the presenting UI, not here:
+/// enemy warnings surface as threat cards plus the threat panel, rocket
+/// transitions as the launch banner plus silo status text, research as the
+/// technology panel state, crafting/mining as queue and progress UI, and
+/// placement feedback as build status text plus the ghost preview tint.
+/// No essential alert is audio-only; see `docs/accessibility.md`.
 fn spatial_sound_translation(sim: &factory_sim::Simulation, event: SoundEvent) -> Option<Vec3> {
     let entity_id = match event {
         SoundEvent::RocketSeal { entity_id } | SoundEvent::RocketLaunch { entity_id } => entity_id,

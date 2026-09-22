@@ -169,6 +169,16 @@ pub(crate) fn circuit_wire_color(color: factory_sim::WireColor) -> Color {
     }
 }
 
+/// Wire thickness per color so red versus green differs by more than hue.
+/// Green draws thicker; red keeps the thin baseline. Both stay legible over
+/// dense builds.
+pub(crate) fn circuit_wire_thickness(color: factory_sim::WireColor) -> f32 {
+    match color {
+        factory_sim::WireColor::Red => 2.0,
+        factory_sim::WireColor::Green => 3.5,
+    }
+}
+
 pub(crate) fn offshore_pump_color() -> Color {
     Color::srgb(0.14, 0.48, 0.68)
 }
@@ -198,6 +208,11 @@ pub(crate) fn rail_ballast_color() -> Color {
 /// A signal's lamp, coloured the way a railway colours it: green for a block
 /// nobody has, yellow for one somebody is on their way into, red for one
 /// somebody is standing in.
+///
+/// The three lamp colors are ordered by approximate channel brightness
+/// (reserved > clear > blocked), reducing reliance on red-green hue alone.
+/// Rail aspect has no text tag in the world view; this ordering is a
+/// lightness heuristic, not a verified deficiency simulation.
 pub(crate) fn rail_signal_color(aspect: factory_sim::RailSignalAspect) -> Color {
     match aspect {
         factory_sim::RailSignalAspect::Clear => Color::srgb(0.24, 0.80, 0.36),
@@ -502,6 +517,38 @@ impl RenderPrototypeIds {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::accessibility::{relative_luminance, status_colors_distinguishable};
+
+    #[test]
+    fn circuit_wires_differ_by_thickness_as_well_as_hue() {
+        assert_ne!(
+            circuit_wire_thickness(factory_sim::WireColor::Red),
+            circuit_wire_thickness(factory_sim::WireColor::Green)
+        );
+        assert!(
+            status_colors_distinguishable(
+                circuit_wire_color(factory_sim::WireColor::Red),
+                circuit_wire_color(factory_sim::WireColor::Green),
+            ),
+            "red and green wires must stay separable without hue"
+        );
+    }
+
+    #[test]
+    fn rail_signal_aspects_stay_ordered_by_luminance() {
+        use factory_sim::RailSignalAspect as Aspect;
+        let clear = relative_luminance(rail_signal_color(Aspect::Clear));
+        let reserved = relative_luminance(rail_signal_color(Aspect::Reserved));
+        let blocked = relative_luminance(rail_signal_color(Aspect::Blocked));
+        assert!(
+            reserved > clear && clear > blocked,
+            "signal luminance should order reserved > clear > blocked, got {reserved:.3} {clear:.3} {blocked:.3}"
+        );
+        assert!(status_colors_distinguishable(
+            rail_signal_color(Aspect::Reserved),
+            rail_signal_color(Aspect::Blocked)
+        ));
+    }
 
     #[test]
     fn tile_colors_are_indexed_by_tile_id() {

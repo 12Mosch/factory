@@ -16,11 +16,19 @@ const UI_SCALE_STEP_PERCENT: u16 = 25;
 const MIN_LOGICAL_VIEWPORT_WIDTH: f32 = 800.0;
 const MIN_LOGICAL_VIEWPORT_HEIGHT: f32 = 450.0;
 const PERSISTENCE_RETRY_DELAY: Duration = Duration::from_secs(1);
+/// Version of the persisted accessibility file. Legacy files without a version
+/// predate reduced-motion and status-symbol options and upgrade in place.
+pub const ACCESSIBILITY_PREFS_VERSION: u32 = 1;
+/// Minimum pointer hit target for accessibility controls. Matches the 44px
+/// WCAG guideline so touch, pen, and imprecise pointer input stay usable.
+pub const MIN_ACCESSIBLE_HIT_TARGET_PX: f32 = 44.0;
 
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct UiPreferences {
     pub scale_percent: u16,
     pub readable_high_contrast: bool,
+    pub reduced_motion: bool,
+    pub status_symbols: bool,
     settings_path: PathBuf,
 }
 
@@ -29,6 +37,8 @@ impl Default for UiPreferences {
         Self {
             scale_percent: 100,
             readable_high_contrast: false,
+            reduced_motion: false,
+            status_symbols: true,
             settings_path: PathBuf::new(),
         }
     }
@@ -50,37 +60,59 @@ impl UiPreferences {
 pub struct UiPreferencesPersistenceState {
     last_saved: Option<UiPreferencesFile>,
     retry_after: Option<Duration>,
+    /// Set when the on-disk record has an unknown future version. This
+    /// version cannot round-trip its unknown fields, so no write to that path
+    /// is safe for the session; in-memory preferences still apply.
+    unsupported_version: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct UiPreferencesFile {
+    pub version: u32,
     pub scale_percent: u16,
     pub readable_high_contrast: bool,
+    pub reduced_motion: bool,
+    pub status_symbols: bool,
 }
 
 impl Default for UiPreferencesFile {
     fn default() -> Self {
         Self {
+            version: ACCESSIBILITY_PREFS_VERSION,
             scale_percent: 100,
             readable_high_contrast: false,
+            reduced_motion: false,
+            status_symbols: true,
         }
     }
 }
 
 impl UiPreferencesFile {
     /// Builds the stable on-disk representation of the current preferences.
-    fn from_preferences(preferences: &UiPreferences) -> Self {
+    pub fn from_preferences(preferences: &UiPreferences) -> Self {
         Self {
+            version: ACCESSIBILITY_PREFS_VERSION,
             scale_percent: preferences
                 .scale_percent
                 .clamp(MIN_UI_SCALE_PERCENT, MAX_UI_SCALE_PERCENT),
             readable_high_contrast: preferences.readable_high_contrast,
+            reduced_motion: preferences.reduced_motion,
+            status_symbols: preferences.status_symbols,
         }
     }
 
     /// Sanitizes values loaded from files created by older or edited versions.
     fn normalize(&mut self) {
+        if self.version != ACCESSIBILITY_PREFS_VERSION && self.version != 0 {
+            *self = Self::default();
+            return;
+        }
+        // Version 0 predates versioning: keep the stored scale/contrast and
+        // fill the newer options with safe defaults.
+        if self.version == 0 {
+            self.version = ACCESSIBILITY_PREFS_VERSION;
+        }
         self.scale_percent = self
             .scale_percent
             .clamp(MIN_UI_SCALE_PERCENT, MAX_UI_SCALE_PERCENT);
@@ -120,6 +152,12 @@ pub enum UiScaleAction {
 #[derive(Component)]
 pub struct ReadableHighContrastButton;
 
+#[derive(Component)]
+pub struct ReducedMotionButton;
+
+#[derive(Component)]
+pub struct StatusSymbolsButton;
+
 type UiScaleButtonQuery<'w, 's> = Query<
     'w,
     's,
@@ -134,6 +172,26 @@ type ContrastButtonQuery<'w, 's> = Query<
         Changed<Interaction>,
         With<Button>,
         With<ReadableHighContrastButton>,
+    ),
+>;
+type ReducedMotionButtonQuery<'w, 's> = Query<
+    'w,
+    's,
+    &'static Interaction,
+    (
+        Changed<Interaction>,
+        With<Button>,
+        With<ReducedMotionButton>,
+    ),
+>;
+type StatusSymbolsButtonQuery<'w, 's> = Query<
+    'w,
+    's,
+    &'static Interaction,
+    (
+        Changed<Interaction>,
+        With<Button>,
+        With<StatusSymbolsButton>,
     ),
 >;
 type ChangedTextColorQuery<'w, 's> = Query<
@@ -175,12 +233,16 @@ pub(crate) struct DisplaySettingsSnapshot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AccessibilitySettingsSnapshot {
     pub readable_high_contrast: bool,
+    pub reduced_motion: bool,
+    pub status_symbols: bool,
 }
 
 /// Applies Display and Accessibility button presses to the pending session.
 pub(crate) fn handle_accessibility_settings_buttons(
     mut scale_buttons: UiScaleButtonQuery,
     mut contrast_buttons: ContrastButtonQuery,
+    mut reduced_motion_buttons: ReducedMotionButtonQuery,
+    mut status_symbol_buttons: StatusSymbolsButtonQuery,
     mut window: ResMut<SettingsWindowState>,
 ) {
     if !window.open {
@@ -207,6 +269,18 @@ pub(crate) fn handle_accessibility_settings_buttons(
             if *interaction == Interaction::Pressed {
                 window.pending_values.readable_high_contrast =
                     !window.pending_values.readable_high_contrast;
+                window.dirty = true;
+            }
+        }
+        for interaction in &mut reduced_motion_buttons {
+            if *interaction == Interaction::Pressed {
+                window.pending_values.reduced_motion = !window.pending_values.reduced_motion;
+                window.dirty = true;
+            }
+        }
+        for interaction in &mut status_symbol_buttons {
+            if *interaction == Interaction::Pressed {
+                window.pending_values.status_symbols = !window.pending_values.status_symbols;
                 window.dirty = true;
             }
         }
@@ -252,7 +326,7 @@ pub(crate) fn spawn_display_settings_content(
         });
 }
 
-/// Spawns the readable high-contrast control for the Accessibility tab.
+/// Spawns the accessibility controls for the Accessibility tab.
 pub(crate) fn spawn_accessibility_settings_content(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     snapshot: &AccessibilitySettingsSnapshot,
@@ -263,16 +337,49 @@ pub(crate) fn spawn_accessibility_settings_content(
         TextFont::from_font_size(12.0),
         TextColor(Color::srgb(0.72, 0.76, 0.69)),
     ));
-    spawn_control_button(
+    spawn_accessibility_toggle(
         parent,
         if snapshot.readable_high_contrast {
             "ON"
         } else {
             "OFF"
         },
-        None,
+        AccessibilityToggle::HighContrast,
         snapshot.readable_high_contrast,
     );
+
+    spawn_heading(parent, "Reduce motion and flashing");
+    parent.spawn((
+        Text::new("Disables nonessential animation smoothing such as rocket-rise interpolation. The simulation itself is unchanged."),
+        TextFont::from_font_size(12.0),
+        TextColor(Color::srgb(0.72, 0.76, 0.69)),
+    ));
+    spawn_accessibility_toggle(
+        parent,
+        if snapshot.reduced_motion { "ON" } else { "OFF" },
+        AccessibilityToggle::ReducedMotion,
+        snapshot.reduced_motion,
+    );
+
+    spawn_heading(parent, "Status symbols");
+    parent.spawn((
+        Text::new("Prefixes machine, threat, and build status with text symbols so state never depends on color alone."),
+        TextFont::from_font_size(12.0),
+        TextColor(Color::srgb(0.72, 0.76, 0.69)),
+    ));
+    spawn_accessibility_toggle(
+        parent,
+        if snapshot.status_symbols { "ON" } else { "OFF" },
+        AccessibilityToggle::StatusSymbols,
+        snapshot.status_symbols,
+    );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AccessibilityToggle {
+    HighContrast,
+    ReducedMotion,
+    StatusSymbols,
 }
 
 /// Spawns a settings-section heading using the shared visual treatment.
@@ -284,18 +391,12 @@ fn spawn_heading(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, text: 
     ));
 }
 
-/// Spawns a minimum-size accessibility control and its interaction marker.
-fn spawn_control_button(
-    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
-    label: &str,
-    scale_action: Option<UiScaleAction>,
-    selected: bool,
-) {
-    let mut button = parent.spawn((
-        Button,
+/// Shared 44px button chrome for accessibility controls.
+fn accessibility_button_bundle(selected: bool) -> (Node, BackgroundColor, BorderColor) {
+    (
         Node {
             min_width: Val::Px(52.0),
-            min_height: Val::Px(38.0),
+            min_height: Val::Px(MIN_ACCESSIBLE_HIT_TARGET_PX),
             padding: UiRect::horizontal(Val::Px(12.0)),
             align_items: AlignItems::Center,
             justify_content: JustifyContent::Center,
@@ -312,12 +413,11 @@ fn spawn_control_button(
         } else {
             Color::srgb(0.43, 0.53, 0.38)
         }),
-    ));
-    if let Some(action) = scale_action {
-        button.insert(UiScaleButton(action));
-    } else {
-        button.insert(ReadableHighContrastButton);
-    }
+    )
+}
+
+/// Attaches the shared label treatment to an accessibility button.
+fn finish_accessibility_button(button: &mut EntityCommands, label: &str) {
     button.with_child((
         Text::new(label),
         TextFont::from_font_size(14.0),
@@ -325,27 +425,140 @@ fn spawn_control_button(
     ));
 }
 
+/// Spawns a minimum-size accessibility control and its interaction marker.
+fn spawn_control_button(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    label: &str,
+    scale_action: Option<UiScaleAction>,
+    selected: bool,
+) {
+    let (node, background, border) = accessibility_button_bundle(selected);
+    let mut button = parent.spawn((Button, node, background, border));
+    if let Some(action) = scale_action {
+        button.insert(UiScaleButton(action));
+    } else {
+        button.insert(ReadableHighContrastButton);
+    }
+    finish_accessibility_button(&mut button, label);
+}
+
+/// Spawns an accessibility toggle with a 44px hit target and its marker.
+fn spawn_accessibility_toggle(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    label: &str,
+    toggle: AccessibilityToggle,
+    selected: bool,
+) {
+    let (node, background, border) = accessibility_button_bundle(selected);
+    let mut button = parent.spawn((Button, node, background, border));
+    match toggle {
+        AccessibilityToggle::HighContrast => {
+            button.insert(ReadableHighContrastButton);
+        }
+        AccessibilityToggle::ReducedMotion => {
+            button.insert(ReducedMotionButton);
+        }
+        AccessibilityToggle::StatusSymbols => {
+            button.insert(StatusSymbolsButton);
+        }
+    }
+    finish_accessibility_button(&mut button, label);
+}
+
 /// Loads preferences once at startup and establishes the persistence baseline.
+/// Legacy or out-of-range files are upgraded in place so the next startup
+/// reads a versioned record.
 pub(crate) fn load_persisted_ui_preferences(
     config: Res<SaveLoadConfig>,
     mut preferences: ResMut<UiPreferences>,
     mut persistence: ResMut<UiPreferencesPersistenceState>,
 ) {
     let path = ui_preferences_path(&config);
-    let file = read_ui_preferences_file(&path).unwrap_or_default();
-    preferences.settings_path = path;
+    let text = fs::read_to_string(&path).ok();
+    let raw = text
+        .as_deref()
+        .and_then(|text| ron::from_str::<UiPreferencesFile>(text).ok());
+    let file = raw
+        .clone()
+        .map(|mut raw| {
+            raw.normalize();
+            raw
+        })
+        .unwrap_or_default();
+    // Normalization is lossy (missing version, clamped scale): when it
+    // changed anything, the on-disk record is stale and must be rewritten.
+    // Basing `last_saved` on the normalized value alone would mark the stale
+    // file as saved and never upgrade it. Note the parsed struct cannot
+    // reveal a missing version on its own: `#[serde(default)]` fills it from
+    // `Default`, so an explicit probe detects legacy records.
+    //
+    // Unknown future versions are never rewritten: they load as runtime
+    // defaults so forward-version data survives a downgrade. Only known
+    // records (missing/version-0 legacy, or supported-version values such as
+    // a clamped scale) are upgraded in place.
+    #[derive(Deserialize, Default)]
+    #[serde(default)]
+    struct VersionProbe {
+        version: u32,
+    }
+    let probed = text.as_deref().and_then(|text| {
+        ron::from_str::<VersionProbe>(text)
+            .ok()
+            .map(|probe| probe.version)
+    });
+    // A present version that is neither legacy (0) nor current names a newer
+    // application: its unknown fields cannot round-trip here.
+    persistence.unsupported_version =
+        probed.is_some_and(|version| version != 0 && version != ACCESSIBILITY_PREFS_VERSION);
+    let migrated = match (probed, &raw) {
+        // Legacy records predate versioning; struct defaults mask the gap
+        // (`raw == file` even though the disk record is unversioned), so they
+        // always rewrite.
+        (Some(0), Some(_)) => true,
+        // Supported versions rewrite only when normalization changed a value.
+        (Some(version), Some(raw)) if version == ACCESSIBILITY_PREFS_VERSION => *raw != file,
+        // Missing/corrupt records have nothing parseable to upgrade, and
+        // future versions must never be touched.
+        _ => false,
+    };
+    preferences.settings_path = path.clone();
     preferences.set_scale_percent(file.scale_percent);
     preferences.readable_high_contrast = file.readable_high_contrast;
-    persistence.last_saved = Some(UiPreferencesFile::from_preferences(&preferences));
+    preferences.reduced_motion = file.reduced_motion;
+    preferences.status_symbols = file.status_symbols;
+    let normalized = UiPreferencesFile::from_preferences(&preferences);
+    if persistence.unsupported_version {
+        // Never touch a newer application's record: not on load, and (via
+        // the save guard below) not on later edits either.
+        persistence.last_saved = Some(normalized);
+    } else if migrated {
+        // Best effort: a failure leaves no baseline so the update-time save
+        // retries promptly instead of treating the legacy file as current.
+        if write_ui_preferences_file(&path, &normalized).is_ok() {
+            persistence.last_saved = Some(normalized);
+            persistence.retry_after = None;
+        } else {
+            persistence.last_saved = None;
+            persistence.retry_after = Some(Duration::ZERO);
+        }
+    } else {
+        persistence.last_saved = Some(normalized);
+    }
 }
 
 /// Persists changed preferences and retries transient failures with backoff.
+/// Never writes while an unsupported future version owns the path: this
+/// version cannot round-trip its unknown fields, so any write would destroy
+/// newer-application data.
 pub(crate) fn save_ui_preferences_if_changed(
     time: Res<Time<Real>>,
     preferences: Res<UiPreferences>,
     mut persistence: ResMut<UiPreferencesPersistenceState>,
 ) {
     if preferences.settings_path.as_os_str().is_empty() {
+        return;
+    }
+    if persistence.unsupported_version {
         return;
     }
     let file = UiPreferencesFile::from_preferences(&preferences);
@@ -387,7 +600,10 @@ pub fn write_ui_preferences_file(
         fs::create_dir_all(parent)?;
     }
     let text = ron::ser::to_string_pretty(file, ron::ser::PrettyConfig::default())
-        .unwrap_or_else(|_| "(scale_percent:100,readable_high_contrast:false)".to_string());
+        .unwrap_or_else(|_| {
+            "(version:1,scale_percent:100,readable_high_contrast:false,reduced_motion:false,status_symbols:true)"
+                .to_string()
+        });
     fs::write(path, text)
 }
 
@@ -638,6 +854,123 @@ fn apply_world_label_style(
     };
 }
 
+/// Reports whether a control meets the minimum accessible hit target.
+/// Both axes must meet the 44px minimum. Sizes are logical pixels: Bevy's
+/// `UiScale` maps them to physical pixels, so at a 75% interface scale a
+/// 44px control picks at 33 physical pixels. That is the platform-consistent
+/// interpretation (WCAG target size is measured in scale-independent CSS px,
+/// not physical px) and the scale itself is the user's explicit size choice;
+/// the responsive scale floor keeps the viewport usable.
+pub fn accessible_hit_target_met(width_px: f32, height_px: f32) -> bool {
+    width_px >= MIN_ACCESSIBLE_HIT_TARGET_PX && height_px >= MIN_ACCESSIBLE_HIT_TARGET_PX
+}
+
+/// Collapses frame-interpolation motion when reduced motion is enabled.
+/// The simulation tick is unchanged; only presentation smoothing is skipped.
+pub fn reduced_motion_overstep(reduced_motion: bool, overstep: f32) -> f32 {
+    if reduced_motion {
+        0.0
+    } else {
+        overstep.clamp(0.0, 1.0)
+    }
+}
+
+/// Approximate brightness from weighted sRGB channels. This is not linearized
+/// relative luminance and not a color-vision-deficiency simulation; it only
+/// measures overall lightness.
+pub fn relative_luminance(color: Color) -> f32 {
+    let source = color.to_srgba();
+    0.2126 * source.red + 0.7152 * source.green + 0.0722 * source.blue
+}
+
+/// Two status colors count as separable without hue when their approximate
+/// brightness differs by more than 0.08. This is a lightness-ordering
+/// heuristic, not a protanopia/deuteranopia/tritanopia simulation.
+pub fn status_colors_distinguishable(first: Color, second: Color) -> bool {
+    (relative_luminance(first) - relative_luminance(second)).abs() > 0.08
+}
+
+/// Shape/text alternative for a machine status. All tags are distinct ASCII so
+/// state never depends on green/amber/red hue alone.
+pub fn machine_status_symbol(status: factory_sim::MachineStatus) -> &'static str {
+    use factory_sim::MachineStatus as Status;
+    match status {
+        Status::Working => "[>]",
+        Status::Idle => "[=]",
+        Status::NoRecipe => "[R?]",
+        Status::NoResearch => "[T?]",
+        Status::NoFuel => "[F!]",
+        Status::NoPower => "[P!]",
+        Status::NoInput => "[I!]",
+        Status::NoFluid => "[W!]",
+        Status::NoHeat => "[H!]",
+        Status::OutputFull => "[X]",
+    }
+}
+
+/// Prefixes machine guidance with its symbol when symbols are enabled.
+pub fn format_accessible_machine_status(
+    status: factory_sim::MachineStatus,
+    guidance: &str,
+    symbols_enabled: bool,
+) -> String {
+    if symbols_enabled {
+        format!("{} {guidance}", machine_status_symbol(status))
+    } else {
+        guidance.to_string()
+    }
+}
+
+/// Shape/text alternative for a threat alert. All tags are distinct ASCII.
+pub fn threat_alert_glyph(kind: factory_sim::ThreatEventKind) -> &'static str {
+    use factory_sim::ThreatEventKind as Kind;
+    match kind {
+        Kind::PollutionContact => "[~]",
+        Kind::RaidPreparing => "[!]",
+        Kind::RaidLaunched => "[!!]",
+        Kind::StructureUnderAttack => "[X]",
+        Kind::ExpansionSpotted => "[?]",
+        Kind::BaseDestroyed => "[+]",
+    }
+}
+
+/// Prefixes a threat label with its glyph when symbols are enabled.
+pub fn format_accessible_threat_label(
+    kind: factory_sim::ThreatEventKind,
+    label: &str,
+    symbols_enabled: bool,
+) -> String {
+    if symbols_enabled {
+        format!("{} {label}", threat_alert_glyph(kind))
+    } else {
+        label.to_string()
+    }
+}
+
+/// Shape/text alternative for build validity. Valid and invalid never share a tag.
+pub fn build_validity_glyph(is_valid: bool) -> &'static str {
+    if is_valid { "[OK]" } else { "[X]" }
+}
+
+/// Prefixes build status text with its validity tag when symbols are enabled.
+pub fn format_accessible_build_status(
+    is_valid: bool,
+    message: &str,
+    symbols_enabled: bool,
+) -> String {
+    if symbols_enabled {
+        format!("{} {message}", build_validity_glyph(is_valid))
+    } else {
+        message.to_string()
+    }
+}
+
+/// Border width for selection states. Selected slots draw thicker so selection
+/// never depends on border hue alone.
+pub fn selection_border_width_px(selected: bool) -> f32 {
+    if selected { 3.0 } else { 1.0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -669,8 +1002,11 @@ mod tests {
         let root = std::env::temp_dir().join(format!("factory-ui-preferences-{unique}"));
         let path = root.join("ui-settings.ron");
         let file = UiPreferencesFile {
+            version: ACCESSIBILITY_PREFS_VERSION,
             scale_percent: 175,
             readable_high_contrast: true,
+            reduced_motion: true,
+            status_symbols: false,
         };
         write_ui_preferences_file(&path, &file).unwrap();
         assert_eq!(read_ui_preferences_file(&path), Some(file));
@@ -679,9 +1015,131 @@ mod tests {
         assert_eq!(
             read_ui_preferences_file(&path),
             Some(UiPreferencesFile {
+                version: ACCESSIBILITY_PREFS_VERSION,
                 scale_percent: 125,
                 readable_high_contrast: false,
+                reduced_motion: false,
+                status_symbols: true,
             })
+        );
+
+        fs::write(&path, "(version:999,scale_percent:125)").unwrap();
+        assert_eq!(
+            read_ui_preferences_file(&path),
+            Some(UiPreferencesFile::default())
+        );
+
+        fs::write(&path, "(version:1,scale_percent:10,reduced_motion:true)").unwrap();
+        assert_eq!(
+            read_ui_preferences_file(&path),
+            Some(UiPreferencesFile {
+                version: ACCESSIBILITY_PREFS_VERSION,
+                scale_percent: MIN_UI_SCALE_PERCENT,
+                readable_high_contrast: false,
+                reduced_motion: true,
+                status_symbols: true,
+            })
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_file_upgrades_in_place_on_load() {
+        use crate::save_load::SaveLoadConfig;
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("factory-ui-migrate-{unique}"));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("ui-settings.ron"), "(scale_percent:125)").unwrap();
+
+        let mut app = App::new();
+        app.insert_resource(SaveLoadConfig {
+            root_dir: root.clone(),
+            ..default()
+        })
+        .init_resource::<UiPreferences>()
+        .init_resource::<UiPreferencesPersistenceState>()
+        .add_systems(Startup, load_persisted_ui_preferences);
+        app.update();
+
+        let preferences = app.world().resource::<UiPreferences>();
+        assert_eq!(preferences.scale_percent, 125);
+        assert!(!preferences.reduced_motion);
+        assert!(preferences.status_symbols);
+        // The legacy record is rewritten as versioned so the next startup
+        // reads it without migration.
+        assert_eq!(
+            read_ui_preferences_file(&root.join("ui-settings.ron")),
+            Some(UiPreferencesFile {
+                version: ACCESSIBILITY_PREFS_VERSION,
+                scale_percent: 125,
+                readable_high_contrast: false,
+                reduced_motion: false,
+                status_symbols: true,
+            })
+        );
+        assert!(
+            fs::read_to_string(root.join("ui-settings.ron"))
+                .unwrap()
+                .contains("version")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn future_version_loads_defaults_without_rewriting() {
+        use crate::save_load::SaveLoadConfig;
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("factory-ui-future-{unique}"));
+        fs::create_dir_all(&root).unwrap();
+        let original = "(version:999,scale_percent:125)";
+        fs::write(root.join("ui-settings.ron"), original).unwrap();
+
+        let mut app = App::new();
+        app.insert_resource(SaveLoadConfig {
+            root_dir: root.clone(),
+            ..default()
+        })
+        .init_resource::<Time<Real>>()
+        .init_resource::<UiPreferences>()
+        .init_resource::<UiPreferencesPersistenceState>()
+        .add_systems(Startup, load_persisted_ui_preferences);
+        app.update();
+
+        // Unknown versions fall back to safe runtime defaults ...
+        let preferences = app.world().resource::<UiPreferences>();
+        let defaults = UiPreferences::default();
+        assert_eq!(preferences.scale_percent, defaults.scale_percent);
+        assert_eq!(
+            preferences.readable_high_contrast,
+            defaults.readable_high_contrast
+        );
+        assert_eq!(preferences.reduced_motion, defaults.reduced_motion);
+        assert_eq!(preferences.status_symbols, defaults.status_symbols);
+        // ... without destroying forward-version data on disk.
+        assert_eq!(
+            fs::read_to_string(root.join("ui-settings.ron")).unwrap(),
+            original
+        );
+
+        // Editing preferences must not overwrite the future record either:
+        // this version cannot round-trip its unknown fields.
+        app.world_mut()
+            .resource_mut::<UiPreferences>()
+            .set_scale_percent(150);
+        app.add_systems(Update, save_ui_preferences_if_changed);
+        app.update();
+        assert_eq!(
+            fs::read_to_string(root.join("ui-settings.ron")).unwrap(),
+            original,
+            "a later edit must not destroy the unsupported-version file"
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -699,6 +1157,8 @@ mod tests {
         let preferences = UiPreferences {
             scale_percent: 150,
             readable_high_contrast: true,
+            reduced_motion: true,
+            status_symbols: true,
             settings_path: path.clone(),
         };
         let mut app = App::new();
@@ -725,8 +1185,11 @@ mod tests {
         assert_eq!(
             read_ui_preferences_file(&path),
             Some(UiPreferencesFile {
+                version: ACCESSIBILITY_PREFS_VERSION,
                 scale_percent: 150,
                 readable_high_contrast: true,
+                reduced_motion: true,
+                status_symbols: true,
             })
         );
         fs::remove_dir_all(root).unwrap();
@@ -738,5 +1201,92 @@ mod tests {
         let text = high_contrast_text(Color::srgb(0.5, 0.5, 0.5)).to_srgba();
         let background = high_contrast_background(Color::srgb(0.2, 0.2, 0.2)).to_srgba();
         assert!(text.red - background.red > 0.8);
+    }
+
+    #[test]
+    fn status_symbols_are_unique_per_domain() {
+        use factory_sim::{MachineStatus, ThreatEventKind};
+        use std::collections::HashSet;
+
+        let machine = [
+            MachineStatus::Working,
+            MachineStatus::Idle,
+            MachineStatus::NoRecipe,
+            MachineStatus::NoResearch,
+            MachineStatus::NoFuel,
+            MachineStatus::NoPower,
+            MachineStatus::NoInput,
+            MachineStatus::NoFluid,
+            MachineStatus::NoHeat,
+            MachineStatus::OutputFull,
+        ]
+        .map(machine_status_symbol);
+        assert_eq!(machine.iter().collect::<HashSet<_>>().len(), machine.len());
+
+        let threats = [
+            ThreatEventKind::PollutionContact,
+            ThreatEventKind::RaidPreparing,
+            ThreatEventKind::RaidLaunched,
+            ThreatEventKind::StructureUnderAttack,
+            ThreatEventKind::ExpansionSpotted,
+            ThreatEventKind::BaseDestroyed,
+        ]
+        .map(threat_alert_glyph);
+        assert_eq!(threats.iter().collect::<HashSet<_>>().len(), threats.len());
+
+        assert_ne!(build_validity_glyph(true), build_validity_glyph(false));
+    }
+
+    #[test]
+    fn accessible_formatting_prefixes_symbols_only_when_enabled() {
+        use factory_sim::{MachineStatus, ThreatEventKind};
+
+        assert_eq!(
+            format_accessible_machine_status(MachineStatus::NoPower, "No power", true),
+            "[P!] No power"
+        );
+        assert_eq!(
+            format_accessible_machine_status(MachineStatus::NoPower, "No power", false),
+            "No power"
+        );
+        assert_eq!(
+            format_accessible_threat_label(ThreatEventKind::RaidLaunched, "Raid", true),
+            "[!!] Raid"
+        );
+        assert_eq!(
+            format_accessible_build_status(false, "Blocked", true),
+            "[X] Blocked"
+        );
+        assert_eq!(
+            format_accessible_build_status(true, "Ready", false),
+            "Ready"
+        );
+    }
+
+    #[test]
+    fn reduced_motion_collapses_interpolation_and_hit_targets_meet_minimum() {
+        assert_eq!(reduced_motion_overstep(true, 0.7), 0.0);
+        assert_eq!(reduced_motion_overstep(false, 0.7), 0.7);
+        assert!(accessible_hit_target_met(52.0, 44.0));
+        assert!(!accessible_hit_target_met(32.0, 32.0));
+        assert!(
+            !accessible_hit_target_met(52.0, 36.0),
+            "both axes must meet the 44px minimum"
+        );
+        assert_eq!(
+            MIN_ACCESSIBLE_HIT_TARGET_PX, 44.0,
+            "hit targets follow the 44px guideline"
+        );
+    }
+
+    #[test]
+    fn newly_changed_ui_converges_to_high_contrast() {
+        let normal = Color::srgb(0.5, 0.5, 0.5);
+        let converted = high_contrast_text(normal);
+        assert_eq!(high_contrast_text(converted), converted);
+        assert!(status_colors_distinguishable(
+            Color::srgb(0.42, 0.84, 0.55),
+            Color::srgb(1.0, 0.30, 0.24)
+        ));
     }
 }

@@ -10,12 +10,11 @@ use std::collections::HashMap;
 
 use crate::constants::TILE_SIZE;
 use crate::map::resources::VisibleChunks;
-use crate::rendering::colors::circuit_wire_color;
+use crate::rendering::colors::{circuit_wire_color, circuit_wire_thickness};
 use crate::resources::SimResource;
 
 /// Above entity sprites so wires stay readable over dense builds.
 const WIRE_Z: f32 = 9.0;
-const WIRE_THICKNESS: f32 = 2.0;
 /// Perpendicular offset applied per color so a red and a green wire between
 /// the same pair of entities do not overdraw each other.
 const WIRE_COLOR_SEPARATION: f32 = 2.5;
@@ -91,7 +90,7 @@ pub(crate) fn sync_circuit_wire_rendering(
         commands.spawn((
             Sprite::from_color(
                 circuit_wire_color(wire.color),
-                Vec2::new(length, WIRE_THICKNESS),
+                Vec2::new(length, circuit_wire_thickness(wire.color)),
             ),
             Transform::from_translation(((start + end) * 0.5).extend(WIRE_Z))
                 .with_rotation(Quat::from_rotation_z(delta.y.atan2(delta.x))),

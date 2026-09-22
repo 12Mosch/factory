@@ -8,6 +8,7 @@ use crate::map::resources::{MapDisplaySettings, MapOverlay, MapViewState};
 use crate::resources::SimResource;
 use crate::save_load::PresentationReloadToken;
 use crate::threat_events::ThreatEventCursor;
+use crate::ui::accessibility::{UiPreferences, format_accessible_threat_label, threat_alert_glyph};
 
 const TICKS_PER_SECOND: u64 = SIM_TICKS_PER_SECOND as u64;
 /// How long an alert card stays on screen before it expires.
@@ -70,8 +71,23 @@ pub struct ThreatUiState {
     /// The cards the alert root's children were last built from; the root is
     /// only rebuilt when `cards` diverges from this.
     rendered_cards: VecDeque<ThreatEvent>,
+    /// The symbol preference the rendered cards were formatted with. Alert
+    /// labels embed the preference, so toggling it must rebuild the cards
+    /// even when the queue itself is unchanged.
+    rendered_symbols_enabled: Option<bool>,
     /// The snapshot the HUD panel text was last formatted from.
     rendered_panel: Option<ThreatSnapshot>,
+}
+
+/// Reports whether the alert root must be rebuilt. Cards depend on both the
+/// queued events and the symbol preference baked into their labels.
+pub fn threat_cards_need_rebuild(
+    cards: &VecDeque<ThreatEvent>,
+    rendered_cards: &VecDeque<ThreatEvent>,
+    symbols_enabled: bool,
+    rendered_symbols_enabled: Option<bool>,
+) -> bool {
+    cards != rendered_cards || rendered_symbols_enabled != Some(symbols_enabled)
 }
 
 pub fn setup_threat_ui(
@@ -92,6 +108,7 @@ pub fn sync_threat_ui(
     sim: Res<SimResource>,
     reload: Option<Res<PresentationReloadToken>>,
     mut state: ResMut<ThreatUiState>,
+    preferences: Option<Res<UiPreferences>>,
     mut panel: Query<&mut Text, With<ThreatPanelText>>,
     roots: Query<Entity, With<ThreatAlertRoot>>,
 ) {
@@ -119,10 +136,17 @@ pub fn sync_threat_ui(
     while state.cards.len() > 3 {
         state.cards.pop_front();
     }
-    if state.cards == state.rendered_cards {
+    let symbols_enabled = preferences.as_deref().is_none_or(|p| p.status_symbols);
+    if !threat_cards_need_rebuild(
+        &state.cards,
+        &state.rendered_cards,
+        symbols_enabled,
+        state.rendered_symbols_enabled,
+    ) {
         return;
     }
     state.rendered_cards = state.cards.clone();
+    state.rendered_symbols_enabled = Some(symbols_enabled);
     for root in &roots {
         commands
             .entity(root)
@@ -130,6 +154,7 @@ pub fn sync_threat_ui(
             .with_children(|parent| {
                 for event in state.cards.iter().rev() {
                     let (label, color) = event_style(event.kind);
+                    let label = format_accessible_threat_label(event.kind, label, symbols_enabled);
                     parent
                         .spawn((
                             Button,
@@ -210,10 +235,39 @@ fn event_style(kind: ThreatEventKind) -> (&'static str, Color) {
     }
 }
 
+/// Symbol tag for a threat kind so alerts never depend on orange/red hue alone.
+pub fn threat_accessible_glyph(kind: ThreatEventKind) -> &'static str {
+    threat_alert_glyph(kind)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use bevy::{asset::AssetPlugin, scene::ScenePlugin};
+
+    fn test_event(kind: ThreatEventKind) -> ThreatEvent {
+        ThreatEvent {
+            sequence: 0,
+            tick: 0,
+            kind,
+            location: ThreatLocation::Exact { x: 0, y: 0 },
+        }
+    }
+
+    #[test]
+    fn cards_rebuild_on_symbol_toggle_without_queue_change() {
+        let cards = VecDeque::from([test_event(ThreatEventKind::RaidLaunched)]);
+        // Same queue, toggled preference: must rebuild so stale prefixes clear.
+        assert!(threat_cards_need_rebuild(&cards, &cards, false, Some(true)));
+        assert!(threat_cards_need_rebuild(&cards, &cards, true, Some(false)));
+        // Same queue, same preference: no rebuild.
+        assert!(!threat_cards_need_rebuild(&cards, &cards, true, Some(true)));
+        // Changed queue: rebuild regardless of preference.
+        let other = VecDeque::from([test_event(ThreatEventKind::BaseDestroyed)]);
+        assert!(threat_cards_need_rebuild(&other, &cards, true, Some(true)));
+        // Never rendered: rebuild.
+        assert!(threat_cards_need_rebuild(&cards, &cards, true, None));
+    }
 
     fn scene_test_app() -> App {
         let mut app = App::new();

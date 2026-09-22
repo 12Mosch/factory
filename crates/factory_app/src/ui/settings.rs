@@ -56,17 +56,22 @@ pub struct PendingSettingsValues {
     pub enemy_preset: EnemyDifficultyPreset,
     pub ui_scale_percent: u16,
     pub readable_high_contrast: bool,
+    pub reduced_motion: bool,
+    pub status_symbols: bool,
 }
 
 impl Default for PendingSettingsValues {
     fn default() -> Self {
         let audio = AudioSettings::default();
+        let ui = UiPreferences::default();
         Self {
             audio_muted: audio.muted,
             audio_volume: audio.volume,
             enemy_preset: EnemyDifficultyPreset::Standard,
-            ui_scale_percent: 100,
-            readable_high_contrast: false,
+            ui_scale_percent: ui.scale_percent,
+            readable_high_contrast: ui.readable_high_contrast,
+            reduced_motion: ui.reduced_motion,
+            status_symbols: ui.status_symbols,
         }
     }
 }
@@ -98,6 +103,8 @@ impl SettingsWindowState {
             enemy_preset,
             ui_scale_percent: ui_preferences.scale_percent,
             readable_high_contrast: ui_preferences.readable_high_contrast,
+            reduced_motion: ui_preferences.reduced_motion,
+            status_symbols: ui_preferences.status_symbols,
         };
         self.dirty = false;
         self.return_to_pause_menu = return_to_pause_menu;
@@ -269,6 +276,10 @@ pub(crate) fn handle_settings_buttons(
                     .set_scale_percent(resources.window.pending_values.ui_scale_percent);
                 resources.ui_preferences.readable_high_contrast =
                     resources.window.pending_values.readable_high_contrast;
+                resources.ui_preferences.reduced_motion =
+                    resources.window.pending_values.reduced_motion;
+                resources.ui_preferences.status_symbols =
+                    resources.window.pending_values.status_symbols;
             }
             SettingsAction::Reset => match resources.window.active_tab {
                 SettingsTab::Audio => {
@@ -294,7 +305,11 @@ pub(crate) fn handle_settings_buttons(
                     resources.window.dirty = true;
                 }
                 SettingsTab::Accessibility => {
-                    resources.window.pending_values.readable_high_contrast = false;
+                    let defaults = UiPreferences::default();
+                    resources.window.pending_values.readable_high_contrast =
+                        defaults.readable_high_contrast;
+                    resources.window.pending_values.reduced_motion = defaults.reduced_motion;
+                    resources.window.pending_values.status_symbols = defaults.status_symbols;
                     resources.window.dirty = true;
                 }
                 SettingsTab::Controls => {
@@ -366,6 +381,8 @@ pub(crate) fn sync_settings_window(
                 desktop: resources.display.snapshot(),
                 accessibility: AccessibilitySettingsSnapshot {
                     readable_high_contrast: resources.window.pending_values.readable_high_contrast,
+                    reduced_motion: resources.window.pending_values.reduced_motion,
+                    status_symbols: resources.window.pending_values.status_symbols,
                 },
                 controls,
             }
@@ -509,6 +526,8 @@ fn spawn_actions(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, dirty:
 }
 
 /// Spawns a settings button with consistent sizing and selected styling.
+/// The 44px minimum height keeps tab and action targets usable at 75-200% UI
+/// scales for pointer, touch, and keyboard focus navigation.
 pub(crate) fn spawn_button<T: Component>(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     label: &str,
@@ -520,7 +539,7 @@ pub(crate) fn spawn_button<T: Component>(
             Button,
             Node {
                 min_width: Val::Px(102.0),
-                height: Val::Px(32.0),
+                min_height: Val::Px(crate::ui::accessibility::MIN_ACCESSIBLE_HIT_TARGET_PX),
                 padding: UiRect::horizontal(Val::Px(9.0)),
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,

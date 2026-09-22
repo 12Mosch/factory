@@ -60,6 +60,7 @@ type BuildSlotVisualQuery<'w, 's> = Query<
         &'static Interaction,
         &'static mut BackgroundColor,
         &'static mut BorderColor,
+        &'static mut Node,
     ),
 >;
 type BuildCountTextQuery<'w, 's> = Query<
@@ -184,6 +185,18 @@ pub(crate) fn handle_build_bar_button_clicks(
     }
 }
 
+/// Assigns the selection border width, writing `Node` only when it differs.
+/// `Node` participates in layout, so unconditional writes would invalidate
+/// layout every frame for every slot.
+fn set_slot_border_width(node: &mut Node, selected: bool) {
+    let width = UiRect::all(Val::Px(
+        crate::ui::accessibility::selection_border_width_px(selected),
+    ));
+    if node.border != width {
+        node.border = width;
+    }
+}
+
 /// Whether a hotbar selection is researched. Terrain items are gated by
 /// owning the item rather than by an entity unlock, so they always pass.
 fn selection_unlocked(
@@ -203,10 +216,12 @@ pub(crate) fn update_build_bar_visuals(
     mut count_texts: BuildCountTextQuery,
     mut label_texts: BuildLabelTextQuery,
 ) {
-    for (button, interaction, mut background, mut border) in &mut slot_buttons {
+    for (button, interaction, mut background, mut border, mut node) in &mut slot_buttons {
         let Some(selection) = hotbar.slot(button.slot_index) else {
             *background = BackgroundColor(Color::srgba(0.055, 0.055, 0.055, 0.80));
             *border = BorderColor::all(Color::srgba(0.30, 0.30, 0.28, 0.50));
+            // An emptied slot must not keep a selected slot's thicker border.
+            set_slot_border_width(&mut node, false);
             continue;
         };
         let selected = build_state.selected == Some(selection);
@@ -218,6 +233,8 @@ pub(crate) fn update_build_bar_visuals(
         } else {
             Color::srgba(0.44, 0.43, 0.39, 0.70)
         });
+        // Shape as well as hue: selected slots draw a thicker border.
+        set_slot_border_width(&mut node, selected);
     }
 
     for (marker, mut text, mut color) in &mut count_texts {
@@ -297,6 +314,7 @@ pub(crate) fn update_build_status_text(
     planner: Res<PlannerState>,
     paste_preview: Res<PastePlacementPreviewState>,
     sim: Res<SimResource>,
+    preferences: Option<Res<crate::ui::accessibility::UiPreferences>>,
     mut texts: Query<(&mut Text, &mut TextColor), With<BuildStatusText>>,
 ) {
     let paste_status = (planner.tool == PlannerTool::Paste && paste_preview.active).then(|| {
@@ -327,20 +345,73 @@ pub(crate) fn update_build_status_text(
         });
     let status = live_status.as_ref().unwrap_or(&build_state.last_status);
 
-    let (message, color) = match status {
-        BuildPlacementStatus::Ready => ("Ready".to_string(), Color::srgb(0.78, 0.80, 0.76)),
-        BuildPlacementStatus::Placed(message) => (message.clone(), Color::srgb(0.56, 0.92, 0.55)),
+    let (message, color, is_valid) = match status {
+        BuildPlacementStatus::Ready => ("Ready".to_string(), Color::srgb(0.78, 0.80, 0.76), true),
+        BuildPlacementStatus::Placed(message) => {
+            (message.clone(), Color::srgb(0.56, 0.92, 0.55), true)
+        }
         BuildPlacementStatus::CannotPlace(message) => {
-            (message.clone(), Color::srgb(0.96, 0.33, 0.27))
+            (message.clone(), Color::srgb(0.96, 0.33, 0.27), false)
         }
         BuildPlacementStatus::MissingInventory(message) => {
-            (message.clone(), Color::srgb(0.98, 0.72, 0.28))
+            (message.clone(), Color::srgb(0.98, 0.72, 0.28), false)
         }
-        BuildPlacementStatus::Locked(message) => (message.clone(), Color::srgb(0.98, 0.72, 0.28)),
+        BuildPlacementStatus::Locked(message) => {
+            (message.clone(), Color::srgb(0.98, 0.72, 0.28), false)
+        }
     };
+    let symbols_enabled = preferences.as_deref().is_none_or(|p| p.status_symbols);
+    let message = crate::ui::accessibility::format_accessible_build_status(
+        is_valid,
+        &message,
+        symbols_enabled,
+    );
 
     for (mut text, mut text_color) in &mut texts {
         text.0 = message.clone();
         *text_color = TextColor(color);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::build::resources::HotbarState;
+    use crate::ui::accessibility::selection_border_width_px;
+    use factory_sim::Simulation;
+
+    #[test]
+    fn emptied_slot_resets_selection_border_width() {
+        let mut app = App::new();
+        app.insert_resource(SimResource::new(Simulation::new_test_world(0)))
+            .init_resource::<HotbarState>()
+            .init_resource::<BuildPlacementState>()
+            .add_systems(Update, update_build_bar_visuals);
+        let slot = app
+            .world_mut()
+            .spawn((
+                BuildSlotButton { slot_index: 0 },
+                Interaction::None,
+                BackgroundColor(Color::BLACK),
+                BorderColor::all(Color::BLACK),
+                Node {
+                    border: UiRect::all(Val::Px(selection_border_width_px(true))),
+                    ..default()
+                },
+            ))
+            .id();
+        app.update();
+
+        let border = app
+            .world()
+            .entity(slot)
+            .get::<Node>()
+            .expect("slot should keep its layout node")
+            .border;
+        assert_eq!(
+            border,
+            UiRect::all(Val::Px(selection_border_width_px(false))),
+            "an emptied slot must not keep the selected border width"
+        );
     }
 }
