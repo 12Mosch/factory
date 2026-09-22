@@ -2269,52 +2269,34 @@ mod tests {
         fs::remove_dir_all(outer).unwrap();
     }
 
-    /// Serializes the single test that switches the process-wide working
-    /// directory. Any future test mutating the CWD must hold this lock too;
-    /// tests resolving absolute paths never observe the switch.
-    static CWD_SWITCH_LOCK: Mutex<()> = Mutex::new(());
+    /// Removes a uniquely named relative test directory on drop, even on
+    /// panic, so a failure never leaves stray paths in the working tree.
+    struct RemoveRelativeDir(PathBuf);
 
-    /// Restores the working directory even when the test panics.
-    struct RestoreCwd(PathBuf);
-
-    impl RestoreCwd {
-        fn enter(dir: &Path) -> Self {
-            let previous = std::env::current_dir().expect("tests run with a working directory");
-            std::env::set_current_dir(dir).expect("test workdir must exist");
-            Self(previous)
-        }
-    }
-
-    impl Drop for RestoreCwd {
+    impl Drop for RemoveRelativeDir {
         fn drop(&mut self) {
-            let _ = std::env::set_current_dir(&self.0);
+            let _ = fs::remove_dir_all(&self.0);
         }
     }
 
     #[test]
     fn relative_save_root_syncs_linking_parent() {
-        let outer = fault_test_root("rel-root");
-        let workdir = outer.join("work");
-        fs::create_dir_all(&workdir).unwrap();
+        // Genuinely relative, previously nonexistent save root under the
+        // existing working directory: the process-wide CWD is never
+        // mutated, so parallel tests cannot observe this test. The nonce
+        // name keeps it disjoint from every other test's paths.
         let name = format!(
             "factory-rel-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         );
-        let _cwd_lock = CWD_SWITCH_LOCK.lock().unwrap();
-        let _guard = RestoreCwd::enter(&workdir);
-        let durability = write_save_bytes(
-            Path::new(&name).join("quicksave.factsim").as_path(),
-            b"relative first generation",
-        )
-        .expect("relative save must commit");
+        let _cleanup = RemoveRelativeDir(PathBuf::from(&name));
+        assert!(!Path::new(&name).exists());
+        let target = Path::new(&name).join("quicksave.factsim");
+        let durability = write_save_bytes(&target, b"relative first generation")
+            .expect("relative save must commit");
         assert_eq!(durability.degraded_reason(), None);
-        assert_eq!(
-            fs::read(workdir.join(&name).join("quicksave.factsim")).unwrap(),
-            b"relative first generation"
-        );
-        drop(_guard);
-        fs::remove_dir_all(outer).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"relative first generation");
     }
 
     #[test]
