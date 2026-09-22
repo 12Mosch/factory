@@ -2464,7 +2464,24 @@ fn subprocess_crash_artifacts_recover_to_one_generation() {
         root
     }
 
-    let probe = env!("CARGO_BIN_EXE_save_crash_probe");
+    // The probe lives under `examples/` (test-only, never shipped), so no
+    // `CARGO_BIN_EXE_<name>` variable exists for it: resolve the example
+    // binary next to this test executable instead. Full `cargo test` links
+    // examples before running tests; a filtered run needs
+    // `cargo build --examples` first.
+    let probe = std::env::current_exe()
+        .expect("test executable path")
+        .parent()
+        .expect("deps directory")
+        .join(format!(
+            "../examples/save_crash_probe{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+    assert!(
+        probe.exists(),
+        "missing example binary; run `cargo build --examples` or full `cargo test` first: {}",
+        probe.display()
+    );
     // Generate two distinct valid quicksave generations through the real
     // save path so staging needs no test-only metadata constructors. Time
     // must advance for ticks to advance: `run_until_tick` has no deadline
@@ -2518,7 +2535,7 @@ fn subprocess_crash_artifacts_recover_to_one_generation() {
         fs::write(root.join("new-staging.factsim"), &new_bytes).unwrap();
         fs::write(root.join("old-staging.factsim"), &old_bytes).unwrap();
 
-        let status = Command::new(probe)
+        let status = Command::new(&probe)
             .arg(&root)
             .arg(mode)
             .status()
@@ -2563,7 +2580,7 @@ fn subprocess_crash_artifacts_recover_to_one_generation() {
     fs::write(root.join("quicksave.factsim"), &old_bytes).unwrap();
     fs::write(root.join("new-staging.factsim"), &new_bytes).unwrap();
     fs::write(root.join("old-staging.factsim"), &old_bytes).unwrap();
-    let status = Command::new(probe)
+    let status = Command::new(&probe)
         .arg(&root)
         .arg("ambiguous")
         .status()

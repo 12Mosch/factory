@@ -676,7 +676,12 @@ fn missing_ancestor_chain(path: &Path) -> (Vec<PathBuf>, Option<PathBuf>) {
     for _ in 0..MAX_ANCESTOR_WALK {
         let Some(dir) = cursor else { break };
         if dir.as_os_str().is_empty() {
-            break;
+            // A relative save root like `saves/quicksave.factsim` links its
+            // top new directory into the current working directory: sync `.`
+            // as the pre-existing linking parent. This matters because the
+            // default save root falls back to relative `saves` when no data
+            // directory is configured.
+            return (missing, Some(PathBuf::from(".")));
         }
         match dir.try_exists() {
             Ok(true) => return (missing, Some(dir)),
@@ -694,8 +699,13 @@ fn missing_ancestor_chain(path: &Path) -> (Vec<PathBuf>, Option<PathBuf>) {
 
 /// Syncs every created directory plus the pre-existing linking parent so a
 /// first save in a new root is as durable as it reports. Any failure
-/// degrades the commit instead of reading as fully durable.
+/// degrades the commit instead of reading as fully durable. With nothing
+/// created, the save directory barrier already covers the linking parent,
+/// so no redundant fsync is issued on the hot path.
 fn sync_created_ancestors(missing: &[PathBuf], base: Option<&Path>) -> io::Result<()> {
+    if missing.is_empty() {
+        return Ok(());
+    }
     for dir in missing {
         sync_directory(dir)?;
     }
@@ -2187,6 +2197,68 @@ mod tests {
             write_save_bytes(&path, b"first generation").expect("first save must commit");
         assert_eq!(durability.degraded_reason(), None);
         assert_eq!(fs::read(&path).unwrap(), b"first generation");
+        fs::remove_dir_all(outer).unwrap();
+    }
+
+    #[test]
+    fn missing_chain_links_relative_roots_to_working_dir() {
+        let name = format!(
+            "factory-rel-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        );
+        assert!(!Path::new(&name).exists());
+        let target = Path::new(&name).join("quicksave.factsim");
+        let (missing, base) = missing_ancestor_chain(&target);
+        assert_eq!(missing, vec![PathBuf::from(&name)]);
+        assert_eq!(
+            base,
+            Some(PathBuf::from(".")),
+            "a relative root links into the working directory"
+        );
+    }
+
+    /// Restores the working directory even when the test panics. Only this
+    /// test mutates the process-wide CWD, and every other test resolves
+    /// absolute paths, so no parallel test can observe the switch.
+    struct RestoreCwd(PathBuf);
+
+    impl RestoreCwd {
+        fn enter(dir: &Path) -> Self {
+            let previous = std::env::current_dir().expect("tests run with a working directory");
+            std::env::set_current_dir(dir).expect("test workdir must exist");
+            Self(previous)
+        }
+    }
+
+    impl Drop for RestoreCwd {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
+
+    #[test]
+    fn relative_save_root_syncs_linking_parent() {
+        let outer = fault_test_root("rel-root");
+        let workdir = outer.join("work");
+        fs::create_dir_all(&workdir).unwrap();
+        let name = format!(
+            "factory-rel-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        );
+        let _guard = RestoreCwd::enter(&workdir);
+        let durability = write_save_bytes(
+            Path::new(&name).join("quicksave.factsim").as_path(),
+            b"relative first generation",
+        )
+        .expect("relative save must commit");
+        assert_eq!(durability.degraded_reason(), None);
+        assert_eq!(
+            fs::read(workdir.join(&name).join("quicksave.factsim")).unwrap(),
+            b"relative first generation"
+        );
+        drop(_guard);
         fs::remove_dir_all(outer).unwrap();
     }
 

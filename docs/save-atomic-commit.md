@@ -116,8 +116,10 @@ rename, durability barrier, retirement, and post-commit parent sync with
 disk-full (`StorageFull`), permission/locked (`PermissionDenied`, matching
 Windows sharing violations), and partial I/O (`Other`, leaving a flushed
 partial prefix that cleanup must remove). Post-cleanup sync faults remove
-files without issuing further barriers. The `save_crash_probe` binary
-supplements this with subprocess crash states on Windows and Linux
+files without issuing further barriers. The `save_crash_probe` example (a
+test-only target under `crates/factory_app/examples`, never shipped with
+the game) supplements this with subprocess crash states on Windows and
+Linux
 (temp-pending, backup-with-primary, missing-primary-with-backup,
 new-primary-old-backup, ambiguous): it reconstructs artifact states with
 plain file copies rather than running the real commit in the child (which
