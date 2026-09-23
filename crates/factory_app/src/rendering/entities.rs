@@ -1,3 +1,4 @@
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::sprite::{Anchor, Text2dShadow};
 use factory_data::{CraftingCategory, EntityKind, EntityPrototypeId, PrototypeCatalog};
@@ -45,6 +46,29 @@ pub(crate) struct RocketSiloSprite {
 #[derive(Component)]
 pub(crate) struct RocketSiloStatusIndicator {
     pub(crate) operational_state: factory_sim::RocketSiloOperationalState,
+}
+
+#[derive(Component)]
+pub(crate) struct RailSignalSprite {
+    pub(crate) status_indicator: Entity,
+}
+
+#[derive(Component)]
+pub(crate) struct RailSignalStatusIndicator;
+
+#[derive(SystemParam)]
+pub(crate) struct PlacedEntityRenderQueries<'w, 's> {
+    sprites: Query<
+        'w,
+        's,
+        (
+            &'static mut Transform,
+            &'static mut Sprite,
+            Option<&'static RailSignalSprite>,
+        ),
+        With<PlacedEntitySprite>,
+    >,
+    signal_indicators: Query<'w, 's, &'static mut Text2d, With<RailSignalStatusIndicator>>,
 }
 
 #[derive(Default)]
@@ -257,7 +281,7 @@ pub(crate) fn sync_placed_entity_rendering(
     visible_entity_ids: Res<VisibleEntityIds>,
     mut visual_assets: VisualAssets,
     mut registry: Local<PlacedEntityRenderRegistry>,
-    mut sprites: Query<(&mut Transform, &mut Sprite), With<PlacedEntitySprite>>,
+    mut queries: PlacedEntityRenderQueries,
 ) {
     if !visible_entity_ids.is_changed() {
         return;
@@ -286,12 +310,20 @@ pub(crate) fn sync_placed_entity_rendering(
         let Some(style) = renderable_entity_visual_style(&sim, *entity_id) else {
             continue;
         };
-        if let Ok((mut transform, mut sprite)) = sprites.get_mut(render_entity) {
+        if let Ok((mut transform, mut sprite, signal)) = queries.sprites.get_mut(render_entity) {
             let translation = entity_translation(&placed.footprint, transform.translation.z);
             if transform.translation != translation {
                 transform.translation = translation;
             }
             *sprite = visual_assets.entity_sprite(style);
+            if let Some(signal) = signal
+                && let Ok(mut text) = queries.signal_indicators.get_mut(signal.status_indicator)
+            {
+                text.0 = rail_signal_world_status_symbol(
+                    sim.rail_signal_aspect(*entity_id).unwrap_or_default(),
+                )
+                .to_string();
+            }
         }
     }
 
@@ -326,6 +358,16 @@ pub(crate) fn sync_placed_entity_rendering(
             commands.entity(render_entity).add_child(indicator);
             commands.entity(render_entity).insert(RocketSiloSprite {
                 visual_phase: state.launch_phase.into(),
+                status_indicator: indicator,
+            });
+        }
+        if style.kind.is_rail_signal() {
+            let indicator = spawn_rail_signal_status_indicator(
+                &mut commands,
+                sim.rail_signal_aspect(entity_id).unwrap_or_default(),
+            );
+            commands.entity(render_entity).add_child(indicator);
+            commands.entity(render_entity).insert(RailSignalSprite {
                 status_indicator: indicator,
             });
         }
@@ -408,6 +450,32 @@ fn spawn_rocket_silo_status_indicator(
         .id()
 }
 
+/// A fixed, color-independent mark above the signal head. ASCII glyphs are
+/// supported by the default world font and stay distinct at small zoom levels.
+pub(crate) const fn rail_signal_world_status_symbol(aspect: RailSignalAspect) -> &'static str {
+    match aspect {
+        RailSignalAspect::Clear => ">",
+        RailSignalAspect::Reserved => "=",
+        RailSignalAspect::Blocked => "X",
+    }
+}
+
+fn spawn_rail_signal_status_indicator(commands: &mut Commands, aspect: RailSignalAspect) -> Entity {
+    commands
+        .spawn((
+            Text2d::new(rail_signal_world_status_symbol(aspect)),
+            TextFont::from_font_size(6.0),
+            TextColor(Color::WHITE),
+            TextLayout::justify(Justify::Center),
+            Transform::from_xyz(0.0, TILE_SIZE * 0.5 + 4.0, 0.2),
+            Anchor::CENTER,
+            Text2dShadow::default(),
+            ReadableWorldLabel::new(6.0),
+            RailSignalStatusIndicator,
+        ))
+        .id()
+}
+
 pub(crate) const fn rocket_silo_world_status_label(
     status: factory_sim::RocketSiloOperationalState,
 ) -> &'static str {
@@ -444,7 +512,7 @@ pub(crate) fn measured_sync_placed_entity_rendering(
     visible_entity_ids: Res<VisibleEntityIds>,
     visual_assets: VisualAssets,
     registry: Local<PlacedEntityRenderRegistry>,
-    sprites: Query<(&mut Transform, &mut Sprite), With<PlacedEntitySprite>>,
+    queries: PlacedEntityRenderQueries,
     mut timing: ResMut<PlacedEntitiesRenderSyncTime>,
 ) {
     let started = Instant::now();
@@ -454,7 +522,7 @@ pub(crate) fn measured_sync_placed_entity_rendering(
         visible_entity_ids,
         visual_assets,
         registry,
-        sprites,
+        queries,
     );
     timing.0 = started.elapsed();
 }
@@ -916,6 +984,36 @@ mod tests {
     use crate::resources::SimResource;
     use factory_sim::CHUNK_SIZE;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn rail_signal_aspects_spawn_distinct_world_symbols() {
+        fn spawn_symbols(mut commands: Commands) {
+            for aspect in [
+                RailSignalAspect::Clear,
+                RailSignalAspect::Reserved,
+                RailSignalAspect::Blocked,
+            ] {
+                spawn_rail_signal_status_indicator(&mut commands, aspect);
+            }
+        }
+
+        let mut app = App::new();
+        app.add_systems(Update, spawn_symbols);
+        app.update();
+
+        let mut symbols = app
+            .world_mut()
+            .query_filtered::<(&Text2d, &Transform, &TextColor), With<RailSignalStatusIndicator>>()
+            .iter(app.world())
+            .map(|(text, transform, color)| {
+                assert_eq!(transform.translation.y, TILE_SIZE * 0.5 + 4.0);
+                assert_eq!(color.0, Color::WHITE);
+                text.0.clone()
+            })
+            .collect::<Vec<_>>();
+        symbols.sort();
+        assert_eq!(symbols, ["=", ">", "X"]);
+    }
 
     #[test]
     fn fluid_entities_have_render_styles() {
