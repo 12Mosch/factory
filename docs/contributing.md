@@ -13,5 +13,5 @@ cargo test
 ```
 
 After formatting, check `git diff` for any changes to commit. The `Rust quality`
-job runs on pull requests and branch pushes, and can be selected as a required
+job runs on pull requests and pushes to `main`, and can be selected as a required
 check in branch protection.

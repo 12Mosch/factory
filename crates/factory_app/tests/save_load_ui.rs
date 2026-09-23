@@ -1486,9 +1486,9 @@ fn manual_saves_queue_fifo_and_autosaves_coalesce_within_bounds() {
     assert!(
         phases
             .iter()
-            .any(|(_, phase)| *phase != SaveJobPhase::Queued)
-            || phases.len() == 1,
-        "the running save must expose a non-queued progress phase"
+            .skip(phases.len() - pending.queued_len())
+            .all(|(_, phase)| *phase == SaveJobPhase::Queued),
+        "queued saves must expose queued progress"
     );
     drain_persistence_jobs(&mut app);
     let metrics = app.world().resource::<SaveLoadMetrics>();
