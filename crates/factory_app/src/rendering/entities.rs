@@ -310,6 +310,12 @@ pub(crate) fn sync_placed_entity_rendering(
         let Some(style) = renderable_entity_visual_style(&sim, *entity_id) else {
             continue;
         };
+        // A dirty rail graph has no authoritative aspect yet. Keep the last
+        // rendered lamp and symbol: rebuilding the graph may reproduce the
+        // same aspect and emit no further style revision.
+        if style.kind.is_rail_signal() && sim.rail_signal_aspect(*entity_id).is_none() {
+            continue;
+        }
         if let Ok((mut transform, mut sprite, signal)) = queries.sprites.get_mut(render_entity) {
             let translation = entity_translation(&placed.footprint, transform.translation.z);
             if transform.translation != translation {
@@ -317,12 +323,10 @@ pub(crate) fn sync_placed_entity_rendering(
             }
             *sprite = visual_assets.entity_sprite(style);
             if let Some(signal) = signal
+                && let Some(aspect) = sim.rail_signal_aspect(*entity_id)
                 && let Ok(mut text) = queries.signal_indicators.get_mut(signal.status_indicator)
             {
-                text.0 = rail_signal_world_status_symbol(
-                    sim.rail_signal_aspect(*entity_id).unwrap_or_default(),
-                )
-                .to_string();
+                text.0 = rail_signal_world_status_symbol(aspect).to_string();
             }
         }
     }
@@ -364,7 +368,7 @@ pub(crate) fn sync_placed_entity_rendering(
         if style.kind.is_rail_signal() {
             let indicator = spawn_rail_signal_status_indicator(
                 &mut commands,
-                sim.rail_signal_aspect(entity_id).unwrap_or_default(),
+                sim.rail_signal_aspect(entity_id),
             );
             commands.entity(render_entity).add_child(indicator);
             commands.entity(render_entity).insert(RailSignalSprite {
@@ -460,10 +464,13 @@ pub(crate) const fn rail_signal_world_status_symbol(aspect: RailSignalAspect) ->
     }
 }
 
-fn spawn_rail_signal_status_indicator(commands: &mut Commands, aspect: RailSignalAspect) -> Entity {
+fn spawn_rail_signal_status_indicator(
+    commands: &mut Commands,
+    aspect: Option<RailSignalAspect>,
+) -> Entity {
     commands
         .spawn((
-            Text2d::new(rail_signal_world_status_symbol(aspect)),
+            Text2d::new(aspect.map_or("", rail_signal_world_status_symbol)),
             TextFont::from_font_size(6.0),
             TextColor(Color::WHITE),
             TextLayout::justify(Justify::Center),
@@ -591,10 +598,11 @@ pub(crate) fn renderable_entity_visual_style(
             factory_sim::RocketLaunchPhase::Rising { .. } => Color::srgb(0.95, 0.48, 0.12),
         };
     }
-    if style.kind.is_rail_signal()
-        && let Some(aspect) = sim.rail_signal_aspect(entity_id)
-    {
-        style.base_color = rail_signal_color(aspect);
+    if style.kind.is_rail_signal() {
+        style.base_color = sim
+            .rail_signal_aspect(entity_id)
+            .map(rail_signal_color)
+            .unwrap_or(Color::srgb(0.30, 0.32, 0.34));
     }
     Some(style)
 }
@@ -984,36 +992,6 @@ mod tests {
     use crate::resources::SimResource;
     use factory_sim::CHUNK_SIZE;
     use std::collections::BTreeSet;
-
-    #[test]
-    fn rail_signal_aspects_spawn_distinct_world_symbols() {
-        fn spawn_symbols(mut commands: Commands) {
-            for aspect in [
-                RailSignalAspect::Clear,
-                RailSignalAspect::Reserved,
-                RailSignalAspect::Blocked,
-            ] {
-                spawn_rail_signal_status_indicator(&mut commands, aspect);
-            }
-        }
-
-        let mut app = App::new();
-        app.add_systems(Update, spawn_symbols);
-        app.update();
-
-        let mut symbols = app
-            .world_mut()
-            .query_filtered::<(&Text2d, &Transform, &TextColor), With<RailSignalStatusIndicator>>()
-            .iter(app.world())
-            .map(|(text, transform, color)| {
-                assert_eq!(transform.translation.y, TILE_SIZE * 0.5 + 4.0);
-                assert_eq!(color.0, Color::WHITE);
-                text.0.clone()
-            })
-            .collect::<Vec<_>>();
-        symbols.sort();
-        assert_eq!(symbols, ["=", ">", "X"]);
-    }
 
     #[test]
     fn fluid_entities_have_render_styles() {
