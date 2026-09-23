@@ -1055,6 +1055,7 @@ impl SimulationSnapshotOwned {
         sim.world.chunk_revision = self.world_chunk_revision;
         sim.world.walkability_revision = self.world_walkability_revision;
         sim.entities.rebuild_pump_registry(&sim.world.prototypes);
+        sim.entities.rebuild_damaged_friendly_entities();
         validation::validate_durable_state(&sim).map_err(SaveLoadError::InvalidSimulationState)?;
         // The rail graph is a derived cache like the circuit topology, so a
         // loaded world rebuilds it before anything can ask what connects — and

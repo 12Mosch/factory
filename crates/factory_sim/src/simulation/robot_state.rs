@@ -33,6 +33,10 @@ pub(super) struct RobotSubsystem {
     pub(super) job_counts_by_network: Vec<RobotNetworkJobCounts>,
     #[serde(skip, default)]
     pub(super) job_networks: BTreeMap<ConstructionJob, u32>,
+    /// Reused to enqueue damaged entities in stable ID order while mutating
+    /// construction state. Empty worlds do no allocation in this pass.
+    #[serde(skip, default)]
+    pub(super) repair_scratch: Vec<EntityId>,
     /// Per-network logistic contents, maintained by delta off chest inventory
     /// changes rather than rescanned. See
     /// [`crate::simulation::robot_ops::LogisticIndex`].
@@ -76,6 +80,7 @@ impl Default for RobotSubsystem {
             networks_needing_snapshot: Vec::new(),
             job_counts_by_network: Vec::new(),
             job_networks: BTreeMap::new(),
+            repair_scratch: Vec::new(),
             logistic: LogisticIndex::default(),
             logistic_work: RobotLogisticWorkState::default(),
             delivery_reservations: LogisticReservations::default(),

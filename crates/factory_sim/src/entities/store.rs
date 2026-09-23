@@ -100,6 +100,11 @@ macro_rules! define_entity_store {
             /// it, so their inserter traffic costs nothing to record.
             #[serde(skip, default)]
             pub(crate) changed_logistic_endpoints: BTreeSet<EntityId>,
+            /// Ordered runtime index of damaged player entities. Maintained at
+            /// health mutation points and rebuilt after loading, so repair
+            /// discovery does not visit every health record each tick.
+            #[serde(skip, default)]
+            pub(crate) damaged_friendly_entities: BTreeSet<EntityId>,
         }
 
         // Hand-written rather than derived so `changed_logistic_endpoints` cannot
@@ -140,6 +145,7 @@ macro_rules! define_entity_store {
                     next_entity_id,
                     pumps: BTreeMap::new(),
                     changed_logistic_endpoints: BTreeSet::new(),
+                    damaged_friendly_entities: BTreeSet::new(),
                 }
             }
 
@@ -147,6 +153,17 @@ macro_rules! define_entity_store {
             pub(crate) fn remove_entity_states(&mut self, entity_id: EntityId) {
                 $(self.$field.remove(&entity_id);)*
                 self.pumps.remove(&entity_id);
+                self.damaged_friendly_entities.remove(&entity_id);
+            }
+
+            /// Rebuilds repair discovery from durable health on load.
+            pub(crate) fn rebuild_damaged_friendly_entities(&mut self) {
+                self.damaged_friendly_entities.clear();
+                self.damaged_friendly_entities.extend(
+                    self.entity_health.iter().filter_map(|(entity_id, health)| {
+                        health.is_damaged_friendly().then_some(*entity_id)
+                    }),
+                );
             }
 
             /// Rebuilds the derived powered-pump index after deserialization.

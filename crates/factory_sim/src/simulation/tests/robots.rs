@@ -1093,6 +1093,69 @@ fn construction_robot_repairs_damage_with_one_shot_pack_metadata() {
 }
 
 #[test]
+fn damaged_friendly_index_rebuilds_and_reconciles_without_roboports() {
+    let mut sim = Simulation::new_test_world(123);
+    let furnace = entity_id_by_name(sim.catalog(), "stone_furnace");
+    let (first_x, first_y) = first_placeable_entity_tile(&sim, furnace, Direction::North);
+    let first = place_at(&mut sim, furnace, first_x, first_y, Direction::North);
+    let (second_x, second_y) = first_placeable_entity_tile(&sim, furnace, Direction::North);
+    let second = place_at(&mut sim, furnace, second_x, second_y, Direction::North);
+
+    assert!(!sim.damage_entity(second, 1));
+    assert!(!sim.damage_entity(first, 1));
+    assert_eq!(
+        sim.entities
+            .damaged_friendly_entities
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![first, second]
+    );
+    sim.tick();
+    assert_eq!(
+        sim.construction.queue().collect::<Vec<_>>(),
+        vec![
+            ConstructionJob::Repair(first),
+            ConstructionJob::Repair(second)
+        ]
+    );
+
+    construction_ops::mark_area_for_deconstruction(&mut sim, first_x, first_y, first_x, first_y);
+    assert!(
+        !sim.construction
+            .queue()
+            .any(|job| job == ConstructionJob::Repair(first))
+    );
+    construction_ops::cancel_deconstruction_in_area(&mut sim, first_x, first_y, first_x, first_y);
+    sim.tick();
+    assert!(
+        sim.construction
+            .queue()
+            .any(|job| job == ConstructionJob::Repair(first))
+    );
+
+    let bytes = crate::save_to_bytes(&sim).unwrap();
+    let mut loaded = crate::load_from_bytes(&bytes).unwrap();
+    assert_eq!(sim.state_hash(), loaded.state_hash());
+    assert_eq!(
+        loaded.entities.damaged_friendly_entities,
+        sim.entities.damaged_friendly_entities
+    );
+    loaded.restore_entity_health(first, 1);
+    loaded.tick();
+    assert!(!loaded.entities.damaged_friendly_entities.contains(&first));
+    assert!(
+        !loaded
+            .construction
+            .queue()
+            .any(|job| job == ConstructionJob::Repair(first))
+    );
+    entity_mutation::remove(&mut loaded, second).unwrap();
+    assert!(loaded.entities.damaged_friendly_entities.is_empty());
+    loaded.validate().unwrap();
+}
+
+#[test]
 fn deconstruction_cancels_pending_repair_for_the_same_target() {
     let mut sim = Simulation::new_test_world(123);
     let roboport = stocked_roboport(&mut sim, 1);

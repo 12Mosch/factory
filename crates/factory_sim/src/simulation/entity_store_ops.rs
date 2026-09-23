@@ -407,6 +407,13 @@ impl EntityStore {
             },
         );
         self.insert_reserved_states(id, reservation);
+        if self
+            .entity_health
+            .get(&id)
+            .is_some_and(|health| health.is_damaged_friendly())
+        {
+            self.damaged_friendly_entities.insert(id);
+        }
         self.note_logistic_endpoint_changed(id);
         id
     }
