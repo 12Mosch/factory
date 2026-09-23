@@ -1,0 +1,57 @@
+name: Rust quality gates
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  rust-quality:
+    name: Rust quality
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            g++ pkg-config libx11-dev libasound2-dev libudev-dev \
+            libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --component clippy --component rustfmt
+          rustup default 1.98.1
+
+      - name: Cache Cargo dependencies and build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+
+      - name: cargo fmt --all
+        run: |
+          cargo fmt --all
+          git diff --exit-code
+
+      - name: cargo check
+        run: cargo check
+
+      - name: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test
