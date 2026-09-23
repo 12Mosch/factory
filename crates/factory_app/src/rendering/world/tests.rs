@@ -139,6 +139,31 @@ fn rail_signal_symbols_follow_aspects_and_survive_a_dirty_graph() {
     assert_eq!(rail_signal_indicator_text(&mut app, ordinary), "X");
     assert_eq!(rail_signal_indicator_text(&mut app, chain), ">");
 
+    // Move the chain signal out of view before invalidating the rail graph.
+    // Bringing it back while aspects are unavailable must be retried after the
+    // rebuild, even when the aspect is unchanged and no style revision fires.
+    let full_bounds = app.world().resource::<VisibleChunks>().tile_bounds;
+    {
+        let mut visible = app.world_mut().resource_mut::<VisibleChunks>();
+        visible.tile_bounds = Some(MapTextureBounds {
+            min_x: x,
+            min_y: y + 3,
+            width: 3,
+            height: 4,
+        });
+        visible.revision += 1;
+    }
+    app.update();
+    {
+        let world = app.world_mut();
+        let mut query = world.query::<(&PlacedEntitySprite, &RailSignalSprite)>();
+        assert!(
+            !query
+                .iter(world)
+                .any(|(placed, _)| placed.entity_id == chain)
+        );
+    }
+
     let style_revision = {
         let mut resource = app.world_mut().resource_mut::<SimResource>();
         let sim = &mut resource.write_for_tests();
@@ -148,6 +173,11 @@ fn rail_signal_symbols_follow_aspects_and_survive_a_dirty_graph() {
         assert_eq!(sim.rail_signal_aspect(ordinary), None);
         sim.entity_style_revision()
     };
+    {
+        let mut visible = app.world_mut().resource_mut::<VisibleChunks>();
+        visible.tile_bounds = full_bounds;
+        visible.revision += 1;
+    }
     app.update();
     assert!(
         app.world()
@@ -157,6 +187,7 @@ fn rail_signal_symbols_follow_aspects_and_survive_a_dirty_graph() {
         "the topology change must exercise a dirty signal style"
     );
     assert_eq!(rail_signal_indicator_text(&mut app, ordinary), "X");
+    assert_eq!(rail_signal_indicator_text(&mut app, chain), "");
 
     {
         let mut resource = app.world_mut().resource_mut::<SimResource>();
@@ -170,6 +201,7 @@ fn rail_signal_symbols_follow_aspects_and_survive_a_dirty_graph() {
     }
     app.update();
     assert_eq!(rail_signal_indicator_text(&mut app, ordinary), "X");
+    assert_eq!(rail_signal_indicator_text(&mut app, chain), ">");
 
     {
         let mut resource = app.world_mut().resource_mut::<SimResource>();

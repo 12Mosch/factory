@@ -95,6 +95,7 @@ pub(crate) struct VisibleEntitySyncState {
 #[derive(Default)]
 pub(crate) struct PlacedEntityRenderRegistry {
     entities: HashMap<EntityId, Entity>,
+    pending_signals: HashSet<EntityId>,
 }
 
 impl From<factory_sim::RocketLaunchPhase> for RocketSiloVisualPhase {
@@ -283,21 +284,28 @@ pub(crate) fn sync_placed_entity_rendering(
     mut registry: Local<PlacedEntityRenderRegistry>,
     mut queries: PlacedEntityRenderQueries,
 ) {
-    if !visible_entity_ids.is_changed() {
+    let visible_changed = visible_entity_ids.is_changed();
+    if !visible_changed && registry.pending_signals.is_empty() {
         return;
     }
     let sim = sim.read();
+    if !visible_changed {
+        retry_pending_rail_signals(&sim, &mut registry, &mut visual_assets, &mut queries);
+        return;
+    }
 
     if visible_entity_ids.reset {
         for (_, render_entity) in registry.entities.drain() {
             commands.entity(render_entity).despawn();
         }
+        registry.pending_signals.clear();
     }
 
     for entity_id in &visible_entity_ids.removed {
         if let Some(render_entity) = registry.entities.remove(entity_id) {
             commands.entity(render_entity).despawn();
         }
+        registry.pending_signals.remove(entity_id);
     }
 
     for entity_id in &visible_entity_ids.style_dirty {
@@ -314,20 +322,21 @@ pub(crate) fn sync_placed_entity_rendering(
         // rendered lamp and symbol: rebuilding the graph may reproduce the
         // same aspect and emit no further style revision.
         if style.kind.is_rail_signal() && sim.rail_signal_aspect(*entity_id).is_none() {
+            registry.pending_signals.insert(*entity_id);
             continue;
         }
-        if let Ok((mut transform, mut sprite, signal)) = queries.sprites.get_mut(render_entity) {
-            let translation = entity_translation(&placed.footprint, transform.translation.z);
-            if transform.translation != translation {
-                transform.translation = translation;
-            }
-            *sprite = visual_assets.entity_sprite(style);
-            if let Some(signal) = signal
-                && let Some(aspect) = sim.rail_signal_aspect(*entity_id)
-                && let Ok(mut text) = queries.signal_indicators.get_mut(signal.status_indicator)
-            {
-                text.0 = rail_signal_world_status_symbol(aspect).to_string();
-            }
+        let aspect = sim.rail_signal_aspect(*entity_id);
+        if refresh_placed_entity_sprite(
+            render_entity,
+            &placed.footprint,
+            style,
+            aspect,
+            &mut visual_assets,
+            &mut queries,
+        ) {
+            registry.pending_signals.remove(entity_id);
+        } else if style.kind.is_rail_signal() {
+            registry.pending_signals.insert(*entity_id);
         }
     }
 
@@ -366,17 +375,81 @@ pub(crate) fn sync_placed_entity_rendering(
             });
         }
         if style.kind.is_rail_signal() {
-            let indicator = spawn_rail_signal_status_indicator(
-                &mut commands,
-                sim.rail_signal_aspect(entity_id),
-            );
+            let aspect = sim.rail_signal_aspect(entity_id);
+            let indicator = spawn_rail_signal_status_indicator(&mut commands, aspect);
             commands.entity(render_entity).add_child(indicator);
             commands.entity(render_entity).insert(RailSignalSprite {
                 status_indicator: indicator,
             });
+            if aspect.is_none() {
+                registry.pending_signals.insert(entity_id);
+            }
         }
         registry.entities.insert(entity_id, render_entity);
     }
+    retry_pending_rail_signals(&sim, &mut registry, &mut visual_assets, &mut queries);
+}
+
+/// An unchanged rebuilt aspect emits no style revision. Retry deferred signals
+/// independently of VisibleEntityIds so camera reveals and topology edits
+/// cannot strand a neutral lamp or an old direction/symbol.
+fn retry_pending_rail_signals(
+    sim: &Simulation,
+    registry: &mut PlacedEntityRenderRegistry,
+    visual_assets: &mut VisualAssets,
+    queries: &mut PlacedEntityRenderQueries,
+) {
+    let PlacedEntityRenderRegistry {
+        entities,
+        pending_signals,
+    } = registry;
+    pending_signals.retain(|entity_id| {
+        let Some(&render_entity) = entities.get(entity_id) else {
+            return false;
+        };
+        let Some(aspect) = sim.rail_signal_aspect(*entity_id) else {
+            return true;
+        };
+        let Some(placed) = sim.entities().placed_entity(*entity_id) else {
+            return false;
+        };
+        let Some(style) = renderable_entity_visual_style(sim, *entity_id) else {
+            return false;
+        };
+        !refresh_placed_entity_sprite(
+            render_entity,
+            &placed.footprint,
+            style,
+            Some(aspect),
+            visual_assets,
+            queries,
+        )
+    });
+}
+
+fn refresh_placed_entity_sprite(
+    render_entity: Entity,
+    footprint: &EntityFootprint,
+    style: EntityVisualStyle,
+    aspect: Option<RailSignalAspect>,
+    visual_assets: &mut VisualAssets,
+    queries: &mut PlacedEntityRenderQueries,
+) -> bool {
+    let Ok((mut transform, mut sprite, signal)) = queries.sprites.get_mut(render_entity) else {
+        return false;
+    };
+    let translation = entity_translation(footprint, transform.translation.z);
+    if transform.translation != translation {
+        transform.translation = translation;
+    }
+    *sprite = visual_assets.entity_sprite(style);
+    if let Some(signal) = signal
+        && let Some(aspect) = aspect
+        && let Ok(mut text) = queries.signal_indicators.get_mut(signal.status_indicator)
+    {
+        text.0 = rail_signal_world_status_symbol(aspect).to_string();
+    }
+    true
 }
 
 /// Refreshes visible rocket silos when their fixed-tick launch phase changes.
