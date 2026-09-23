@@ -1678,11 +1678,8 @@ fn enemy_and_turret_attacks_resolve_simultaneously() {
     let (x, y) = first_buildable_rect_without_resource(&sim.world, 4, 3);
     let turret_id = place_at(&mut sim, turret, x, y, Direction::North);
     load_turret_ammo(&mut sim, turret_id, 1);
-    sim.entities
-        .entity_health
-        .get_mut(&turret_id)
-        .expect("turret should have health")
-        .current = 15;
+    let maximum = sim.entity_health(turret_id).unwrap().1;
+    assert!(!sim.damage_entity(turret_id, maximum - 15));
 
     let enemy_id = spawn_test_enemy_at(&mut sim, x + 2, y);
     sim.enemies

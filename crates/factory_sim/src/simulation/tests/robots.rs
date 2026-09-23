@@ -1120,20 +1120,6 @@ fn damaged_friendly_index_rebuilds_and_reconciles_without_roboports() {
         ]
     );
 
-    construction_ops::mark_area_for_deconstruction(&mut sim, first_x, first_y, first_x, first_y);
-    assert!(
-        !sim.construction
-            .queue()
-            .any(|job| job == ConstructionJob::Repair(first))
-    );
-    construction_ops::cancel_deconstruction_in_area(&mut sim, first_x, first_y, first_x, first_y);
-    sim.tick();
-    assert!(
-        sim.construction
-            .queue()
-            .any(|job| job == ConstructionJob::Repair(first))
-    );
-
     let bytes = crate::save_to_bytes(&sim).unwrap();
     let mut loaded = crate::load_from_bytes(&bytes).unwrap();
     assert_eq!(sim.state_hash(), loaded.state_hash());
@@ -1153,6 +1139,27 @@ fn damaged_friendly_index_rebuilds_and_reconciles_without_roboports() {
     entity_mutation::remove(&mut loaded, second).unwrap();
     assert!(loaded.entities.damaged_friendly_entities.is_empty());
     loaded.validate().unwrap();
+}
+
+#[test]
+fn validation_rejects_missing_and_stale_damaged_friendly_index_entries() {
+    let mut sim = Simulation::new_test_world(123);
+    let entity_id = place_stone_furnace(&mut sim);
+    assert!(!sim.damage_entity(entity_id, 1));
+    sim.validate().unwrap();
+
+    sim.entities.damaged_friendly_entities.remove(&entity_id);
+    assert_eq!(
+        sim.validate(),
+        Err(SimValidationError::InvalidDamagedFriendlyIndex)
+    );
+
+    sim.restore_entity_health(entity_id, 1);
+    sim.entities.damaged_friendly_entities.insert(entity_id);
+    assert_eq!(
+        sim.validate(),
+        Err(SimValidationError::InvalidDamagedFriendlyIndex)
+    );
 }
 
 #[test]
@@ -1181,6 +1188,18 @@ fn deconstruction_cancels_pending_repair_for_the_same_target() {
     );
     assert!(
         sim.construction
+            .queue()
+            .any(|job| job == ConstructionJob::Deconstruct(entity_id))
+    );
+    construction_ops::cancel_deconstruction_in_area(&mut sim, ghost.x, ghost.y, ghost.x, ghost.y);
+    sim.tick();
+    assert!(
+        sim.construction
+            .queue()
+            .any(|job| job == ConstructionJob::Repair(entity_id))
+    );
+    assert!(
+        !sim.construction
             .queue()
             .any(|job| job == ConstructionJob::Deconstruct(entity_id))
     );
