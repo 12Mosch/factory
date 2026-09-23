@@ -58,7 +58,7 @@ fn f9_reads_existing_raw_quicksave_and_resets_transient_state() {
     let mut app = test_app(Duration::ZERO, "raw_quickload");
     let saved = sim_tick_and_hash(&app);
     write_raw_quicksave(&app);
-    app.update();
+    wait_for_loadable_catalog_entry(&mut app, "quicksave");
     {
         let mut build = app.world_mut().resource_mut::<BuildPlacementState>();
         build.selected = Some(BuildSelection::entity(
@@ -88,8 +88,7 @@ fn migratable_v57_quicksave_is_labeled_loaded_and_left_untouched() {
     let historical = include_bytes!("../../factory_sim/tests/fixtures/save-v57-sanitized.factsim");
     fs::write(&path, historical).unwrap();
 
-    app.update();
-    drain_catalog_validations(&mut app);
+    wait_for_loadable_catalog_entry(&mut app, "quicksave");
     let entry = &app.world().resource::<SaveCatalog>().entries()[0];
     assert!(matches!(
         entry.compatibility,
@@ -1388,6 +1387,24 @@ fn drain_catalog_validations(app: &mut App) {
             "catalog validation jobs did not drain"
         );
         app.update();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn wait_for_loadable_catalog_entry(app: &mut App, id: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        app.update();
+        if app
+            .world()
+            .resource::<SaveCatalog>()
+            .entries()
+            .iter()
+            .any(|entry| entry.id.as_str() == id && entry.compatibility.can_load())
+        {
+            return;
+        }
+        assert!(Instant::now() < deadline, "{id} did not enter the catalog");
         std::thread::sleep(Duration::from_millis(1));
     }
 }
