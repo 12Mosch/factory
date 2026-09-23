@@ -33,14 +33,7 @@ jobs:
           rustup default 1.98.1
 
       - name: Cache Cargo dependencies and build artifacts
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+        uses: Swatinem/rust-cache@v2
 
       - name: cargo fmt --all
         run: |
