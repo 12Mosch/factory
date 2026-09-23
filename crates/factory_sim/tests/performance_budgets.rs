@@ -1233,7 +1233,7 @@ fn max_duration(
 
 fn print_benchmark_stats(name: &str, stats: BenchmarkStats) {
     println!(
-        "{name}:\n  counts: entities {}, enemies {}, belts {}, belt_items {}, machines {}, inserters {}, active_machines {}\n  total: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  chunk generation: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  belts: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  inserters: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  machines: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  fluids: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  power: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  enemies: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  allocations: avg {} bytes/{} allocs, p95 {} bytes/{} allocs, p99 {} bytes/{} allocs, max {} bytes/{} allocs",
+        "{name}:\n  counts: entities {}, enemies {}, belts {}, belt_items {}, machines {}, inserters {}, active_machines {}\n  total: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  chunk generation: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  belts: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  inserters: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  machines: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  fluids: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  power: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  robots: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  enemies: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  allocations: avg {} bytes/{} allocs, p95 {} bytes/{} allocs, p99 {} bytes/{} allocs, max {} bytes/{} allocs",
         stats.counts.entity_count,
         stats.counts.enemy_count,
         stats.counts.belt_count,
@@ -1269,6 +1269,10 @@ fn print_benchmark_stats(name: &str, stats: BenchmarkStats) {
         ms(stats.p95.power),
         ms(stats.p99.power),
         ms(stats.max.power),
+        ms(stats.average.robots),
+        ms(stats.p95.robots),
+        ms(stats.p99.robots),
+        ms(stats.max.robots),
         ms(stats.average.enemies),
         ms(stats.p95.enemies),
         ms(stats.p99.enemies),

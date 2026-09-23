@@ -802,6 +802,7 @@ pub enum SimValidationError {
     InvalidEntityState {
         entity_id: EntityId,
     },
+    InvalidDamagedFriendlyIndex,
     InvalidFluidBoxState {
         entity_id: EntityId,
         box_index: usize,

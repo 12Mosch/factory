@@ -58,20 +58,19 @@ impl Simulation {
             }
         }
 
-        let repair_targets = self
-            .entities
-            .entity_health
-            .iter()
-            .filter_map(|(entity_id, health)| {
-                (health.faction == Faction::Player
-                    && health.current < health.maximum
-                    && !self.construction.deconstruction_marks.contains(entity_id))
-                .then_some(*entity_id)
-            })
-            .collect::<Vec<_>>();
-        for entity_id in repair_targets {
+        let mut repair_targets = std::mem::take(&mut self.robots.repair_scratch);
+        repair_targets.extend(
+            self.entities
+                .damaged_friendly_entities
+                .iter()
+                .filter(|entity_id| !self.construction.deconstruction_marks.contains(entity_id))
+                .copied(),
+        );
+        for &entity_id in &repair_targets {
             self.enqueue_job_once(ConstructionJob::Repair(entity_id));
         }
+        repair_targets.clear();
+        self.robots.repair_scratch = repair_targets;
     }
 
     /// Examines a bounded prefix of the queue. A temporarily blocked job moves
@@ -402,9 +401,7 @@ impl Simulation {
                 .entities
                 .entity_health
                 .get(&entity_id)
-                .is_some_and(|health| {
-                    health.faction == Faction::Player && health.current < health.maximum
-                })
+                .is_some_and(|health| health.is_damaged_friendly())
             && self.entities.placed_entity(entity_id).is_some()
     }
 

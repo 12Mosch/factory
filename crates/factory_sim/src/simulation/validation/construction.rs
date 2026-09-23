@@ -98,9 +98,7 @@ pub(super) fn validate_construction_state(sim: &Simulation) -> Result<(), SimVal
                         .entities
                         .entity_health
                         .get(entity_id)
-                        .is_some_and(|health| {
-                            health.faction == Faction::Player && health.current < health.maximum
-                        })
+                        .is_some_and(|health| health.is_damaged_friendly())
                     && queued_repairs.insert(*entity_id)
             }
         };

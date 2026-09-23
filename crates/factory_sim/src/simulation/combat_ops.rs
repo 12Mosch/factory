@@ -850,6 +850,9 @@ impl Simulation {
         };
         health.current = health.current.saturating_sub(amount);
         let destroyed = health.current == 0;
+        if !destroyed && health.is_damaged_friendly() {
+            self.entities.damaged_friendly_entities.insert(entity_id);
+        }
 
         if let Some((x, y)) = warning_location {
             self.emit_structure_damage_warning(x, y);
@@ -946,6 +949,9 @@ impl Simulation {
         };
         let restored = amount.min(health.maximum.saturating_sub(health.current));
         health.current += restored;
+        if health.current == health.maximum {
+            self.entities.damaged_friendly_entities.remove(&entity_id);
+        }
         restored
     }
 

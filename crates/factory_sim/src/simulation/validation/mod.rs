@@ -87,6 +87,19 @@ pub(super) fn validate_durable_state(sim: &Simulation) -> Result<(), SimValidati
 
 /// Checks relationships that require the rebuilt rail and stopped-stock indexes.
 pub(super) fn validate_derived_state(sim: &Simulation) -> Result<(), SimValidationError> {
+    let damaged_health = sim
+        .entities
+        .entity_health
+        .iter()
+        .filter_map(|(entity_id, health)| health.is_damaged_friendly().then_some(entity_id));
+    if !sim
+        .entities
+        .damaged_friendly_entities
+        .iter()
+        .eq(damaged_health)
+    {
+        return Err(SimValidationError::InvalidDamagedFriendlyIndex);
+    }
     validate_fluid_network_snapshots(sim)?;
     validate_heat_network_snapshots(sim)?;
     validate_robot_network_snapshots(sim)?;

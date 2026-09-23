@@ -529,6 +529,10 @@ impl HealthState {
         applied
     }
 
+    pub(crate) fn is_damaged_friendly(self) -> bool {
+        self.faction == Faction::Player && self.current < self.maximum
+    }
+
     pub fn is_valid(self) -> bool {
         self.maximum > 0 && self.current <= self.maximum && self.resistances.is_valid()
     }
