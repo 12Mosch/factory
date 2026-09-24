@@ -46,6 +46,8 @@ pub(in crate::simulation) struct CircuitSubsystem {
     /// with the entity store mutably borrowed — can consult it without
     /// re-entering the simulation.
     pub(in crate::simulation) disabled_entities: Vec<EntityId>,
+    /// Reused while resolving the next set of disabled entities.
+    pub(in crate::simulation) disabled_scratch: Vec<EntityId>,
     #[cfg(test)]
     pub(in crate::simulation) topology_rebuilds: u64,
 }

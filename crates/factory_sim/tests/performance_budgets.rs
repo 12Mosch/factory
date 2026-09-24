@@ -1136,6 +1136,7 @@ fn average_profile(samples: &[TickSample]) -> SimulationTickProfile {
         chunk_generation: average_duration(samples, len, |profile| profile.chunk_generation),
         chunk_lookup: average_duration(samples, len, |profile| profile.chunk_lookup),
         manual_crafting: average_duration(samples, len, |profile| profile.manual_crafting),
+        status_bookkeeping: average_duration(samples, len, |profile| profile.status_bookkeeping),
         pollution: average_duration(samples, len, |profile| profile.pollution),
         enemies: average_duration(samples, len, |profile| profile.enemies),
         validation: average_duration(samples, len, |profile| profile.validation),
@@ -1163,6 +1164,9 @@ fn percentile_profile(samples: &[TickSample], index: usize) -> SimulationTickPro
         chunk_generation: percentile_duration(samples, index, |profile| profile.chunk_generation),
         chunk_lookup: percentile_duration(samples, index, |profile| profile.chunk_lookup),
         manual_crafting: percentile_duration(samples, index, |profile| profile.manual_crafting),
+        status_bookkeeping: percentile_duration(samples, index, |profile| {
+            profile.status_bookkeeping
+        }),
         pollution: percentile_duration(samples, index, |profile| profile.pollution),
         enemies: percentile_duration(samples, index, |profile| profile.enemies),
         validation: percentile_duration(samples, index, |profile| profile.validation),
@@ -1188,6 +1192,7 @@ fn max_profile(samples: &[TickSample]) -> SimulationTickProfile {
         chunk_generation: max_duration(samples, |profile| profile.chunk_generation),
         chunk_lookup: max_duration(samples, |profile| profile.chunk_lookup),
         manual_crafting: max_duration(samples, |profile| profile.manual_crafting),
+        status_bookkeeping: max_duration(samples, |profile| profile.status_bookkeeping),
         pollution: max_duration(samples, |profile| profile.pollution),
         enemies: max_duration(samples, |profile| profile.enemies),
         validation: max_duration(samples, |profile| profile.validation),
@@ -1233,7 +1238,7 @@ fn max_duration(
 
 fn print_benchmark_stats(name: &str, stats: BenchmarkStats) {
     println!(
-        "{name}:\n  counts: entities {}, enemies {}, belts {}, belt_items {}, machines {}, inserters {}, active_machines {}\n  total: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  chunk generation: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  belts: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  inserters: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  machines: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  fluids: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  power: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  robots: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  enemies: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  allocations: avg {} bytes/{} allocs, p95 {} bytes/{} allocs, p99 {} bytes/{} allocs, max {} bytes/{} allocs",
+        "{name}:\n  counts: entities {}, enemies {}, belts {}, belt_items {}, machines {}, inserters {}, active_machines {}\n  total: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  chunk generation: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  belts: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  inserters: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  machines: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  fluids: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  power: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  status bookkeeping: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  robots: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  enemies: avg {:.3} ms, p95 {:.3} ms, p99 {:.3} ms, max {:.3} ms\n  allocations: avg {} bytes/{} allocs, p95 {} bytes/{} allocs, p99 {} bytes/{} allocs, max {} bytes/{} allocs",
         stats.counts.entity_count,
         stats.counts.enemy_count,
         stats.counts.belt_count,
@@ -1269,6 +1274,10 @@ fn print_benchmark_stats(name: &str, stats: BenchmarkStats) {
         ms(stats.p95.power),
         ms(stats.p99.power),
         ms(stats.max.power),
+        ms(stats.average.status_bookkeeping),
+        ms(stats.p95.status_bookkeeping),
+        ms(stats.p99.status_bookkeeping),
+        ms(stats.max.status_bookkeeping),
         ms(stats.average.robots),
         ms(stats.p95.robots),
         ms(stats.p99.robots),

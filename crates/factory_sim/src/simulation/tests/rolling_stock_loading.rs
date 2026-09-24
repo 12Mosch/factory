@@ -547,6 +547,22 @@ fn changing_the_track_clears_the_stopped_stock_index() {
     );
 }
 
+#[test]
+fn stopped_wagon_transitions_invalidate_power_demand() {
+    let (mut sim, _rails, stock_id, tile) = world_with_parked_wagon("cargo_wagon");
+    sim.tick();
+    assert!(sim.power_demand_cache.valid);
+
+    let train_id = sim.rolling_stock_piece(stock_id).unwrap().train;
+    sim.forget_stopped_train(train_id);
+    assert!(sim.stopped_stock().at(tile.0, tile.1).is_none());
+    assert!(!sim.power_demand_cache.valid);
+
+    sim.tick();
+    assert!(sim.stopped_stock().at(tile.0, tile.1).is_some());
+    assert!(!sim.power_demand_cache.valid);
+}
+
 /// A stopped fluid wagon at a pump joins the network the pump feeds, and leaves
 /// it again when the train departs.
 #[test]

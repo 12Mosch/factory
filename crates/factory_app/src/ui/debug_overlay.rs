@@ -202,7 +202,7 @@ Machines: {}
 Inserters: {}
 Machines active/idle: {}/{}
 Power: production {}, consumption {}, satisfaction {:.1}%
-Phases: belts {}, fluids {}, circuits {}, lamps {}, power {}, radars {}, machines {}, inserters {}, inventory transfers {}, chunk generation {}, chunk lookup {}, render sync total {} (player {}, world {}, resources {}, entities {}, belt dirs {}, belt items {})",
+Phases: belts {}, fluids {}, circuits {}, lamps {}, power {}, radars {}, machines {}, inserters {}, inventory transfers {}, status bookkeeping {}, chunk generation {}, chunk lookup {}, render sync total {} (player {}, world {}, resources {}, entities {}, belt dirs {}, belt items {})",
         snapshot.tick,
         snapshot.ups,
         format_optional(snapshot.fps, "", 1),
@@ -234,6 +234,7 @@ Phases: belts {}, fluids {}, circuits {}, lamps {}, power {}, radars {}, machine
         format_duration_ms(snapshot.sim_profile.last_tick.machines),
         format_duration_ms(snapshot.sim_profile.last_tick.inserters),
         format_duration_ms(snapshot.sim_profile.last_tick.inventory_transfers),
+        format_duration_ms(snapshot.sim_profile.last_tick.status_bookkeeping),
         format_duration_ms(snapshot.sim_profile.last_tick.chunk_generation),
         format_duration_ms(snapshot.sim_profile.last_tick.chunk_lookup),
         format_duration_ms(snapshot.render_sync.total),
@@ -361,6 +362,7 @@ mod tests {
                 machines: Duration::from_micros(400),
                 inserters: Duration::from_micros(500),
                 inventory_transfers: Duration::from_micros(600),
+                status_bookkeeping: Duration::from_micros(625),
                 chunk_generation: Duration::from_micros(650),
                 chunk_lookup: Duration::from_micros(700),
                 ..default()
@@ -432,6 +434,7 @@ mod tests {
             "machines",
             "inserters",
             "inventory transfers",
+            "status bookkeeping",
             "chunk generation",
             "chunk lookup",
             "render sync total",

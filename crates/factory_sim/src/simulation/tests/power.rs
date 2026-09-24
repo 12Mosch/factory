@@ -464,6 +464,45 @@ fn stable_consumer_demand_is_recomputed_only_after_relevant_mutation() {
 }
 
 #[test]
+fn status_bookkeeping_invalidates_readiness_after_inventory_change() {
+    let mut sim = Simulation::new_test_world(123);
+    let assembler_id = place_assembling_machine(&mut sim);
+    add_assembler_gear_job(&mut sim, assembler_id);
+
+    sim.tick();
+    assert!(
+        sim.power
+            .entity_statuses
+            .get(&assembler_id)
+            .unwrap()
+            .active_usage_watts
+            > 0
+    );
+    assert_eq!(
+        sim.machine_status_for_entity(assembler_id),
+        Some(MachineStatus::Working)
+    );
+    assert!(
+        !sim.production_map_statuses
+            .iter()
+            .any(|(id, _)| *id == assembler_id)
+    );
+
+    crate::entity_transfer::assembler_input_slot_to_player(&mut sim, assembler_id, 0)
+        .expect("removing assembler input should succeed");
+    sim.refresh_production_status_revision();
+    assert_eq!(
+        sim.machine_status_for_entity(assembler_id),
+        Some(MachineStatus::NoInput),
+        "inventory invalidation must prevent reuse of the preceding power result"
+    );
+    assert!(sim.production_map_statuses.contains(&(assembler_id, 1)));
+
+    sim.tick();
+    assert!(sim.production_map_statuses.contains(&(assembler_id, 1)));
+}
+
+#[test]
 fn placing_electric_pole_dirties_and_rebuilds_power_topology() {
     let mut sim = Simulation::new_test_world(123);
     let pole = entity_id_by_name(&sim.world.prototypes, "small_electric_pole");

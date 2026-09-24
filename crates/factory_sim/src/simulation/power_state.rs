@@ -11,8 +11,11 @@ use std::hash::{Hash, Hasher};
 pub(super) struct PowerDemandCache {
     pub(super) valid: bool,
     pub(super) active_consumers: Vec<EntityId>,
+    /// Waiting inserters with an empty pickup or drop tile. Placement or
+    /// removal on either tile invalidates the index before they can work.
+    pub(super) inactive_inserters: Vec<EntityId>,
+    pub(super) max_inserter_reach_tiles: i64,
     pub(super) dirty_consumers: Vec<EntityId>,
-    pub(super) refresh_consumers: Vec<EntityId>,
     pub(super) network_consumption_watts: Vec<u64>,
     pub(super) network_consumer_counts: Vec<usize>,
     pub(super) consumers_by_network: Vec<Vec<EntityId>>,

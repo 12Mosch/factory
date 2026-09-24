@@ -2,6 +2,11 @@ use super::*;
 
 impl Simulation {
     pub(super) fn refresh_production_status_revision(&mut self) {
+        // Mutations after the power solve (crafting and inserter transfers)
+        // invalidate its readiness result. Sort only those mutations so the
+        // settled power result can be reused for untouched item-only machines.
+        self.power_demand_cache.dirty_consumers.sort_unstable();
+        self.power_demand_cache.dirty_consumers.dedup();
         let mut next = std::mem::take(&mut self.production_map_status_scratch);
         next.clear();
         let fluids = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes).fluids;
@@ -29,7 +34,7 @@ impl Simulation {
             push_production_map_status(
                 &mut next,
                 *entity_id,
-                self.assembler_status(*entity_id, state),
+                self.assembler_status_for_bookkeeping(*entity_id, state),
             );
         }
         for (entity_id, state) in &self.entities.rocket_silos {
@@ -735,6 +740,37 @@ impl Simulation {
             return MachineStatus::NoPower;
         }
         MachineStatus::Working
+    }
+
+    fn assembler_status_for_bookkeeping(
+        &self,
+        entity_id: EntityId,
+        state: &AssemblingMachineState,
+    ) -> MachineStatus {
+        if state.selected_recipe.is_none() {
+            return MachineStatus::NoRecipe;
+        }
+        if self.power_demand_cache.valid
+            && let Some(power) = self.power.entity_statuses.get(&entity_id)
+            && power.active_usage_watts > 0
+            && self
+                .power_demand_cache
+                .dirty_consumers
+                .binary_search(&entity_id)
+                .is_err()
+            && self
+                .entities
+                .placed_entity(entity_id)
+                .and_then(|placed| self.world.prototypes.entity(placed.prototype_id))
+                .is_some_and(|prototype| prototype.fluid_boxes.is_empty())
+        {
+            return if power.satisfaction_permyriad == 0 {
+                MachineStatus::NoPower
+            } else {
+                MachineStatus::Working
+            };
+        }
+        self.assembler_status(entity_id, state)
     }
 
     fn lab_status(&self, entity_id: EntityId, state: &LabState) -> MachineStatus {
