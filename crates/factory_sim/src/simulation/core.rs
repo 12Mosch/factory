@@ -192,7 +192,9 @@ impl Simulation {
         profiler.measure(ProfilePhase::ManualCrafting, || {
             self.advance_manual_crafting();
         });
-        self.refresh_production_status_revision();
+        profiler.measure(ProfilePhase::StatusBookkeeping, || {
+            self.refresh_production_status_revision();
+        });
 
         profiler.measure(ProfilePhase::Pollution, || {
             let map_can_change = !self.pollution_emitters.active_emitters.is_empty()

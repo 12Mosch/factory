@@ -14,6 +14,7 @@ pub(super) struct ConsumerDemandInputs<'a> {
     pub(super) fluid_boxes: crate::simulation::fluid_ops::FluidBoxes<'a>,
     pub(super) fluids: &'a FluidSubsystem,
     pub(super) research: &'a ResearchState,
+    pub(super) circuits: &'a CircuitSubsystem,
     pub(super) rocket_silo_recipe: ResolvedRocketSiloRecipe,
 }
 
@@ -27,15 +28,17 @@ pub(super) fn refresh_consumer_demand_cache(
     if !cache.valid || cache.network_consumption_watts.len() != networks.len() {
         rebuild_consumer_demand_cache(inputs, topology, entity_statuses, cache, networks.len());
     } else {
-        cache.refresh_consumers.clear();
-        cache
-            .refresh_consumers
-            .extend_from_slice(&cache.active_consumers);
-        cache.refresh_consumers.append(&mut cache.dirty_consumers);
-        cache.refresh_consumers.sort_unstable();
-        cache.refresh_consumers.dedup();
-
-        for &entity_id in &cache.refresh_consumers {
+        cache.sort_dirty_consumers();
+        // The active index is already ordered by entity ID. Only sort explicit
+        // invalidations; copying and sorting the active set each tick costs
+        // more than the demand checks for many stable consumers.
+        for entity_id in cache.active_consumers.iter().copied().chain(
+            cache
+                .dirty_consumers
+                .iter()
+                .copied()
+                .filter(|id| cache.active_consumers.binary_search(id).is_err()),
+        ) {
             let Some(status) = entity_statuses.get_mut(&entity_id) else {
                 continue;
             };
@@ -64,6 +67,8 @@ pub(super) fn refresh_consumer_demand_cache(
 
         if !cache.valid {
             rebuild_consumer_demand_cache(inputs, topology, entity_statuses, cache, networks.len());
+        } else {
+            cache.clear_dirty_consumers();
         }
     }
 
@@ -82,7 +87,8 @@ fn rebuild_consumer_demand_cache(
 ) {
     entity_statuses.clear();
     cache.active_consumers.clear();
-    cache.dirty_consumers.clear();
+    cache.inactive_inserters.clear();
+    cache.clear_dirty_consumers();
     cache.network_consumption_watts.clear();
     cache.network_consumption_watts.resize(network_count, 0);
     cache.network_consumer_counts.clear();
@@ -116,8 +122,10 @@ fn rebuild_consumer_demand_cache(
             },
         );
 
-        if consumer_demand_is_active(inputs.entities, inputs.world, entity_id) {
+        if consumer_demand_is_active(inputs, entity_id) {
             cache.active_consumers.push(entity_id);
+        } else if inputs.entities.inserters.contains_key(&entity_id) {
+            cache.inactive_inserters.push(entity_id);
         }
         if let Some(network_id) = network_id {
             let network_index = network_id as usize;
@@ -128,20 +136,52 @@ fn rebuild_consumer_demand_cache(
             cache.consumers_by_network[network_index].push(entity_id);
         }
     }
+    cache.max_inserter_reach_tiles = inputs
+        .world
+        .prototypes
+        .entities()
+        .iter()
+        .filter_map(|prototype| prototype.inserter.as_ref())
+        .flat_map(|inserter| {
+            [
+                inserter.pickup_offset.x.unsigned_abs(),
+                inserter.pickup_offset.y.unsigned_abs(),
+                inserter.drop_offset.x.unsigned_abs(),
+                inserter.drop_offset.y.unsigned_abs(),
+            ]
+        })
+        .max()
+        .map_or(0, i64::from);
     cache.valid = true;
 }
 
-fn consumer_demand_is_active(
-    entities: &EntityStore,
-    world: &WorldSim,
-    entity_id: EntityId,
-) -> bool {
+fn consumer_demand_is_active(inputs: ConsumerDemandInputs<'_>, entity_id: EntityId) -> bool {
+    let entities = inputs.entities;
+    let world = inputs.world;
     // Roboports are re-evaluated every tick because their demand tracks a
     // charging buffer that the robot pass fills without touching the consumer,
     // so nothing else would ever mark them dirty.
-    if entities.radars.contains_key(&entity_id)
-        || entities.inserters.contains_key(&entity_id)
-        || entities.mining_drills.contains_key(&entity_id)
+    if let Some(state) = entities.inserters.get(&entity_id) {
+        if !matches!(state, InserterState::WaitingForItem) {
+            return true;
+        }
+        let Some(placed) = entities.placed_entity(entity_id) else {
+            return true;
+        };
+        let Some(inserter) = world
+            .prototypes
+            .entity(placed.prototype_id)
+            .and_then(|prototype| prototype.inserter.as_ref())
+        else {
+            return true;
+        };
+        let (pickup, drop) = inserter_transfer_tiles_for_prototype(placed, inserter);
+        return (entities.occupancy.entity_at(pickup.0, pickup.1).is_some()
+            || inputs.stopped_stock.at(pickup.0, pickup.1).is_some())
+            && (entities.occupancy.entity_at(drop.0, drop.1).is_some()
+                || inputs.stopped_stock.at(drop.0, drop.1).is_some());
+    }
+    if entities.mining_drills.contains_key(&entity_id)
         || entities.pumpjacks.contains_key(&entity_id)
         || entities.roboports.contains_key(&entity_id)
     {
@@ -208,8 +248,12 @@ fn electric_consumer_can_work(inputs: ConsumerDemandInputs<'_>, entity_id: Entit
         fluid_boxes,
         fluids,
         research,
+        circuits,
         rocket_silo_recipe,
     } = inputs;
+    if circuits.is_disabled(entity_id) {
+        return false;
+    }
     let catalog = &world.prototypes;
     if entities.radars.contains_key(&entity_id) {
         return true;

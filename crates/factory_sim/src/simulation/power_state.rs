@@ -11,8 +11,12 @@ use std::hash::{Hash, Hasher};
 pub(super) struct PowerDemandCache {
     pub(super) valid: bool,
     pub(super) active_consumers: Vec<EntityId>,
+    /// Waiting inserters with an empty pickup or drop tile. Placement or
+    /// removal on either tile invalidates the index before they can work.
+    pub(super) inactive_inserters: Vec<EntityId>,
+    pub(super) max_inserter_reach_tiles: i64,
     pub(super) dirty_consumers: Vec<EntityId>,
-    pub(super) refresh_consumers: Vec<EntityId>,
+    dirty_consumers_sorted: bool,
     pub(super) network_consumption_watts: Vec<u64>,
     pub(super) network_consumer_counts: Vec<usize>,
     pub(super) consumers_by_network: Vec<Vec<EntityId>>,
@@ -24,13 +28,35 @@ pub(super) struct PowerDemandCache {
 impl PowerDemandCache {
     pub(super) fn invalidate(&mut self) {
         self.valid = false;
-        self.dirty_consumers.clear();
+        self.clear_dirty_consumers();
     }
 
     pub(super) fn mark_dirty(&mut self, entity_id: EntityId) {
         if self.valid {
             self.dirty_consumers.push(entity_id);
+            self.dirty_consumers_sorted = false;
         }
+    }
+
+    pub(super) fn sort_dirty_consumers(&mut self) {
+        if !self.dirty_consumers_sorted {
+            self.dirty_consumers.sort_unstable();
+            self.dirty_consumers.dedup();
+            self.dirty_consumers_sorted = true;
+        }
+    }
+
+    pub(super) fn is_dirty(&self, entity_id: EntityId) -> bool {
+        if self.dirty_consumers_sorted {
+            self.dirty_consumers.binary_search(&entity_id).is_ok()
+        } else {
+            self.dirty_consumers.contains(&entity_id)
+        }
+    }
+
+    pub(super) fn clear_dirty_consumers(&mut self) {
+        self.dirty_consumers.clear();
+        self.dirty_consumers_sorted = true;
     }
 }
 

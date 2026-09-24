@@ -2,6 +2,10 @@ use super::*;
 
 impl Simulation {
     pub(super) fn refresh_production_status_revision(&mut self) {
+        // Mutations after the power solve (crafting and inserter transfers)
+        // invalidate its readiness result. Sort only those mutations so the
+        // settled power result can be reused for untouched item-only machines.
+        self.power_demand_cache.sort_dirty_consumers();
         let mut next = std::mem::take(&mut self.production_map_status_scratch);
         next.clear();
         let fluids = factory_data::BasePrototypeIds::from_catalog(&self.world.prototypes).fluids;
@@ -682,6 +686,25 @@ impl Simulation {
     ) -> MachineStatus {
         if state.selected_recipe.is_none() {
             return MachineStatus::NoRecipe;
+        }
+        // Every caller uses the same settled readiness result when it still
+        // describes this assembler. Inventory and recipe mutations mark the
+        // consumer dirty; fluid recipes need their current box state checked.
+        if self.power_demand_cache.valid
+            && let Some(power) = self.power.entity_statuses.get(&entity_id)
+            && power.active_usage_watts > 0
+            && !self.power_demand_cache.is_dirty(entity_id)
+            && self
+                .entities
+                .placed_entity(entity_id)
+                .and_then(|placed| self.world.prototypes.entity(placed.prototype_id))
+                .is_some_and(|prototype| prototype.fluid_boxes.is_empty())
+        {
+            return if power.satisfaction_permyriad == 0 {
+                MachineStatus::NoPower
+            } else {
+                MachineStatus::Working
+            };
         }
         let Some(recipe) = selected_assembler_recipe(&self.world.prototypes, &self.research, state)
         else {

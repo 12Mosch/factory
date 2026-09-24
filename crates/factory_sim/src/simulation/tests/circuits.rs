@@ -429,6 +429,79 @@ fn a_condition_on_an_unwired_entity_keeps_it_disabled() {
 }
 
 #[test]
+fn circuit_transition_invalidates_electric_inserter_demand() {
+    let mut sim = Simulation::new_test_world(123);
+    let (ox, oy) = clear_area(&sim);
+    let signal = virtual_signal(&sim, "signal_a");
+    let iron = item_id(&sim.world.prototypes, "iron_plate");
+    let source = place_named(&mut sim, "chest", ox, oy);
+    let inserter = place_named_facing(&mut sim, "fast_inserter", ox + 1, oy, Direction::East);
+    place_named(&mut sim, "chest", ox + 2, oy);
+    fill_inventory_with(&mut sim, source, iron);
+    sim.set_circuit_condition(
+        inserter,
+        Some(CircuitCondition {
+            left: signal,
+            comparator: Comparator::Equal,
+            right: SignalOperand::Constant(0),
+        }),
+    )
+    .unwrap();
+
+    sim.tick();
+    assert_eq!(
+        sim.entity_power_status(inserter)
+            .unwrap()
+            .active_usage_watts,
+        0
+    );
+
+    sim.set_circuit_condition(inserter, None).unwrap();
+    sim.tick();
+    assert!(
+        sim.entity_power_status(inserter)
+            .unwrap()
+            .active_usage_watts
+            > 0
+    );
+}
+
+#[test]
+fn empty_inserter_endpoints_reuse_demand_until_placement() {
+    let mut sim = Simulation::new_test_world(123);
+    let (ox, oy) = clear_area(&sim);
+    let inserter = place_named_facing(&mut sim, "fast_inserter", ox + 1, oy, Direction::East);
+
+    sim.tick();
+    assert!(
+        sim.power_demand_cache
+            .inactive_inserters
+            .contains(&inserter)
+    );
+    let recomputations = sim.power_demand_cache.demand_recomputations;
+    sim.tick();
+    assert_eq!(sim.power_demand_cache.demand_recomputations, recomputations);
+
+    let source = place_named(&mut sim, "chest", ox, oy);
+    place_named(&mut sim, "chest", ox + 2, oy);
+    let iron = item_id(&sim.world.prototypes, "iron_plate");
+    fill_inventory_with(&mut sim, source, iron);
+    sim.tick();
+
+    assert!(
+        sim.entity_power_status(inserter)
+            .unwrap()
+            .active_usage_watts
+            > 0
+    );
+    assert!(
+        !sim.power_demand_cache
+            .inactive_inserters
+            .contains(&inserter)
+    );
+}
+
+#[test]
 fn removing_an_entity_unlinks_and_refunds_its_wires() {
     let mut sim = Simulation::new_test_world(123);
     let (ox, oy) = clear_area(&sim);

@@ -346,6 +346,11 @@ impl Simulation {
             self.stopped_stock_index.insert(train_id, covered);
         }
 
+        // A stopped wagon can become an inserter source or target without an
+        // entity topology change. Wake inserters whose empty endpoint was
+        // omitted from the active demand set.
+        self.power_demand_cache.invalidate();
+
         if fluid_boxes_changed {
             self.invalidate_fluid_state();
         }
@@ -375,6 +380,7 @@ impl Simulation {
             .any(|stock| !stock.fluid_boxes.is_empty());
 
         self.stopped_stock_index.remove_train(train_id, &stock_ids);
+        self.power_demand_cache.invalidate();
         if carried_fluid {
             self.invalidate_fluid_state();
         }
@@ -391,6 +397,7 @@ impl Simulation {
         }
         let carried_fluid = self.any_stopped_stock_carries_fluid();
         self.stopped_stock_index.clear();
+        self.power_demand_cache.invalidate();
         if carried_fluid {
             self.invalidate_fluid_state();
         }

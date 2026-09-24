@@ -44,6 +44,10 @@ pub(crate) fn apply_entity_topology_change(
     if impact.affects_power_topology {
         sim.invalidate_power_state();
     }
+    sim.invalidate_inactive_inserters_at_footprint(footprint);
+    if let Some(previous) = previous_footprint {
+        sim.invalidate_inactive_inserters_at_footprint(previous);
+    }
     if impact.affects_transport_lane_graph {
         sim.invalidate_transport_lane_graph_region(entity_id, footprint);
     }

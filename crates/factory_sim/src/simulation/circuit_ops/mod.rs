@@ -28,7 +28,7 @@ impl Simulation {
     /// Re-resolves every enable condition against the network values collected
     /// this tick.
     fn refresh_disabled_entities(&mut self) {
-        let mut disabled = std::mem::take(&mut self.circuits.disabled_entities);
+        let mut disabled = std::mem::take(&mut self.circuits.disabled_scratch);
         disabled.clear();
         let mut scratch = std::mem::take(&mut self.circuits.evaluation_scratch);
         // `circuit_entities` is a `BTreeMap`, so this collects in ascending id
@@ -49,7 +49,21 @@ impl Simulation {
         }
         debug_assert!(disabled.is_sorted());
         self.circuits.evaluation_scratch = scratch;
-        self.circuits.disabled_entities = disabled;
+        for &entity_id in self
+            .circuits
+            .disabled_entities
+            .iter()
+            .filter(|id| disabled.binary_search(id).is_err())
+            .chain(
+                disabled
+                    .iter()
+                    .filter(|id| self.circuits.disabled_entities.binary_search(id).is_err()),
+            )
+        {
+            self.power_demand_cache.mark_dirty(entity_id);
+        }
+        std::mem::swap(&mut self.circuits.disabled_entities, &mut disabled);
+        self.circuits.disabled_scratch = disabled;
     }
 
     /// Whether an entity is allowed to work this tick. Entities without a

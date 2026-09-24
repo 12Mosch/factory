@@ -42,6 +42,7 @@ pub struct SimulationTickProfile {
     pub chunk_generation: Duration,
     pub chunk_lookup: Duration,
     pub manual_crafting: Duration,
+    pub status_bookkeeping: Duration,
     pub pollution: Duration,
     pub enemies: Duration,
     pub validation: Duration,
@@ -65,6 +66,7 @@ pub(crate) enum ProfilePhase {
     ChunkGeneration,
     ChunkLookup,
     ManualCrafting,
+    StatusBookkeeping,
     Pollution,
     Enemies,
     #[cfg(debug_assertions)]
@@ -143,6 +145,7 @@ impl TickProfiler for TickProfileCollector {
             ProfilePhase::ChunkGeneration => self.profile.chunk_generation += elapsed,
             ProfilePhase::ChunkLookup => self.profile.chunk_lookup += elapsed,
             ProfilePhase::ManualCrafting => self.profile.manual_crafting += elapsed,
+            ProfilePhase::StatusBookkeeping => self.profile.status_bookkeeping += elapsed,
             ProfilePhase::Pollution => self.profile.pollution += elapsed,
             ProfilePhase::Enemies => self.profile.enemies += elapsed,
             #[cfg(debug_assertions)]

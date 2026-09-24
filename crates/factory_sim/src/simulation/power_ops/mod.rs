@@ -188,6 +188,54 @@ impl Simulation {
         self.power_demand_cache.mark_dirty(entity_id);
     }
 
+    /// An empty inserter endpoint is stable until topology changes on that
+    /// tile. Keep the common placement path local to the changed footprint.
+    pub(super) fn invalidate_inactive_inserters_at_footprint(
+        &mut self,
+        footprint: EntityFootprint,
+    ) {
+        let cache = &self.power_demand_cache;
+        if !cache.valid || cache.inactive_inserters.is_empty() {
+            return;
+        }
+        let reach = cache.max_inserter_reach_tiles;
+        let mut affected = false;
+        self.entities.occupancy.for_each_entity_id_in_tile_rect(
+            footprint.x.saturating_sub(reach),
+            footprint
+                .x
+                .saturating_add(i64::from(footprint.width - 1))
+                .saturating_add(reach),
+            footprint.y.saturating_sub(reach),
+            footprint
+                .y
+                .saturating_add(i64::from(footprint.height - 1))
+                .saturating_add(reach),
+            |candidate| {
+                if affected || cache.inactive_inserters.binary_search(&candidate).is_err() {
+                    return;
+                }
+                let Some(placed) = self.entities.placed_entity(candidate) else {
+                    return;
+                };
+                let Some(inserter) = self
+                    .world
+                    .prototypes
+                    .entity(placed.prototype_id)
+                    .and_then(|prototype| prototype.inserter.as_ref())
+                else {
+                    return;
+                };
+                let (pickup, drop) = inserter_transfer_tiles_for_prototype(placed, inserter);
+                affected = footprint.contains_tile(pickup.0, pickup.1)
+                    || footprint.contains_tile(drop.0, drop.1);
+            },
+        );
+        if affected {
+            self.power_demand_cache.invalidate();
+        }
+    }
+
     pub(super) fn refresh_power_state(&mut self) {
         let rocket_silo_recipe = ResolvedRocketSiloRecipe::for_entities(
             &self.world.prototypes,
@@ -217,6 +265,7 @@ impl Simulation {
                 fluid_boxes: FluidBoxes::new(&self.entities, &self.rolling_stock),
                 fluids: &self.fluids,
                 research: &self.research,
+                circuits: &self.circuits,
                 rocket_silo_recipe,
             },
             &self.power.topology,
