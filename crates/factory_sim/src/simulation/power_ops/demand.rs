@@ -28,8 +28,7 @@ pub(super) fn refresh_consumer_demand_cache(
     if !cache.valid || cache.network_consumption_watts.len() != networks.len() {
         rebuild_consumer_demand_cache(inputs, topology, entity_statuses, cache, networks.len());
     } else {
-        cache.dirty_consumers.sort_unstable();
-        cache.dirty_consumers.dedup();
+        cache.sort_dirty_consumers();
         // The active index is already ordered by entity ID. Only sort explicit
         // invalidations; copying and sorting the active set each tick costs
         // more than the demand checks for many stable consumers.
@@ -69,7 +68,7 @@ pub(super) fn refresh_consumer_demand_cache(
         if !cache.valid {
             rebuild_consumer_demand_cache(inputs, topology, entity_statuses, cache, networks.len());
         } else {
-            cache.dirty_consumers.clear();
+            cache.clear_dirty_consumers();
         }
     }
 
@@ -89,7 +88,7 @@ fn rebuild_consumer_demand_cache(
     entity_statuses.clear();
     cache.active_consumers.clear();
     cache.inactive_inserters.clear();
-    cache.dirty_consumers.clear();
+    cache.clear_dirty_consumers();
     cache.network_consumption_watts.clear();
     cache.network_consumption_watts.resize(network_count, 0);
     cache.network_consumer_counts.clear();

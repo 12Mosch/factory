@@ -490,6 +490,11 @@ fn status_bookkeeping_invalidates_readiness_after_inventory_change() {
 
     crate::entity_transfer::assembler_input_slot_to_player(&mut sim, assembler_id, 0)
         .expect("removing assembler input should succeed");
+    assert_eq!(
+        sim.machine_status_for_entity(assembler_id),
+        Some(MachineStatus::NoInput),
+        "entity status must see an unsorted invalidation before bookkeeping"
+    );
     sim.refresh_production_status_revision();
     assert_eq!(
         sim.machine_status_for_entity(assembler_id),
