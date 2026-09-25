@@ -11,8 +11,9 @@ use crate::rendering::belts::{
 };
 use crate::rendering::colors::{RenderPrototypeIds, TileColorTable, tile_color};
 use crate::rendering::entities::{
-    PlacedEntitySprite, RocketSiloSprite, RocketSiloStatusIndicator, RocketSiloVisualPhase,
-    measured_sync_placed_entity_rendering, sync_rocket_silo_rendering, update_visible_entity_ids,
+    PlacedEntitySprite, RailSignalSprite, RocketSiloSprite, RocketSiloStatusIndicator,
+    RocketSiloVisualPhase, measured_sync_placed_entity_rendering, sync_rocket_silo_rendering,
+    update_visible_entity_ids,
 };
 use crate::rendering::resource_cells::{
     ResourceAmountLabel, ResourceRenderCache, ResourceRenderSettings, ResourceSprite,
@@ -31,7 +32,7 @@ use crate::test_performance::{
     AllocationSample, BENCHMARK_LOCK, allocation_sample, reset_allocation_counters,
 };
 use factory_data::{BasePrototypeIds, entity_prototype_id_by_name, item_id_by_name};
-use factory_sim::{CHUNK_SIZE, ChunkCoord, Direction, EntityId, Simulation};
+use factory_sim::{CHUNK_SIZE, ChunkCoord, Direction, EntityId, RailSignalAspect, Simulation};
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
@@ -41,6 +42,182 @@ const RENDER_SYNC_SMALL_TOTAL_MAX_BUDGET: Duration = Duration::from_millis(8);
 const DENSE_BELT_ITEM_RENDER_BELTS: usize = 2_000;
 const DENSE_BELT_ITEM_RENDER_WARMUP_FRAMES: usize = 30;
 const DENSE_BELT_ITEM_RENDER_MEASUREMENT_FRAMES: usize = 120;
+
+#[test]
+fn rail_signal_symbols_follow_aspects_and_survive_a_dirty_graph() {
+    let mut sim = Simulation::new_test_world(123);
+    let rail = entity_prototype_id_by_name(sim.catalog(), "rail_straight");
+    let ordinary_prototype = entity_prototype_id_by_name(sim.catalog(), "rail_signal");
+    let chain_prototype = entity_prototype_id_by_name(sim.catalog(), "chain_signal");
+    let chest = entity_prototype_id_by_name(sim.catalog(), "chest");
+    let request = |prototype_id, x, y| factory_sim::placement::EntityPlacementRequest {
+        prototype_id,
+        x,
+        y,
+        direction: Direction::North,
+    };
+    let (x, y) = deterministic_tile_coords(&sim)
+        .into_iter()
+        .find(|&(x, y)| {
+            (0..12).all(|index| {
+                factory_sim::placement::validate(&sim, request(rail, x, y + index * 2)).is_ok()
+            }) && [2, 8, 10].into_iter().all(|index| {
+                factory_sim::placement::validate(&sim, request(chest, x + 1, y + index * 2)).is_ok()
+            })
+        })
+        .expect("test world should have room for a signalled rail run");
+    let rails = (0..12)
+        .map(|index| {
+            factory_sim::placement::place(&mut sim, request(rail, x, y + index * 2))
+                .expect("prevalidated rail should place")
+        })
+        .collect::<Vec<_>>();
+    sim.tick();
+    let ordinary =
+        factory_sim::placement::place(&mut sim, request(ordinary_prototype, x + 1, y + 4))
+            .expect("ordinary signal should stand beside a rail joint");
+    let chain = factory_sim::placement::place(&mut sim, request(chain_prototype, x + 1, y + 16))
+        .expect("chain signal should stand beside a rail joint");
+    let onward =
+        factory_sim::placement::place(&mut sim, request(ordinary_prototype, x + 1, y + 20))
+            .expect("onward signal should clear the chain signal's route");
+    assert_eq!(sim.rail_signal_aspect(ordinary), None);
+    assert_eq!(sim.rail_signal_aspect(chain), None);
+    assert_eq!(sim.rail_signal_aspect(onward), None);
+
+    let visible = visible_for_chunks([
+        ChunkCoord::from_tile(x + 1, y + 4).expect("signal tile should have a chunk"),
+        ChunkCoord::from_tile(x + 1, y + 16).expect("signal tile should have a chunk"),
+    ]);
+    let mut app = render_sync_app(sim, visible);
+    app.update();
+    assert_eq!(rail_signal_indicator_text(&mut app, ordinary), "");
+    assert_eq!(rail_signal_indicator_text(&mut app, chain), "");
+
+    {
+        let mut resource = app.world_mut().resource_mut::<SimResource>();
+        resource.write_for_tests().tick();
+    }
+    app.update();
+    assert_eq!(rail_signal_indicator_text(&mut app, ordinary), ">");
+    assert_eq!(rail_signal_indicator_text(&mut app, chain), ">");
+
+    let train_id = {
+        let mut resource = app.world_mut().resource_mut::<SimResource>();
+        let sim = &mut resource.write_for_tests();
+        let locomotive = entity_prototype_id_by_name(sim.catalog(), "locomotive");
+        let stock = sim
+            .place_rolling_stock(locomotive, x, y + 6)
+            .expect("locomotive should fit between the two signals");
+        let train_id = sim
+            .rolling_stock_piece(stock)
+            .expect("placed locomotive should belong to a train")
+            .train;
+        let catalog = sim.catalog().clone();
+        let coal = item_id_by_name(&catalog, "coal");
+        sim.player_inventory_mut()
+            .insert(&catalog, coal, 50)
+            .expect("test inventory should accept locomotive fuel");
+        let fuel_slot = (0..sim.player_inventory().slots().len())
+            .find(|&index| {
+                sim.player_inventory()
+                    .slot(index)
+                    .is_some_and(|stack| stack.item_id() == coal)
+            })
+            .expect("inserted fuel should occupy a player slot");
+        factory_sim::entity_transfer::player_slot_to_rolling_stock_fuel(sim, stock, fuel_slot)
+            .expect("fuel should transfer to the locomotive");
+        sim.tick();
+        assert_eq!(
+            sim.rail_signal_aspect(ordinary),
+            Some(RailSignalAspect::Blocked)
+        );
+        assert_eq!(sim.rail_signal_aspect(chain), Some(RailSignalAspect::Clear));
+        train_id
+    };
+    app.update();
+    assert_eq!(rail_signal_indicator_text(&mut app, ordinary), "X");
+    assert_eq!(rail_signal_indicator_text(&mut app, chain), ">");
+
+    // Move the chain signal out of view before invalidating the rail graph.
+    // Bringing it back while aspects are unavailable must be retried after the
+    // rebuild, even when the aspect is unchanged and no style revision fires.
+    let full_bounds = app.world().resource::<VisibleChunks>().tile_bounds;
+    {
+        let mut visible = app.world_mut().resource_mut::<VisibleChunks>();
+        visible.tile_bounds = Some(MapTextureBounds {
+            min_x: x,
+            min_y: y + 3,
+            width: 3,
+            height: 4,
+        });
+        visible.revision += 1;
+    }
+    app.update();
+    {
+        let world = app.world_mut();
+        let mut query = world.query::<(&PlacedEntitySprite, &RailSignalSprite)>();
+        assert!(
+            !query
+                .iter(world)
+                .any(|(placed, _)| placed.entity_id == chain)
+        );
+    }
+
+    let style_revision = {
+        let mut resource = app.world_mut().resource_mut::<SimResource>();
+        let sim = &mut resource.write_for_tests();
+        factory_sim::entity_mutation::remove(sim, rails[1]).expect("rail should be removable");
+        factory_sim::placement::place(sim, request(rail, x, y + 2))
+            .expect("restoring the rail should restore the same route");
+        assert_eq!(sim.rail_signal_aspect(ordinary), None);
+        sim.entity_style_revision()
+    };
+    {
+        let mut visible = app.world_mut().resource_mut::<VisibleChunks>();
+        visible.tile_bounds = full_bounds;
+        visible.revision += 1;
+    }
+    app.update();
+    assert!(
+        app.world()
+            .resource::<VisibleEntityIds>()
+            .style_dirty
+            .contains(&ordinary),
+        "the topology change must exercise a dirty signal style"
+    );
+    assert_eq!(rail_signal_indicator_text(&mut app, ordinary), "X");
+    assert_eq!(rail_signal_indicator_text(&mut app, chain), "");
+
+    {
+        let mut resource = app.world_mut().resource_mut::<SimResource>();
+        let sim = &mut resource.write_for_tests();
+        sim.tick();
+        assert_eq!(
+            sim.rail_signal_aspect(ordinary),
+            Some(RailSignalAspect::Blocked)
+        );
+        assert_eq!(sim.entity_style_revision(), style_revision);
+    }
+    app.update();
+    assert_eq!(rail_signal_indicator_text(&mut app, ordinary), "X");
+    assert_eq!(rail_signal_indicator_text(&mut app, chain), ">");
+
+    {
+        let mut resource = app.world_mut().resource_mut::<SimResource>();
+        let sim = &mut resource.write_for_tests();
+        sim.set_train_destination(train_id, rails[10])
+            .expect("train should accept a destination beyond the chain signal");
+        sim.tick();
+        sim.tick();
+        assert_eq!(
+            sim.rail_signal_aspect(chain),
+            Some(RailSignalAspect::Reserved)
+        );
+    }
+    app.update();
+    assert_eq!(rail_signal_indicator_text(&mut app, chain), "=");
+}
 
 #[test]
 fn zoom_burst_obeys_world_mesh_and_resource_tile_budgets() {
@@ -1540,6 +1717,29 @@ fn placed_entity_sprite_count(app: &mut App) -> usize {
         .query_filtered::<Entity, With<PlacedEntitySprite>>()
         .iter(app.world())
         .count()
+}
+
+fn rail_signal_indicator_text(app: &mut App, entity_id: EntityId) -> String {
+    let world = app.world_mut();
+    let mut query = world.query::<(Entity, &PlacedEntitySprite, &RailSignalSprite)>();
+    let (render_entity, indicator) = query
+        .iter(world)
+        .find_map(|(render_entity, placed, signal)| {
+            (placed.entity_id == entity_id).then_some((render_entity, signal.status_indicator))
+        })
+        .expect("visible signal should have a rendered sprite and indicator");
+    assert_eq!(
+        world
+            .get::<ChildOf>(indicator)
+            .expect("indicator should be a child of the signal sprite")
+            .parent(),
+        render_entity
+    );
+    world
+        .get::<Text2d>(indicator)
+        .expect("indicator should contain world-space text")
+        .0
+        .clone()
 }
 
 fn rocket_silo_render_state(app: &mut App, entity_id: EntityId) -> (RocketSiloVisualPhase, Color) {

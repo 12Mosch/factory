@@ -211,7 +211,7 @@ pub(crate) fn rail_ballast_color() -> Color {
 ///
 /// The three lamp colors are ordered by approximate channel brightness
 /// (reserved > clear > blocked), reducing reliance on red-green hue alone.
-/// Rail aspect has no text tag in the world view; this ordering is a
+/// World-space aspect symbols provide a separate cue; this ordering is a
 /// lightness heuristic, not a verified deficiency simulation.
 pub(crate) fn rail_signal_color(aspect: factory_sim::RailSignalAspect) -> Color {
     match aspect {
