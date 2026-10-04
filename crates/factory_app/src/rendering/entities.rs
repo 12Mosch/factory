@@ -321,7 +321,7 @@ pub(crate) fn sync_placed_entity_rendering(
         // A dirty rail graph has no authoritative aspect yet. Keep the last
         // rendered lamp and symbol: rebuilding the graph may reproduce the
         // same aspect and emit no further style revision.
-        if style.kind.is_rail_signal() && sim.rail_signal_aspect(*entity_id).is_none() {
+        if style.kind.is_rail_signal() && sim.rail_graph_is_dirty() {
             registry.pending_signals.insert(*entity_id);
             continue;
         }
@@ -381,7 +381,7 @@ pub(crate) fn sync_placed_entity_rendering(
             commands.entity(render_entity).insert(RailSignalSprite {
                 status_indicator: indicator,
             });
-            if aspect.is_none() {
+            if sim.rail_graph_is_dirty() {
                 registry.pending_signals.insert(entity_id);
             }
         }
@@ -399,6 +399,11 @@ fn retry_pending_rail_signals(
     visual_assets: &mut VisualAssets,
     queries: &mut PlacedEntityRenderQueries,
 ) {
+    // An absent aspect after rebuilding means the signal is unbound. Refresh
+    // it to the neutral visual once, then let normal style revisions wake it.
+    if sim.rail_graph_is_dirty() {
+        return;
+    }
     let PlacedEntityRenderRegistry {
         entities,
         pending_signals,
@@ -407,9 +412,7 @@ fn retry_pending_rail_signals(
         let Some(&render_entity) = entities.get(entity_id) else {
             return false;
         };
-        let Some(aspect) = sim.rail_signal_aspect(*entity_id) else {
-            return true;
-        };
+        let aspect = sim.rail_signal_aspect(*entity_id);
         let Some(placed) = sim.entities().placed_entity(*entity_id) else {
             return false;
         };
@@ -420,7 +423,7 @@ fn retry_pending_rail_signals(
             render_entity,
             &placed.footprint,
             style,
-            Some(aspect),
+            aspect,
             visual_assets,
             queries,
         )
@@ -444,10 +447,11 @@ fn refresh_placed_entity_sprite(
     }
     *sprite = visual_assets.entity_sprite(style);
     if let Some(signal) = signal
-        && let Some(aspect) = aspect
         && let Ok(mut text) = queries.signal_indicators.get_mut(signal.status_indicator)
     {
-        text.0 = rail_signal_world_status_symbol(aspect).to_string();
+        text.0 = aspect
+            .map_or("", rail_signal_world_status_symbol)
+            .to_string();
     }
     true
 }

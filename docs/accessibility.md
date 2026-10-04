@@ -25,6 +25,7 @@ load.
   or camera shake exist in alpha; the toggle future-proofs upcoming effects.
 - Status symbols (default ON): prefixes machine, threat, and build status
   with distinct ASCII tags so state never depends on color alone.
+  Rail signal symbols are always displayed, independently of this toggle.
 
 All three accessibility toggles use 44px minimum hit targets and live in the
 Settings Accessibility tab with Apply/Reset semantics shared with other tabs.

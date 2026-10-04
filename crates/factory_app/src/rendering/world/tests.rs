@@ -217,6 +217,76 @@ fn rail_signal_symbols_follow_aspects_and_survive_a_dirty_graph() {
     }
     app.update();
     assert_eq!(rail_signal_indicator_text(&mut app, chain), "=");
+
+    // Mining the adjacent track makes this signal permanently unbound after
+    // the rebuild. Preserve its last aspect only while the graph is dirty.
+    {
+        let mut resource = app.world_mut().resource_mut::<SimResource>();
+        let sim = &mut resource.write_for_tests();
+        factory_sim::entity_mutation::remove(sim, rails[8]).expect("rail should be removable");
+        assert!(sim.rail_graph_is_dirty());
+    }
+    app.update();
+    assert_eq!(rail_signal_indicator_text(&mut app, chain), "=");
+    {
+        let mut resource = app.world_mut().resource_mut::<SimResource>();
+        let sim = &mut resource.write_for_tests();
+        sim.tick();
+        assert!(!sim.rail_graph_is_dirty());
+        assert_eq!(sim.rail_signal_aspect(chain), None);
+        assert_eq!(sim.rail_signal(chain), None);
+    }
+    app.update();
+    assert_eq!(rail_signal_indicator_text(&mut app, chain), "");
+    let signal_render_snapshot = |app: &mut App| {
+        let world = app.world_mut();
+        let mut query = world.query::<(&PlacedEntitySprite, &RailSignalSprite, Ref<Sprite>)>();
+        query
+            .iter(world)
+            .find_map(|(placed, signal, sprite)| {
+                (placed.entity_id == chain).then(|| {
+                    (
+                        sprite.color,
+                        sprite.last_changed(),
+                        world
+                            .entity(signal.status_indicator)
+                            .get_ref::<Text2d>()
+                            .expect("signal indicator should have text")
+                            .last_changed(),
+                    )
+                })
+            })
+            .expect("unbound signal should remain visible")
+    };
+    let settled = signal_render_snapshot(&mut app);
+    assert_eq!(settled.0, Color::srgb(0.30, 0.32, 0.34));
+    app.update();
+    app.update();
+    assert_eq!(
+        signal_render_snapshot(&mut app),
+        settled,
+        "an unbound signal must stop retrying and mutating its visual every frame"
+    );
+
+    let rebound_aspect = {
+        let mut resource = app.world_mut().resource_mut::<SimResource>();
+        let sim = &mut resource.write_for_tests();
+        factory_sim::placement::place(sim, request(rail, x, y + 16))
+            .expect("restoring track should bind the signal again");
+        sim.tick();
+        sim.rail_signal_aspect(chain)
+            .expect("rebound signal should compute an aspect")
+    };
+    app.update();
+    assert_eq!(
+        rail_signal_indicator_text(&mut app, chain),
+        match rebound_aspect {
+            RailSignalAspect::Clear => ">",
+            RailSignalAspect::Reserved => "=",
+            RailSignalAspect::Blocked => "X",
+        },
+        "rebinding must wake the normal style revision path"
+    );
 }
 
 #[test]

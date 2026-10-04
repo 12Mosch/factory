@@ -191,9 +191,10 @@ impl Simulation {
     /// What a signal is showing, for the renderer and for a circuit connector
     /// wired to it.
     ///
-    /// `None` for anything that is not a signal, and for a signal the partition
-    /// has not seen yet — which is the tick a signal is placed on, before the
-    /// graph it cuts has been rebuilt.
+    /// `None` for anything that is not a signal, while the rail graph is dirty,
+    /// before a signal's first aspect is computed, or when it has no track to
+    /// bind to. Use [`Self::rail_graph_is_dirty`] to distinguish pending topology
+    /// changes from a rebuilt graph.
     pub fn rail_signal_aspect(&self, entity_id: EntityId) -> Option<RailSignalAspect> {
         if self.rails.graph_dirty {
             return None;
