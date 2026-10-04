@@ -9,6 +9,13 @@ use crate::simulation::*;
 use super::geometry::{footprint_piece_geometry, placed_piece_geometry};
 
 impl Simulation {
+    /// Whether topology changes still require rebuilding the rail graph and
+    /// its signal bindings. An absent signal aspect is transient while dirty;
+    /// after rebuilding, a signal can remain unbound to track.
+    pub fn rail_graph_is_dirty(&self) -> bool {
+        self.rails.graph_dirty
+    }
+
     /// The rail networks the placed track forms.
     ///
     /// Derived state: the graph is rebuilt during the tick after a placement
